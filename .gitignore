@@ -1,0 +1,11 @@
+# Clinical data must NEVER be committed. Keep patient-derived files out of git.
+data/
+outputs/
+*.rds
+*.RData
+.Rhistory
+.Renviron
+.Rproj.user/
+
+# Note: spec/config tables (queries, schemas) ARE code/config and may be tracked
+# deliberately — keep them outside data/ (e.g. in config/) so they are not ignored.
