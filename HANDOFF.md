@@ -706,3 +706,51 @@ Codex confirmed `cb9eda8` clean; flagged two non-blocking editorial leftovers. B
 Neither was a blocker. Design is internally consistent; Phase 0 stands.
 
 **Files changed:** `DESIGN.md`, `README.md`, `HANDOFF.md`.
+
+---
+
+## Phase 0 step 1 — contract smoke test RUN (Claude, 2026-06-19)
+
+First code in the repo: `scripts/phase0_smoke_test.R`. Ran on the **real** `tabac`
+pool (450 rows; human confirmed non-sensitive for local use), 12 rows stratified by
+text length, `num_ctx=8192`, `temperature=0`, seed `20260619`. Privacy: console
+prints aggregates/category-counts only; per-row detail + attempt log go to gitignored
+`outputs/`. No note text or evidence quotes leave the machine.
+
+**Mechanism — all validated:**
+- `ellmer 0.4.1 → chat_ollama → chat_structured` returns R objects.
+- `type_from_schema(text=<JSON Schema string>)` accepts the spec-as-data → the
+  ratified engine path works as designed (enum-in-object schema, no `type_*()` in spec).
+- `num_ctx=8192` handled the long rows (up to 5.7k chars) with no truncation.
+
+**Results (mechanism, NOT accuracy — no gold yet):**
+
+| model | call ok | schema valid | evidence substring (exact) | failures | latency med/max ms |
+|---|---|---|---|---|---|
+| `gemma3:4b`  | 12/12 | 12/12 | **58%** | 0 | 1218 / 9431 |
+| `gpt-oss:20b`| 10/12 | 10/12 | **89%** (of 9) | 2 | 11138 / 29555 |
+
+**Findings worth keeping:**
+1. **The evidence-substring gate earns its place.** It quantified quote-hallucination
+   that classification accuracy would hide: `gemma3:4b` paraphrases its "verbatim"
+   evidence ~42% of the time; `gpt-oss:20b` is far more faithful (89%). This is the
+   single most useful diagnostic the contract produced.
+2. **Failure capture validated against a REAL crash.** `gpt-oss:20b`'s 2 failures
+   were not schema/parse errors — `llama-server` crashed natively (HTTP 500,
+   `0xc0000409` stack-buffer overrun). The harness recorded both as attempt failures
+   and continued: fail-closed + minimal-attempt-record proven on an ugly real failure,
+   not a synthetic one. (Infra caveat for the human: gpt-oss:20b is crashing the
+   Ollama server here — possibly num_ctx/memory; worth a lower-ctx retry or an Ollama
+   update.)
+3. **Model trade-off, empirically:** small+fast+robust+lower-fidelity (`gemma3:4b`,
+   ~1.2s) vs accurate-evidence+fragile+~9× slower (`gpt-oss:20b`, ~11s).
+4. **`not_stated` was barely exercised** (gemma 0, gpt-oss 1): the pool is
+   pre-filtered to rows with tabac context, so the missingness/negation path needs
+   the **synthetic fixtures** to test deliberately. Confirms both real-pool and
+   synthetic sets have distinct jobs (real = realism + evidence stress; synthetic =
+   negative controls + known answers).
+
+**Not claimed:** which model is *correct*. Needs the human's adjudicated
+`gold_smoking_status` subset (Phase 0 step 2).
+
+**Files changed:** `scripts/phase0_smoke_test.R` (new), `HANDOFF.md`.
