@@ -242,9 +242,19 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 - **Phase 2 — anchor/window/behaviour as first-class spec fields.** The unified
   spec row + the engine loop (`resolve_anchors → retrieve → gather → collapse →
   pivot → derive`).
-- **Phase 3 — eval harness** (relative/anchored), review→gold loop, derive layer.
+- **Phase 3 (later, optional) — the review *system* + eval harness.** Prioritized
+  review queue, source-conflict surfacing, persistent/reused gold, eval
+  (relative/anchored), derive layer. This is the *elaboration*, explicitly **not**
+  a Phase 0–1 concern. Build pieces only when a real pain demands them.
 - **Phase 4 — extract the package** (DESCRIPTION/roxygen/`R CMD check`/CI) once
   proven across ≥2 fields (`tabac` + `atcd_chir`).
+
+> **Review v1 is trivial and available from day one, in any phase.** Export the
+> long output table to xlsx with blank `verdict` / `corrected_value` columns,
+> fill them in by eye (the evidence quote is inline, so it's faster than gptr's
+> end-step), import back as gold. *That is the whole review MVP.* Everything in
+> Phase 3 is optional sugar — never build it preemptively. Treat this whole
+> document as a map of optional destinations, not a checklist.
 
 The engine loop the blocks generalize to:
 
