@@ -754,3 +754,52 @@ prints aggregates/category-counts only; per-row detail + attempt log go to gitig
 `gold_smoking_status` subset (Phase 0 step 2).
 
 **Files changed:** `scripts/phase0_smoke_test.R` (new), `HANDOFF.md`.
+
+---
+
+## Handoff #2 — Claude → Codex (2026-06-19): Phase 0 step 1 ran; review results + step 2 plan
+
+**State.** The design loop converged (your Review #3 + the editorial follow-up are
+integrated; commits through `31d5aaa`). First code is committed (`42af408`):
+`scripts/phase0_smoke_test.R`. It ran on the **real** `tabac` pool (human cleared the
+file as non-sensitive for *local* use; nothing patient-derived is committed or echoed
+to chat). Full numbers are in the "Phase 0 step 1 … RUN" note directly above — short
+version: the ratified path (`ellmer 0.4.1` → `chat_ollama$chat_structured` +
+`type_from_schema(text=<JSON Schema>)`) works end to end; `gemma3:4b` = 100%
+schema-valid / **58%** exact-substring evidence / fast / 0 failures; `gpt-oss:20b` =
+**89%** evidence but 2 native `llama-server` crashes (`0xc0000409`) and ~9× slower.
+
+**Goal of this handoff.** Pressure-test five decisions before Phase 0 step 2. Please
+don't rubber-stamp; where you'd choose differently, say so with the tradeoff.
+
+1. **Default model.** Is the right Phase-0 default `gemma3:4b` (fast/robust, but it
+   fabricates "verbatim" quotes ~42% of the time), `gpt-oss:20b` (faithful but fragile
+   + slow), or should we measure a **middle option** first — `gemma3:12b` or `gemma4`
+   are both pulled locally? My lean: test `gemma3:12b` before committing, because
+   evidence-fidelity is the disqualifying axis and 4b fails it.
+2. **gpt-oss:20b native crash.** `0xc0000409` (stack-buffer overrun) killed the
+   server on 2/12 rows at `num_ctx=8192`. Known gpt-oss/llama.cpp issue? Worth a
+   lower-ctx or flash-attention retry, or do we just treat gpt-oss as too unstable to
+   be the default and keep it as a high-fidelity spot-check?
+3. **Evidence-match policy.** Canonical gate is **exact substring** (design §5);
+   normalized (case/whitespace) is currently only diagnostic — and it made *no*
+   difference here (58/58, 89/89), so the misses are real fabrication, not accent/
+   punctuation noise. Keep exact as canonical, or allow an aligned/fuzzy match with a
+   distance cap? I lean keep exact; fabrication should fail closed.
+4. **Donor/recipient confound (this is the one I most want challenged).** The pool is
+   D0840 transplant: `role ∈ {donneur, receveur}` (232/218). The smoke prompt says
+   "le patient" generically — fine for a *mechanism* test, but for *accuracy* and gold
+   it's wrong: a note can state the donor's and the recipient's smoking separately.
+   The observed-task spec must be **role-aware** (the model must extract the smoking
+   status *of the row's role*), and gold must be adjudicated against that role. Does
+   this break any assumption in the spec model, or is it just a prompt/scope param?
+5. **Step 2 gold construction.** Proposed: a frozen stratified subset (~60–80 rows)
+   stratified by `role` × predicted-status × text-length tertile, single-adjudicated
+   by the human first (double-adjudication later), labelling `gold_smoking_status`
+   *and* the role-target. Plus a small **synthetic** French fixture set for the
+   `not_stated`/negation path the real pool under-exercises. Sound, or over/under-built?
+
+**Files in scope.** `scripts/phase0_smoke_test.R`, `DESIGN.md` §5 + §8, this log.
+
+**How to respond.** Append `## Review — Codex → Claude` (Handoff #2) below, per-item
+agree/disagree + tradeoff. Claude integrates in-repo.
