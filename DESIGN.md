@@ -84,10 +84,16 @@ value   = (subject_id, variable_id, timepoint_id, value, unit,
 
 ---
 
-## 3. The spec model — two kinds of variable, as data
+## 3. The spec model — observed-task specs vs plain-R derivations
 
-There are **two kinds of variable**, with different spec shapes (Review #1 — the
-four-axis claim was only ever true of *extracted* variables):
+A variable is one of two things, and only one of them gets a spec (Review #1; sharpened
+R#2 — not "two spec shapes," because a derived variable has *no* spec):
+
+- an **observed task** — read from records, described by a spec (below);
+- a **derived variable** — computed from already-produced columns, just ordinary R,
+  no spec at all.
+
+The four-axis model was only ever true of observed tasks.
 
 ### A. Observed task (read from records) — four axes
 
@@ -144,7 +150,7 @@ tabac = list(
                     t1 = anchor("last_dmo",  scope = "+/-30d")),
   policy     = "nearest",                                    # construction policy
   evidence   = TRUE,
-  outputs    = c("tabac_t0", "tabac_t1", "tabac_changed")    # changed = derived (plain R)
+  outputs    = c("tabac_t0", "tabac_t1")                     # tabac_changed is NOT here: derived later in plain R
 )
 ```
 
@@ -183,7 +189,7 @@ justifying hit ids`:
 | `nearest` | value of the hit closest to the anchor | point-in-time status, measures |
 | `first` / `last` | earliest / latest in scope | immutable, onset |
 | `summarise(fn)` | min/max/mean/**count**/**count-distinct** + threshold | severity; "≥2 distinct days" (repeated acute dialysis) |
-| `rank_select` | pick one hit per group by an ordered key list | biology: latest exam on/before anchor, per analyte (D0740 — a **single recency key** today). Richer chains (target-distance → side → source-priority → date → record_id) are *hypothetical generalizations*: add keys only when a real variable needs them. |
+| `rank_select` | pick one hit per group by an ordered key list | **two real points on the same axis:** D0740 biology = a *single* recency key (latest exam on/before anchor, per analyte, `biol.R:279`); D0840 biology = a *5-key* chain `abs_diff_target → target_side_priority → source_priority → desc(DATEXAM) → desc(ELTID)` (`D0840.R:3390`). One named policy, parameterized by the key list — add keys per variable, no new code. |
 | `reconcile` | source precedence + conflict → value or **review** | pre-emptive > coded > text; disagreement routes to review |
 | `collect` | all values -> list | array-valued (surgical_history) |
 
@@ -280,7 +286,7 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 | Focused successor, not gptr rewrite | The JSON-repair/validation engine is hard-won | From-scratch rewrite loses it |
 | Per-variable evidence (nested), substring-verified | Review needs the quote behind *each* value; verification kills hallucinated quotes | Shared/flat evidence; trusting model quotes |
 | Three contracts: attempt / hit / value (R#1) | Failures, no-hit, conflicts, lineage become representable; build hits + value + a minimal attempt record first | One overloaded long table with nullable junk |
-| Two spec kinds: observed task vs derived (R#1, tightened R#2) | Don't run extraction on a subtraction; derived = plain R with **no spec/registry entry at all** | One spec shape; a `rule:` interpreter (reinvents R); even a doc-only registry entry (a second spec system) |
+| Observed-task specs vs plain-R derivation (R#1, tightened R#2) | Don't run extraction on a subtraction; derived = plain R with **no spec/registry entry at all** (not "two spec shapes" — only observed tasks get a spec) | One spec shape; a `rule:` interpreter (reinvents R); even a doc-only registry entry (a second spec system) |
 | Named construction-policy registry, not "5 reducers" (R#1) | D0840 needs reconcile / rank_select / count-distinct; closed tested set, not a DSL | Fixed 5-reducer list (too small); `aggregate(fn)` hiding arbitrary code |
 | Fail closed, never auto-repair (R#1) | Repair can invent the audited field; missing is visible, synthesized is not | Auto-repairing partial clinical objects |
 | Candidate recall measured separately (R#1) | An accurate model score can hide systematic retrieval false-negatives | Extraction accuracy as the only metric |
@@ -317,8 +323,9 @@ anchor/window expression (→ bounded resolver registry). Remaining:
      Score deterministically: value confusion / macro-F1, abstention, evidence
      grounding, attempt failures, latency, by model. Grammar-off is secondary.
 
-  Decide ellmer-vs-raw and the model here. **"Eyeball" is not an acceptance
-  criterion** — adjudicated columns and scoring rules are frozen and imported as
+  Select and test **the model** here, and validate the **ellmer path** end to end
+  (ellmer is already ratified — raw Ollama is only an escape hatch, not a decision
+  to relitigate). **"Eyeball" is not an acceptance criterion** — adjudicated columns and scoring rules are frozen and imported as
   data. The general engine must still run fully **gold-absent** (the usual case),
   producing review-ready output from which gold accrues.
 
@@ -334,8 +341,9 @@ anchor/window expression (→ bounded resolver registry). Remaining:
   collapse → pivot`), with derivation as plain R after.
 - **Phase 3 (later, optional) — the review *system* + eval harness.** Prioritized
   review queue, source-conflict surfacing, persistent/reused gold, eval
-  (relative/anchored), derive layer. This is the *elaboration*, explicitly **not**
-  a Phase 0–1 concern. Build pieces only when a real pain demands them.
+  (relative/anchored). This is the *elaboration*, explicitly **not** a Phase 0–1
+  concern. Build pieces only when a real pain demands them. (Derivation is **not**
+  in this list — it's ordinary project R that runs after the engine, in every phase.)
 - **Phase 4 — extract the package** (DESCRIPTION/roxygen/`R CMD check`/CI) once
   proven across ≥2 fields (`tabac` + `atcd_chir`).
 
