@@ -183,12 +183,16 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   KWIC snippets with full-doc fallback; **dedup copy-forward** is essential.
   Per-variable retrieval is also *call*-reduction (only fire where the query hits).
   Recall is the silent killer; the query is a versioned artifact.
-- **Eval is the centerpiece.** Per-variable precision/recall, enum confusion,
+- **Gold is usually ABSENT, and accrues by review.** The default pipeline runs
+  with NO gold: extract → surface value+evidence+provenance → clinician reviews
+  (agree / correct) → each adjudicated row becomes a gold label → eval becomes
+  possible. **Review-capture is always-on; eval is a capability that switches on
+  as gold accrues, never a precondition.** The engine must be fully useful
+  gold-absent.
+- **Eval, when gold exists.** Per-variable precision/recall, enum confusion,
   per-model, grammar-on vs off. **Absolute recall is unknowable** in a warehouse
-  (no oracle) — report **relative** (query v2 vs v1) and **anchored** (against
-  coded silver standards / labelled samples) recall, never claim absolute.
-- **Review = eval's data source.** Clinician adjudication (agree / correct) turns
-  every reviewed row into a gold label. Review and eval are one loop.
+  (no oracle) — report **relative** (query v2 vs v1) and **anchored** (coded
+  silver standards / labelled samples) recall, never claim absolute.
 
 ---
 
@@ -227,7 +231,11 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   labelled `tabac_eval_pool` (D0840): extract with grammar → validate → score vs
   gold. **Skip** retrieval, anchoring, temporal. Goal: *is grammar-constrained
   mistral/gemma3 accurate enough?* Decide ellmer-vs-raw here. Measure grammar
-  on vs off. If accuracy fails, nothing downstream matters.
+  on vs off. If accuracy fails, nothing downstream matters. Note: this leans on
+  D0840's `tabac_eval_pool` precisely because it is the *exception* that already
+  has gold — a one-off luxury that lets us validate accuracy early. The general
+  engine must still run fully **gold-absent** (the usual case), producing
+  review-ready output from which gold accrues.
 - **Phase 1 — the contract + primitives.** The hit schema, the ~4 source
   adapters, the ~5 reducers — generalized out of D0740's blocks. Lift the
   `comorbidity_catalog` pattern to all blocks.
