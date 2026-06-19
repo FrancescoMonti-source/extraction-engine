@@ -227,15 +227,26 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 
 ## 8. Phased build plan
 
-- **Phase 0 — spike (do this first).** One variable (`tabac`) end-to-end on the
-  labelled `tabac_eval_pool` (D0840): extract with grammar → validate → score vs
-  gold. **Skip** retrieval, anchoring, temporal. Goal: *is grammar-constrained
-  mistral/gemma3 accurate enough?* Decide ellmer-vs-raw here. Measure grammar
-  on vs off. If accuracy fails, nothing downstream matters. Note: this leans on
-  D0840's `tabac_eval_pool` precisely because it is the *exception* that already
-  has gold — a one-off luxury that lets us validate accuracy early. The general
-  engine must still run fully **gold-absent** (the usual case), producing
-  review-ready output from which gold accrues.
+- **Phase 0 — spike (do this first), two steps** (revised per Review #1):
+  1. **Contract smoke test** — 12–20 *synthetic* French fixtures (current / former
+     / never / not-stated / negation / contradiction / truncated). Verify the
+     ellmer→Ollama path, schema enforcement, missingness, evidence-substring check,
+     failure capture. *No gold needed — validates the mechanism.*
+  2. **Accuracy set** — a *frozen, independently-adjudicated* stratified `tabac`
+     set. Locate `gptr/manual-eval/tabac_eval_pool_1000.rds`; if it lacks gold
+     labels, adjudicate a small stratified subset from D0840 `test tabac.xlsx`.
+     Score deterministically: value confusion / macro-F1, abstention, evidence
+     grounding, attempt failures, latency, by model. Grammar-off is secondary.
+
+  Decide ellmer-vs-raw and the model here. **"Eyeball" is not an acceptance
+  criterion** — adjudicated columns and scoring rules are frozen and imported as
+  data. The general engine must still run fully **gold-absent** (the usual case),
+  producing review-ready output from which gold accrues.
+
+  > Review #1 corrections: `PARTAGE` is 4,254 *synthetic structured-abstract*
+  > cases (diagnosis/procedure/admission/LOS), **not** a smoking target; and no
+  > `tabac_eval_pool` lives in D0840 — the labelled pool, if any, is in
+  > `gptr/manual-eval/`.
 - **Phase 1 — the contract + primitives.** The hit schema, the ~4 source
   adapters, the ~5 reducers — generalized out of D0740's blocks. Lift the
   `comorbidity_catalog` pattern to all blocks.
