@@ -24,7 +24,7 @@ center:
 
 - per-subject **anchoring** and **windowing** of time
 - **multi-source** dated-hit gathering (codes + labs + text)
-- **behaviour**-based collapse of hits into analytical values
+- **construction-policy**-based collapse of hits into analytical values
 - **derivation** of computed variables
 - **validation** with per-field failure metadata
 - **evidence / audit** trail per value
@@ -76,8 +76,11 @@ value   = (subject_id, variable_id, timepoint_id, value, unit,
 - Evidence is anchored to `source_record_id` and **verified as an exact substring**
   of the source before it counts (kills hallucinated quotes). Model-reported
   `confidence` is non-canonical raw metadata only.
-- **Build incrementally:** Phase 0–1 need `hit` + `value` only; the `attempt` log
-  lands when lineage/cost matters.
+- **Build incrementally, but a *minimal* attempt record starts in Phase 0**
+  (Review #2): Phase 0 already measures attempt failures, latency, model, and
+  prompt/schema version, so those fields are written from the first spike. What
+  defers is the *rich* lineage/cost metadata (tokens, full input-record sets,
+  retry chains) — not the attempt table itself.
 
 ---
 
@@ -109,20 +112,22 @@ A thing the model or a code-lookup *finds* in text/codes. Four axes, all data:
 ### B. Derived variable (computed) — inputs + plain R
 
 A thing you *calculate* from already-produced variables — no text, no model, no
-sources. **The engine does not run extraction on these.** The computation is
-**plain R** in a `derive.R` step, **not** an interpreted rule-DSL (a `rule:`
-interpreter would reinvent R, badly — and Review #1 warns against premature DSLs).
-The registry only *documents* derived variables, for the data dictionary + lineage:
+sources. **The engine does not touch these at all.** They are **ordinary
+project-level R** in a `derive.R` step:
 
-```yaml
-id: poids_delta
-type: derived
-inputs: [poids_t0, poids_t1]   # documentation + lineage only
-# computation lives in derive.R:  poids_delta = poids_t1 - poids_t0
+```r
+features$poids_delta   <- features$poids_t1 - features$poids_t0
+features$tabac_changed <- features$tabac_t0 != features$tabac_t1
 ```
 
-**The spec is DATA**, not code: an observed-task row drives the extraction layers;
-a derived entry just flags "skip extraction, compute later in R."
+No spec, no registry entry, no `type: derived` row, no `inputs:` list — that was a
+second specification system duplicating `derive.R` (Review #2 caught it). A `rule:`
+interpreter would reinvent R, badly; even a *documentation-only* registry entry is
+machinery you don't need. If a data dictionary later wants to list derived columns
+for lineage, generate it *from* `derive.R`, don't hand-maintain a parallel spec.
+
+**Only observed/source-backed tasks get engine specs.** The spec is DATA that
+drives the extraction layers; derivation is just R that runs after.
 
 ### Unified spec row (target shape)
 
@@ -178,14 +183,18 @@ justifying hit ids`:
 | `nearest` | value of the hit closest to the anchor | point-in-time status, measures |
 | `first` / `last` | earliest / latest in scope | immutable, onset |
 | `summarise(fn)` | min/max/mean/**count**/**count-distinct** + threshold | severity; "≥2 distinct days" (repeated acute dialysis) |
-| `rank_select` | pick by ordered tie-breakers | biology: distance-to-target → side → source-priority → date → record_id |
+| `rank_select` | pick one hit per group by an ordered key list | biology: latest exam on/before anchor, per analyte (D0740 — a **single recency key** today). Richer chains (target-distance → side → source-priority → date → record_id) are *hypothetical generalizations*: add keys only when a real variable needs them. |
 | `reconcile` | source precedence + conflict → value or **review** | pre-emptive > coded > text; disagreement routes to review |
 | `collect` | all values -> list | array-valued (surgical_history) |
 
-Specs **select a policy and supply parameters.** Add a generic DSL only if
-repeated policies prove its shape — never preemptively. Compositions
-(`new_between` = `any (a,b]` AND NOT `any <=a`; `history_plus_activity` = two
-outputs) stay in the spec, not in new code.
+Specs **select one named policy and supply parameters** — no `AND` / `NOT` /
+ordering / dependency operators in the spec (Review #2: those reintroduce an
+interpreted rule language with its own validation and failure semantics, the exact
+thing we're avoiding). When a variable needs more than one policy can express
+(`new_between` = positive in `(a,b]` but not in `<=a`; `history_plus_activity` =
+two outputs), **compute it in plain R from the constructed values**, or — only once
+the *same* composite proves reusable across variables — promote it to a new named
+policy with its own tests. Never a generic combinator grammar; never preemptively.
 
 ### ~4 source adapters, written once
 
@@ -220,11 +229,16 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   can invent the very field being audited. Missing extraction is visible;
   synthesized extraction is not. Keep gptr's *validation + failure-metadata*;
   retire its *repair* to a legacy/diagnostic adapter.
-- **Per-variable evidence.** Each value carries its own verbatim quote
-  (`{value, evidence}`), because the text justifying `pack_years` differs from the
-  text justifying `smoking_status`. Output is a **long** table:
-  `(subject, date, variable, value, evidence, .valid, .failure)` — the canonical
-  contract every stage reads/writes. Evidence is nullable.
+- **Per-variable evidence.** Each value carries its own verbatim quote, because the
+  text justifying `pack_years` differs from the text justifying `smoking_status`.
+  **Evidence lives on the `hit`** (anchored to a `source_record_id`, substring-
+  verified); a constructed `value` references its `selected_hit_ids` rather than
+  copying quotes. The canonical contract is the three tables in §2
+  (attempt / hit / value), **not** a single flat
+  `(subject, date, variable, value, evidence, .valid, .failure)` long table — that
+  earlier formulation predates the three-contract split (Review #2). A flat
+  long-format *view* for review/eval is still trivial to materialize by joining
+  value → selected hits.
 - **Missing values.** `not_stated` (an enum sentinel) is a *generation-time
   device* giving a weak model a legal "I don't know" token so the grammar does not
   force a real category; it collapses to `NA` in the output. `required` (structural
@@ -260,13 +274,13 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 |---|---|---|
 | Four-layer architecture + narrow-waist hit | Discovered from D0740's 7 near-identical feature blocks; makes sources & behaviours additive | Per-variable bespoke pipelines (the 7 copy-pasted blocks = accidental complexity) |
 | Spec as data | Editable, versionable, reviewable, scales to ~50 variables | Bespoke code per variable |
-| One call per variable | Weak models do better one-at-a-time; enables per-variable retrieval + resumability | Nested multi-variable single call (degrades on weak models) |
+| One call per extraction task (per subject/timepoint) | Weak models do better one-at-a-time; enables per-task retrieval + resumability | Nested multi-variable single call (degrades on weak models) |
 | Engine = **ellmer** (ratified R#1); raw Ollama = escape hatch | `type_from_schema()` keeps specs JSON-Schema *data* while ellmer supplies providers / structured-output / conversion / parallelism | Our own provider layer; raw Ollama as a co-equal engine |
 | Build app first, extract library later | Don't guess abstractions; we have prior art + ≥2 fields | Premature packaging |
 | Focused successor, not gptr rewrite | The JSON-repair/validation engine is hard-won | From-scratch rewrite loses it |
 | Per-variable evidence (nested), substring-verified | Review needs the quote behind *each* value; verification kills hallucinated quotes | Shared/flat evidence; trusting model quotes |
-| Three contracts: attempt / hit / value (R#1) | Failures, no-hit, conflicts, lineage become representable; build hits+value first | One overloaded long table with nullable junk |
-| Two spec kinds: observed task vs derived (R#1) | Don't run extraction on a subtraction; derived = plain R, registry documents only | One spec shape; a `rule:` interpreter (reinvents R) |
+| Three contracts: attempt / hit / value (R#1) | Failures, no-hit, conflicts, lineage become representable; build hits + value + a minimal attempt record first | One overloaded long table with nullable junk |
+| Two spec kinds: observed task vs derived (R#1, tightened R#2) | Don't run extraction on a subtraction; derived = plain R with **no spec/registry entry at all** | One spec shape; a `rule:` interpreter (reinvents R); even a doc-only registry entry (a second spec system) |
 | Named construction-policy registry, not "5 reducers" (R#1) | D0840 needs reconcile / rank_select / count-distinct; closed tested set, not a DSL | Fixed 5-reducer list (too small); `aggregate(fn)` hiding arbitrary code |
 | Fail closed, never auto-repair (R#1) | Repair can invent the audited field; missing is visible, synthesized is not | Auto-repairing partial clinical objects |
 | Candidate recall measured separately (R#1) | An accurate model score can hide systematic retrieval false-negatives | Extraction accuracy as the only metric |
@@ -315,9 +329,9 @@ anchor/window expression (→ bounded resolver registry). Remaining:
 - **Phase 1 — the contracts + primitives.** The hit/value contracts, the ~4 source
   adapters, the construction-policy registry — generalized out of D0740's blocks.
   Lift the `comorbidity_catalog` pattern to all blocks.
-- **Phase 2 — anchor/window/behaviour as first-class spec fields.** The unified
-  spec row + the engine loop (`resolve_anchors → retrieve → gather → collapse →
-  pivot → derive`).
+- **Phase 2 — anchor / scope / construction-policy as first-class spec fields.** The
+  unified spec row + the engine loop (`resolve_anchors → retrieve → gather →
+  collapse → pivot`), with derivation as plain R after.
 - **Phase 3 (later, optional) — the review *system* + eval harness.** Prioritized
   review queue, source-conflict surfacing, persistent/reused gold, eval
   (relative/anchored), derive layer. This is the *elaboration*, explicitly **not**
@@ -336,13 +350,15 @@ The engine loop the blocks generalize to:
 
 ```
 resolve_anchors(subjects, anchor_spec)                       # build_first/last_dmo_index, generalized
-for each variable spec:
-  for each (anchor, window) in spec$timepoints:
-    candidates = retrieve(pool, anchor, window, query, top_n) # build_X_doc_candidates
+for each observed-task spec:
+  for each (anchor, scope) in spec$timepoints:
+    candidates = retrieve(pool, anchor, scope, query, top_n)  # build_X_doc_candidates
     hits       = gather(candidates, sources, schema, prompt)  # resolve_X_llm_docs (+ pmsi/biol hits)
-    value      = collapse(hits, behaviour)                    # filter/select_X_before_index
+    value      = collapse(hits, policy)                       # filter/select_X_before_index
   feature = pivot(values over timepoints)                     # build_X_timepoint_feature_table + joins
-derived = derive(features, rules)                             # the *_delta / *_changed / composites
+
+# derivation is NOT an engine stage — it is ordinary R after the loop:
+features$poids_delta <- features$poids_t1 - features$poids_t0   # the *_delta / *_changed / composites
 ```
 
 ---
@@ -363,8 +379,9 @@ derived = derive(features, rules)                             # the *_delta / *_
   + `construct_rules.csv` = **specs-as-data** + the `temporal_model x memory_rule`
   taxonomy; provider was OpenAI `gpt-5.4-nano` (not dogmatically local — the engine
   must stay provider-agnostic).
-- The two-dimensional insight (**timepoints x behaviour**) refined into the
-  four dimensions: **anchor x window x behaviour x sources**.
+- The two-dimensional insight (**timepoints × behaviour**) refined into the four
+  axes — now named **anchor × scope × construction-policy × sources** — and these
+  describe *observed tasks* only; derived columns are plain R, outside the axes.
 
 ---
 

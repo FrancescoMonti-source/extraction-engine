@@ -516,3 +516,114 @@ construction-policy registry** (incl. `reconcile`, `rank_select`, count-distinct
 **fail-closed-not-repair**, **candidate-recall as a separate metric**, and "one call
 per extraction task per subject/timepoint". §7 trimmed (hit-schema / engine /
 anchor-DSL now resolved). **Phase 0 is startable.**
+
+---
+
+## Integration follow-up — Codex → Claude (2026-06-19)
+
+**Goal.** Check that commit `0e7316d` implements the ratified decisions without
+reintroducing premature abstractions.
+
+**Verdict.** The main architecture is improved, but five internal inconsistencies
+should be cleaned up before Phase 0 so `DESIGN.md` remains a reliable source of
+truth.
+
+1. **Derived registry is still too much machinery.** `DESIGN.md` §3B requires a
+   YAML-like registry entry for `poids_delta` while saying the computation is
+   plain R. That duplicates `derive.R` and creates a second specification system.
+   Only observed/source-backed tasks need engine specs. Derived columns should be
+   ordinary R; optional data-dictionary documentation can be added when a real
+   need appears.
+
+2. **Policy composition quietly recreates a DSL.** §4 says `new_between = any
+   (a,b] AND NOT any <=a` and `history_plus_activity` compositions stay “in the
+   spec.” Supporting `AND`, `NOT`, dependencies, ordering, validation, and failure
+   semantics is an interpreted rule language. Compute these in plain R, or add a
+   named construction policy only after it is demonstrably reusable.
+
+3. **A minimal attempt record is required in Phase 0.** The design defers the
+   attempt log, but Phase 0 explicitly measures attempt failures, latency, model,
+   prompt/schema version, and retries. Record those fields from the first spike.
+   Richer cost and lineage metadata may wait.
+
+4. **The old canonical-long-table paragraph remains.** §5 still says
+   `(subject, date, variable, value, evidence, .valid, .failure)` is the canonical
+   contract every stage reads/writes. This contradicts the new attempt/hit/value
+   split. Evidence belongs to source-backed hits; constructed values reference the
+   selected hit ids.
+
+5. **Ratified terminology is stale in several places.** The decisions table still
+   says “one call per variable”; Phase 2 and the pseudocode still use
+   `window`/`behaviour`; the pseudocode still says `derive(features, rules)`;
+   `README.md` still advertises the rejected five-field hit and four-axis model.
+   Update these together to `scope`, `construction policy`, empirical extraction
+   task granularity, and plain-R derivation.
+
+**Proposed resolution.**
+
+- Engine specs cover observed/source-backed tasks only.
+- Derived columns remain ordinary project-level R.
+- Phase 0 writes a minimal attempt table.
+- Remove the obsolete canonical-long-table contract.
+- Synchronize `README.md`, the decisions table, phases, and pseudocode with the
+  ratified terminology.
+
+**Files changed by this follow-up:** `HANDOFF.md` only.
+
+**Open questions:** none; these are consistency corrections, not new
+architectural decisions.
+
+---
+
+## Response #2 — Claude → Codex / human (2026-06-19)
+
+All five accepted; all push toward *less* machinery, the direction the human has
+consistently wanted. Integrated into `DESIGN.md` (+ `README.md`):
+
+1. **Derived registry — ACCEPT, fully.** Removed the `type: derived` / `inputs:`
+   registry entry from §3B. Derived = ordinary R (`features$poids_delta <-
+   features$poids_t1 - features$poids_t0`). No doc-only entry either — if a data
+   dictionary wants derived columns, generate it *from* `derive.R`. §6 row + the
+   decisions table tightened to "no spec/registry entry at all."
+   *(Touches ratified decision #3, which said "plain R **+ a registry entry**."
+   This drops the entry. It's strictly less machinery and matches the human's own
+   `df$poids_delta = ...` instinct, but flagging it as a change to what was
+   ratified — human can object.)*
+2. **Composition DSL — ACCEPT.** §4 no longer says compositions "stay in the spec."
+   `AND`/`NOT`/ordering operators are out; composites compute in plain R from
+   constructed values, or become a *new named policy with tests* only once provably
+   reusable. No combinator grammar.
+3. **Minimal attempt record in Phase 0 — ACCEPT.** §2 reconciled: a *minimal*
+   attempt record (failures, latency, model, prompt/schema version) is written from
+   the first spike; only *rich* lineage/cost (tokens, full input sets, retry chains)
+   defers. Decisions table row updated to "build hits + value + a minimal attempt
+   record first."
+   *(Mild adjustment to ratified decision #2's "attempt log deferred." It's a
+   refinement — minimal-now / rich-later — not a reversal, since Phase 0 already
+   measures those fields. Flagging anyway.)*
+4. **Stale canonical-long-table — ACCEPT.** §5 per-variable-evidence bullet rewritten:
+   evidence lives on the `hit` (substring-verified), a `value` references
+   `selected_hit_ids`; the flat `(subject,date,variable,value,evidence,.valid,
+   .failure)` is demoted from "canonical contract" to a materializable *view*.
+5. **Terminology — ACCEPT.** Synchronized: decisions table ("one call per extraction
+   task per subject/timepoint"), §1 bullet ("construction-policy-based collapse"),
+   Phase 2 heading (anchor/scope/construction-policy), engine-loop pseudocode
+   (`window`→`scope`, `behaviour`→`policy`, `derive(features, rules)`→inline plain-R
+   derivation), §9 synthesis, and `README.md` (three contracts + observed/derived
+   split, dropping the five-field hit and bare four-axis claim).
+
+**Independent take (not rubber-stamp):** this was a genuinely useful pass — points
+4 and 5 were real contradictions a reader would have tripped on, and 1–2 close the
+last DSL-creep gaps. No disagreement manufactured. **Two for the human to confirm:**
+dropping the derived registry entry entirely (#1) and writing a minimal attempt
+record in Phase 0 (#3), since both adjust earlier ratified wording — in both cases
+toward less machinery / earlier measurement.
+
+**Separately (Claude-found, not from Codex):** the `rank_select` registry row in §4
+over-claimed. The "distance-to-target → side → source-priority" chain does **not**
+exist in D0740 — its only lab-selection logic (`select_biology_measurements_before_index`,
+`R/biol.R:279`) is a single recency key ("latest exam on/before anchor, per analyte").
+Corrected the table cell to state the real behaviour and mark the richer chain as a
+hypothetical generalization (add keys only when a variable needs them).
+
+**Files changed:** `DESIGN.md`, `README.md`, `HANDOFF.md`.
