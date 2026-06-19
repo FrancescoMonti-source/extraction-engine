@@ -48,56 +48,98 @@ premature.)
 ```
 Layer 0  ANCHOR     per-subject index date(s) from a rule        (build_first/last_dmo_index, generalized)
 Layer 1  EXTRACT    sources -> dated HITS                         (source adapters)
-Layer 2  CONSTRUCT  windowed hits -> timepoint values             (behaviour / reducer)
-Layer 3  DERIVE     constructed features -> computed columns       (deltas, changed, composites; no text)
+Layer 2  CONSTRUCT  scoped hits -> timepoint values               (named construction policy)
+Layer 3  DERIVE     constructed features -> computed columns       (plain R: deltas, changed, composites; no text)
 ```
 
-**The narrow waist is the HIT:**
+**The narrow waist is the HIT.** Sources fan **in** to hits; construction policies
+fan **out** of hits. Because they only meet at this one fixed contract, complexity
+is **N + M, never N × M** — the single principle that bounds the design. (Proof:
+D0740's `bind_comorbidity_hits()` already merges ICD + CCAM + text into one hit
+table everything downstream treats identically.)
+
+Three linked contracts, not one overloaded table (Review #1):
 
 ```
-hit = (subject_id, date, value, source, evidence)
+attempt = (attempt_id, spec/schema/prompt versions, provider, model,
+           input_record_ids, timing, status/error, tokens, latency)   # one model run, incl. failures
+hit     = (hit_id, subject_id, variable_id, value, unit, source,
+           source_record_id, source_event_id?, recorded_at, effective_at?,
+           evidence, attempt_id?)                                      # one source observation
+value   = (subject_id, variable_id, timepoint_id, value, unit,
+           selected_hit_ids, n_candidates, policy/version, .valid,
+           .failure, review_status)                                   # one constructed decision
 ```
 
-Sources fan **in** to hits (adapters). Behaviours fan **out** of hits (reducers).
-Because they only meet at this one fixed contract, complexity is **N + M, never
-N × M.** This is the single principle that bounds the whole design. (Proof it
-already works: D0740's `bind_comorbidity_hits()` merges ICD + CCAM + text into one
-hit table that everything downstream treats identically.)
+- `recorded_at` vs `effective_at`: a note *recorded* near the anchor can describe
+  an event years earlier — keep both.
+- Evidence is anchored to `source_record_id` and **verified as an exact substring**
+  of the source before it counts (kills hallucinated quotes). Model-reported
+  `confidence` is non-canonical raw metadata only.
+- **Build incrementally:** Phase 0–1 need `hit` + `value` only; the `attempt` log
+  lands when lineage/cost matters.
 
 ---
 
-## 3. The spec model — four dimensions, as data
+## 3. The spec model — two kinds of variable, as data
 
-A variable is defined by **four orthogonal dimensions**, all expressed as data:
+There are **two kinds of variable**, with different spec shapes (Review #1 — the
+four-axis claim was only ever true of *extracted* variables):
+
+### A. Observed task (read from records) — four axes
+
+A thing the model or a code-lookup *finds* in text/codes. Four axes, all data:
 
 1. **Anchor** — a per-subject index date from a rule. `t0/t1 = first/last DMO
-   event` is just *one* instance. Generalize: first/last/nth of any event, a fixed
-   date, or relative to another anchor. *Different use case = different anchors,
-   same engine.*
-2. **Window** — relative to an anchor: `<= anchor` (history), `+/- N days`
-   (point-in-time), `(anchor_a, anchor_b]` (between), `[anchor - 5y, anchor]`
-   (last 5y). (D0740 already has two shapes: `max_days_from_index` symmetric;
-   `filter_*_before_index` directional.)
-3. **Behaviour** — how to collapse windowed, multi-source hits into a value
-   (the `memory_rule`).
+   event` is just *one* instance. Rules are data that parameterize a **bounded
+   resolver registry** (e.g. `resolver: nth_event, event_set, order, n,
+   after: <ref>`) backed by named, tested resolver functions. A new clinical
+   relation may need a new resolver fn (fine); recreating the pipeline per variable
+   is the failure mode.
+2. **Scope** (was "window") — a temporal interval **plus optional relational
+   predicates**: `<= anchor`, `+/- N days`, `(a, b]`, `[anchor-5y, anchor]`, **and**
+   `same_event`, `same_stay`, `after(ref)`. (`receveur_dialyse` needs
+   "same surgical encounter OR within [-365d,+7d]" — a date interval alone can't
+   say it.)
+3. **Construction policy** (was "behaviour") — how to collapse windowed,
+   multi-source hits. A *named, tested policy* that may include **source precedence
+   and conflict handling**, not merely one scalar reducer.
 4. **Sources** — where dated hits come from: ICD codes, CCAM acts, labs, text.
 
-`anchor x window` = the "timepoint" dimension (where & how wide); `behaviour` =
-how to collapse; `sources` = where from. **The spec is DATA**, not code: one row
-defines a variable; the engine runs all four layers from it.
+### B. Derived variable (computed) — inputs + plain R
+
+A thing you *calculate* from already-produced variables — no text, no model, no
+sources. **The engine does not run extraction on these.** The computation is
+**plain R** in a `derive.R` step, **not** an interpreted rule-DSL (a `rule:`
+interpreter would reinvent R, badly — and Review #1 warns against premature DSLs).
+The registry only *documents* derived variables, for the data dictionary + lineage:
+
+```yaml
+id: poids_delta
+type: derived
+inputs: [poids_t0, poids_t1]   # documentation + lineage only
+# computation lives in derive.R:  poids_delta = poids_t1 - poids_t0
+```
+
+**The spec is DATA**, not code: an observed-task row drives the extraction layers;
+a derived entry just flags "skip extraction, compute later in R."
 
 ### Unified spec row (target shape)
 
+`schema` is **JSON Schema as data** (ellmer consumes it via `type_from_schema()` —
+no `type_*()` objects in the spec).
+
 ```r
 tabac = list(
-  sources     = list(llm_text = list(query  = "taba* OR fum* OR cigar* OR clope* OR sevrage",
-                                      schema = type_enum(c("never","former","current","not_stated")),
-                                      instruction = "...")),
-  timepoints  = list(t0 = anchor("first_dmo", window = "+/-30d"),
-                     t1 = anchor("last_dmo",  window = "+/-30d")),
-  behaviour   = "point_in_time_status",
-  evidence    = TRUE,
-  outputs     = c("tabac_t0", "tabac_t1", "tabac_changed")   # changed = derived (Layer 3)
+  sources    = list(llm_text = list(query  = "taba* OR fum* OR cigar* OR clope* OR sevrage",
+                                     schema = list(type = "string",
+                                                   enum = c("never","former","current","not_stated")),
+                                     instruction = "...")),
+  timepoints = list(t0 = anchor("first_dmo", scope = "+/-30d"),
+                    t1 = anchor("last_dmo",  scope = "+/-30d")),
+  policy     = "nearest",                                    # construction policy
+  evidence   = TRUE,
+  outputs    = c("tabac_t0", "tabac_t1", "tabac_changed")    # changed = derived (plain R)
 )
 ```
 
@@ -108,10 +150,10 @@ diabete = list(
   sources = list(
     pmsi_diag = list(icd10 = c("E10","E11")),
     pmsi_acte = list(ccam  = c("...")),
-    llm_text  = list(query = "diab*", schema = type_enum(c("yes","no","not_stated")), instruction = "...")
+    llm_text  = list(query = "diab*", schema = list(type="string", enum=c("yes","no","not_stated")), instruction = "...")
   ),
-  timepoints = list(t1 = anchor("last_dmo", window = "<= anchor")),
-  behaviour  = "any_positive"
+  timepoints = list(t1 = anchor("last_dmo", scope = "<= anchor")),
+  policy     = "any"
 )
 ```
 
@@ -122,24 +164,28 @@ diabete = list(
 The fear was "how many behaviours / how much source-specific code." Both are
 bounded by the narrow waist and are *additive*.
 
-### ~5 reducers (behaviours), written once
+### A registry of named construction policies (Review #1)
 
-| reducer | covers (clinical memory_rules) |
-|---|---|
-| `any` (positive hit exists in window) | accumulative_history, event_history, event_during_followup |
-| `nearest` (value of hit closest to anchor) | point_in_time_status, current_state, repeated_measure |
-| `first` / `last` | immutable, onset descriptors |
-| `aggregate(fn)` (min/max/mean of numeric) | severity, cumulative counts |
-| `collect` (all values -> list) | array-valued vars (e.g. surgical_history) |
+The "~5 reducers" claim was too clean — it validated against D0740's simple
+variables but missed D0840's reconciliation logic. The bounding *principle* holds
+(a small, closed, tested set — **not** a DSL), but it's a **registry of named
+construction policies**, each a pure function `(hits, params) -> value +
+justifying hit ids`:
 
-A behaviour is a pure function `(hits, params) -> value + justifying hit`. The
-"weird" clinical rules are **compositions in the spec, not new code**:
-- `new_between_t0_t1` = `any` in `(t0,t1]` AND NOT `any` in `<= t0`
-- `history_plus_activity` = two outputs: `any(<=anchor)` + `nearest(+/-Nd)`
-- `derived` = not a reducer; it is Layer 3.
+| policy | does | seen in |
+|---|---|---|
+| `any` | a positive hit exists in scope | accumulative history, events |
+| `nearest` | value of the hit closest to the anchor | point-in-time status, measures |
+| `first` / `last` | earliest / latest in scope | immutable, onset |
+| `summarise(fn)` | min/max/mean/**count**/**count-distinct** + threshold | severity; "≥2 distinct days" (repeated acute dialysis) |
+| `rank_select` | pick by ordered tie-breakers | biology: distance-to-target → side → source-priority → date → record_id |
+| `reconcile` | source precedence + conflict → value or **review** | pre-emptive > coded > text; disagreement routes to review |
+| `collect` | all values -> list | array-valued (surgical_history) |
 
-These five were **discovered empirically** across three projects — the set is
-small and slowly-growing, not open-ended.
+Specs **select a policy and supply parameters.** Add a generic DSL only if
+repeated policies prove its shape — never preemptively. Compositions
+(`new_between` = `any (a,b]` AND NOT `any <=a`; `history_plus_activity` = two
+outputs) stay in the spec, not in new code.
 
 ### ~4 source adapters, written once
 
@@ -165,8 +211,15 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   illegal tokens at each decode step (it *forbids*, never *boosts*; the model's
   preference still chooses among the survivors). **Guarantees JSON shape, never
   truth.** Enforcement is server-side; the client just passes the schema.
-  Consequence: JSON-repair is a *depreciating* asset (grammar handles syntax);
-  eval/review is *appreciating* (only it catches valid-but-wrong).
+- **Fail closed, do not repair (Review #1).** Grammar kills *syntax* errors, but
+  truncation / cancellation / server failure still produce partial objects (a probe
+  with `max_tokens=2` gave `premature EOF` even under structured output). So
+  *syntax-repair depreciates, but failure-handling does not*: validate against the
+  schema → record an attempt-level failure → bounded explicit retry → **fail
+  closed** if exhausted. **Never auto-repair a partial clinical object** — repair
+  can invent the very field being audited. Missing extraction is visible;
+  synthesized extraction is not. Keep gptr's *validation + failure-metadata*;
+  retire its *repair* to a legacy/diagnostic adapter.
 - **Per-variable evidence.** Each value carries its own verbatim quote
   (`{value, evidence}`), because the text justifying `pack_years` differs from the
   text justifying `smoking_status`. Output is a **long** table:
@@ -178,11 +231,16 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   nullability) is the missing channel for *non-enum* types (numbers, free text)
   that cannot carry a sentinel. **Derive missing-handling from the type**, do not
   make it a per-variable field. They are not redundant; they are type-specific.
-- **Retrieval is optional, sensitivity-first.** Lexical (corpustools), tuned for
-  recall over precision (over-retrieve, let the model + `not_stated` filter).
-  KWIC snippets with full-doc fallback; **dedup copy-forward** is essential.
-  Per-variable retrieval is also *call*-reduction (only fire where the query hits).
-  Recall is the silent killer; the query is a versioned artifact.
+- **Retrieval is a replaceable baseline, not the foundation (Review #1).** Lexical
+  (corpustools), sensitivity-first (over-retrieve, let the model + `not_stated`
+  filter). KWIC snippets with full-doc fallback; **dedup copy-forward** is
+  essential; per-variable retrieval is also *call*-reduction. But lexical misses
+  typos/abbreviations, indirect evidence (a drug implying a condition), untermed
+  concepts. **Mandatory guardrail: measure candidate recall *separately* from
+  extraction accuracy** — on an adjudicated doc sample, did the evidence-bearing
+  record enter the candidate set? Version the query with the prompt/schema; coded
+  sources give a biased silver subset. Add a union retriever (semantic / full-doc)
+  only if measured misses justify it.
 - **Gold is usually ABSENT, and accrues by review.** The default pipeline runs
   with NO gold: extract → surface value+evidence+provenance → clinician reviews
   (agree / correct) → each adjudicated row becomes a gold label → eval becomes
@@ -203,24 +261,31 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 | Four-layer architecture + narrow-waist hit | Discovered from D0740's 7 near-identical feature blocks; makes sources & behaviours additive | Per-variable bespoke pipelines (the 7 copy-pasted blocks = accidental complexity) |
 | Spec as data | Editable, versionable, reviewable, scales to ~50 variables | Bespoke code per variable |
 | One call per variable | Weak models do better one-at-a-time; enables per-variable retrieval + resumability | Nested multi-variable single call (degrades on weak models) |
-| Engine = ellmer **(OPEN: vs raw Ollama)** | Inherits providers + structured output + JSON→R, maintenance-free | Building our own provider layer = the complexity we are shedding |
+| Engine = **ellmer** (ratified R#1); raw Ollama = escape hatch | `type_from_schema()` keeps specs JSON-Schema *data* while ellmer supplies providers / structured-output / conversion / parallelism | Our own provider layer; raw Ollama as a co-equal engine |
 | Build app first, extract library later | Don't guess abstractions; we have prior art + ≥2 fields | Premature packaging |
 | Focused successor, not gptr rewrite | The JSON-repair/validation engine is hard-won | From-scratch rewrite loses it |
-| Per-variable evidence (nested) | Clinical review needs the quote behind *each* value | One shared evidence / flat schema |
+| Per-variable evidence (nested), substring-verified | Review needs the quote behind *each* value; verification kills hallucinated quotes | Shared/flat evidence; trusting model quotes |
+| Three contracts: attempt / hit / value (R#1) | Failures, no-hit, conflicts, lineage become representable; build hits+value first | One overloaded long table with nullable junk |
+| Two spec kinds: observed task vs derived (R#1) | Don't run extraction on a subtraction; derived = plain R, registry documents only | One spec shape; a `rule:` interpreter (reinvents R) |
+| Named construction-policy registry, not "5 reducers" (R#1) | D0840 needs reconcile / rank_select / count-distinct; closed tested set, not a DSL | Fixed 5-reducer list (too small); `aggregate(fn)` hiding arbitrary code |
+| Fail closed, never auto-repair (R#1) | Repair can invent the audited field; missing is visible, synthesized is not | Auto-repairing partial clinical objects |
+| Candidate recall measured separately (R#1) | An accurate model score can hide systematic retrieval false-negatives | Extraction accuracy as the only metric |
 
 ---
 
 ## 7. Open questions
 
-- **Hit schema completeness:** is `(subject, date, value, source, evidence)`
-  enough, or do real hits need `record_id`, `confidence`, `event_id`?
-- **Engine:** ellmer (type objects → specs are *code*) vs raw Ollama (JSON-schema
-  → specs are *data*; our spec is already JSON-schema-shaped). Decide at the spike.
-- **Where specs live:** R list (code) vs external YAML/CSV (clinician-editable
-  data). D0740's most-refined artifacts were CSV tables — leans toward data.
+Resolved by Review #1: hit schema (→ three contracts), engine (→ ellmer),
+anchor/window expression (→ bounded resolver registry). Remaining:
+
+- **Where specs live:** R list (code) vs external YAML/CSV (clinician-editable).
+  Specs are JSON-Schema-shaped *data* either way; D0740's most-refined artifacts
+  were CSV tables — leans toward data; decide when a real catalogue is built.
 - **Eval gold mapping:** in the spec vs a separate eval config (lean: separate).
 - **Array-valued variables:** evidence per item vs per list.
-- **Anchor/window DSL:** how to express anchor rules and windows cleanly as data.
+- **Call granularity:** one call per *extraction task per subject/timepoint*
+  (renamed from "per variable", which was ambiguous); document-level vs bundled is
+  an empirical Phase-0 comparison, not an axiom.
 - **Name.**
 
 ---
@@ -247,9 +312,9 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   > cases (diagnosis/procedure/admission/LOS), **not** a smoking target; and no
   > `tabac_eval_pool` lives in D0840 — the labelled pool, if any, is in
   > `gptr/manual-eval/`.
-- **Phase 1 — the contract + primitives.** The hit schema, the ~4 source
-  adapters, the ~5 reducers — generalized out of D0740's blocks. Lift the
-  `comorbidity_catalog` pattern to all blocks.
+- **Phase 1 — the contracts + primitives.** The hit/value contracts, the ~4 source
+  adapters, the construction-policy registry — generalized out of D0740's blocks.
+  Lift the `comorbidity_catalog` pattern to all blocks.
 - **Phase 2 — anchor/window/behaviour as first-class spec fields.** The unified
   spec row + the engine loop (`resolve_anchors → retrieve → gather → collapse →
   pivot → derive`).

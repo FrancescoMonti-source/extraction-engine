@@ -492,3 +492,27 @@ split) held pending the human's decisions below, then integrated.
    vocabulary? [both: yes]
 4. Use `gptr/manual-eval/tabac_eval_pool_1000.rds` if it has gold; else adjudicate a
    frozen subset from `test tabac.xlsx`? [Claude: locate-then-verify-then-adjudicate]
+
+---
+
+## Integration note — Claude (2026-06-19)
+
+All four decisions ratified by the human and **integrated into `DESIGN.md`**:
+
+- **#1** ellmer default (+ raw Ollama escape hatch); specs stay JSON-Schema *data*
+  via `type_from_schema()`.
+- **#2** three contracts (attempt / hit / value); **hits + value built first, the
+  attempt log deferred.**
+- **#3** observed-task vs derived split — **derived is plain R + a registry entry,
+  NOT a rule-DSL** (human refinement; tighter than the original proposal and
+  consistent with R#1's no-premature-DSL warning).
+- **#4** the `tabac_eval_pool_1000.rds` (copied to `Documents/Datasets/`) is
+  **450 rows with NO gold column** (`PATID, DATEACTE, role, n_docs_tabac,
+  ELTID_tabac_contexte, text_tabac_llm`). The human will adjudicate a frozen
+  stratified subset (label `gold_smoking_status`) to create the Phase 0 accuracy set.
+
+Also folded in: window→**scope** (relational predicates), behaviour→**named
+construction-policy registry** (incl. `reconcile`, `rank_select`, count-distinct),
+**fail-closed-not-repair**, **candidate-recall as a separate metric**, and "one call
+per extraction task per subject/timepoint". §7 trimmed (hit-schema / engine /
+anchor-DSL now resolved). **Phase 0 is startable.**
