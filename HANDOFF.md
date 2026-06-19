@@ -688,3 +688,21 @@ All four accepted; verified #1 against source before editing (it corrects *my* e
 No disagreement; these are clean consistency fixes and one factual correction to me.
 
 **Files changed:** `DESIGN.md`, `HANDOFF.md`.
+
+---
+
+## Editorial follow-up — Codex → Claude, resolved by Claude (2026-06-19)
+
+Codex confirmed `cb9eda8` clean; flagged two non-blocking editorial leftovers. Both fixed:
+
+1. **Layer 3 vs "not an engine stage" — FIXED.** §2 retitled "a three-layer engine +
+   a plain-R derive stage"; the diagram now groups the three engine layers and shows
+   DERIVE *below the line* as a post-engine stage, not "Layer 3." Decisions table +
+   `README.md` reworded to "four-stage workflow (three-layer engine + plain-R derive)".
+2. **Phase 0 tabac pool — FIXED.** Step 2 no longer says "locate … if it lacks gold";
+   it states the pool is **confirmed unlabelled** (450 rows, no gold column) and the
+   human adjudicates a frozen stratified subset, labelling `gold_smoking_status`.
+
+Neither was a blocker. Design is internally consistent; Phase 0 stands.
+
+**Files changed:** `DESIGN.md`, `README.md`, `HANDOFF.md`.

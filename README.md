@@ -8,8 +8,9 @@ longitudinal cohort studies.
 **No code yet.** The whole design — architecture, rationale, open questions, and
 a phased build plan — lives in **[DESIGN.md](DESIGN.md)**. Start there.
 
-One-line architecture: four layers (anchor → extract → construct → derive) over
-three linked contracts — **attempt / hit / value** (the hit is the narrow waist).
+One-line architecture: a four-stage workflow (anchor → extract → construct → derive)
+whose **engine is the first three layers** — derive is plain R, not an engine stage —
+over three linked contracts: **attempt / hit / value** (the hit is the narrow waist).
 There are two kinds of variable: an **observed task** is data across four axes
 (anchor × scope × construction-policy × sources); a **derived** variable is just
 plain R over already-produced columns. ellmer is the transport engine; evaluation

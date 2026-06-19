@@ -43,13 +43,20 @@ premature.)
 
 ---
 
-## 2. Architecture — four layers + the narrow waist
+## 2. Architecture — a three-layer engine + a plain-R derive stage
+
+The **workflow** is four stages; the **engine** is only the first three. Derivation
+is ordinary project R that runs *after* the engine — it reads no records, calls no
+model, and is not an engine layer (Review #3).
 
 ```
-Layer 0  ANCHOR     per-subject index date(s) from a rule        (build_first/last_dmo_index, generalized)
-Layer 1  EXTRACT    sources -> dated HITS                         (source adapters)
-Layer 2  CONSTRUCT  scoped hits -> timepoint values               (named construction policy)
-Layer 3  DERIVE     constructed features -> computed columns       (plain R: deltas, changed, composites; no text)
+ENGINE (three layers, the thing this project builds):
+  Layer 0  ANCHOR     per-subject index date(s) from a rule     (build_first/last_dmo_index, generalized)
+  Layer 1  EXTRACT    sources -> dated HITS                      (source adapters)
+  Layer 2  CONSTRUCT  scoped hits -> timepoint values            (named construction policy)
+  ─────────────────────────────────────────────────────────────────────────────────
+  then, NOT an engine layer:
+  DERIVE             constructed features -> computed columns    (plain R: deltas, changed, composites; no text)
 ```
 
 **The narrow waist is the HIT.** Sources fan **in** to hits; construction policies
@@ -278,7 +285,7 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 
 | Decision | Why | Alternative rejected |
 |---|---|---|
-| Four-layer architecture + narrow-waist hit | Discovered from D0740's 7 near-identical feature blocks; makes sources & behaviours additive | Per-variable bespoke pipelines (the 7 copy-pasted blocks = accidental complexity) |
+| Four-stage workflow (three-layer engine + plain-R derive) + narrow-waist hit | Discovered from D0740's 7 near-identical feature blocks; makes sources & policies additive; derive stays outside the engine | Per-variable bespoke pipelines (the 7 copy-pasted blocks = accidental complexity); derive baked into the engine |
 | Spec as data | Editable, versionable, reviewable, scales to ~50 variables | Bespoke code per variable |
 | One call per extraction task (per subject/timepoint) | Weak models do better one-at-a-time; enables per-task retrieval + resumability | Nested multi-variable single call (degrades on weak models) |
 | Engine = **ellmer** (ratified R#1); raw Ollama = escape hatch | `type_from_schema()` keeps specs JSON-Schema *data* while ellmer supplies providers / structured-output / conversion / parallelism | Our own provider layer; raw Ollama as a co-equal engine |
@@ -318,10 +325,11 @@ anchor/window expression (→ bounded resolver registry). Remaining:
      ellmer→Ollama path, schema enforcement, missingness, evidence-substring check,
      failure capture. *No gold needed — validates the mechanism.*
   2. **Accuracy set** — a *frozen, independently-adjudicated* stratified `tabac`
-     set. Locate `gptr/manual-eval/tabac_eval_pool_1000.rds`; if it lacks gold
-     labels, adjudicate a small stratified subset from D0840 `test tabac.xlsx`.
-     Score deterministically: value confusion / macro-F1, abstention, evidence
-     grounding, attempt failures, latency, by model. Grammar-off is secondary.
+     set. The pool (`tabac_eval_pool_1000.rds`, copied to `Datasets/`) is **confirmed
+     unlabelled** — 450 rows, no gold column — so the human adjudicates a frozen
+     stratified subset of it, labelling `gold_smoking_status`. Score deterministically:
+     value confusion / macro-F1, abstention, evidence grounding, attempt failures,
+     latency, by model. Grammar-off is secondary.
 
   Select and test **the model** here, and validate the **ellmer path** end to end
   (ellmer is already ratified — raw Ollama is only an escape hatch, not a decision
