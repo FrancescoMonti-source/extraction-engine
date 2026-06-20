@@ -21,7 +21,9 @@
 # =============================================================================
 
 suppressWarnings(suppressMessages({
-  stopifnot(requireNamespace("ellmer", quietly = TRUE))
+  stopifnot(requireNamespace("ellmer",  quietly = TRUE),
+            requireNamespace("writexl", quietly = TRUE),   # per-row detail -> .xlsx (UTF-8 safe)
+            requireNamespace("readr",   quietly = TRUE))   # attempts -> UTF-8+BOM csv
 }))
 
 # ---- config -----------------------------------------------------------------
@@ -70,10 +72,14 @@ ENUM <- c("never", "former", "current", "not_stated")
 norm <- function(x) tolower(gsub("\\s+", " ", trimws(x)))   # whitespace/case-insensitive view
 
 make_chat <- function(model) {
+  # ellmer routes Ollama through its OpenAI-compatible /v1 endpoint, so determinism
+  # comes from OpenAI-style PARAMS (temperature + seed) — NOT from api_args$options
+  # (that path is silently ignored on /v1, which let the model run stochastic).
   ellmer::chat_ollama(
     model         = model,
     system_prompt = SYSTEM_PROMPT,
-    api_args      = list(options = list(num_ctx = NUM_CTX, temperature = 0)),
+    params        = ellmer::params(temperature = 0, seed = SEED),
+    api_args      = list(options = list(num_ctx = NUM_CTX)),  # best-effort; /v1 may ignore
     echo          = "none"
   )
 }
@@ -166,6 +172,7 @@ for (model in MODELS) {
       evidence_norm = v$evidence_norm, latency_ms = round(out$latency_ms),
       evidence = if (identical(out$status, "ok") && is.list(out$res))
                    (if (is.null(out$res[["evidence"]])) "" else out$res[["evidence"]]) else NA_character_,
+      source_text = r$text_tabac_llm,   # full note text, for debugging FALSE evidence matches
       stringsAsFactors = FALSE
     )
   }
@@ -174,8 +181,12 @@ for (model in MODELS) {
 res_df <- do.call(rbind, rows)
 att_df <- do.call(rbind, attempts)
 stamp  <- format(Sys.time(), "%Y%m%d_%H%M%S")
-write.csv(res_df, file.path(OUT_DIR, sprintf("smoke_rows_%s.csv", stamp)), row.names = FALSE)
-write.csv(att_df, file.path(OUT_DIR, sprintf("smoke_attempts_%s.csv", stamp)), row.names = FALSE)
+# Per-row detail as .xlsx: holds full UTF-8 clinical text + evidence for review,
+# with NO csv encoding trap (Excel reads a BOM-less UTF-8 csv as Windows-1252 ->
+# mojibake). Sort/filter on evidence_exact == FALSE to debug against source_text.
+writexl::write_xlsx(res_df, file.path(OUT_DIR, sprintf("smoke_rows_%s.xlsx", stamp)))
+# Attempt log as UTF-8 + BOM csv (write_excel_csv) so Excel detects the encoding.
+readr::write_excel_csv(att_df, file.path(OUT_DIR, sprintf("smoke_attempts_%s.csv", stamp)))
 
 # ---- aggregate report (SAFE: counts/rates only, no PHI) ---------------------
 pct <- function(x) sprintf("%.0f%%", 100 * mean(x, na.rm = TRUE))

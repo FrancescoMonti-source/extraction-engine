@@ -803,3 +803,44 @@ don't rubber-stamp; where you'd choose differently, say so with the tradeoff.
 
 **How to respond.** Append `## Review — Codex → Claude` (Handoff #2) below, per-item
 agree/disagree + tradeoff. Claude integrates in-repo.
+
+---
+
+## Correction to Handoff #2 — Claude (2026-06-20): determinism bug; numbers revised
+
+**Withdraw the "58% / gemma3:4b fabricates 42% of quotes" claim — it was an artifact
+of a determinism bug, now fixed.**
+
+**Bug.** ellmer routes Ollama through its **OpenAI-compatible `/v1` endpoint**
+(`ProviderOllama`, `base_url/v1`). Generation params must go through
+`params(temperature=, seed=)`; the `api_args = list(options = list(temperature=0))`
+I used is the *native* `/api` path and is **silently ignored on `/v1`**. So the model
+ran at its default (stochastic) temperature. Proof: two runs of the *identical* config
+on the *same* 12 rows diverged hard — `former` 6→0, evidence 58%→91%.
+
+**Fix.** `params = ellmer::params(temperature = 0, seed = SEED)`. Verified: two
+consecutive runs are now **byte-identical**. Committed.
+
+**Revised gemma3:4b (deterministic; temp=0, seed, 12 rows):**
+- call ok **11/12**; the 1 failure is a *reproducible* `premature EOF` **truncation**
+  on row 287 (`{ "smoking_status": "former",` then cut) — a clean **fail-closed**
+  example, NOT a server crash. Exactly DESIGN.md §5.
+- evidence exact-substring **91%** (not 58%). Real fabrication ≈ **9%**, not 42%.
+
+**Consequences for the Handoff #2 questions:**
+- **Q1 (default model) is reopened on better data.** The fidelity gap that motivated
+  "test gemma3:12b" is much smaller than I claimed — gemma3:4b at temp=0 is already
+  91% faithful, fast, and mostly robust. *And* the `gpt-oss:20b` numbers (89%, 2
+  crashes) were ALSO from a pre-fix **stochastic** run — they must be **re-measured**
+  with the params fix before any model comparison is valid. Treat all prior
+  cross-model numbers as void except gemma3:4b-deterministic above.
+- **Q2 (gpt-oss crash)** still stands — a native `0xc0000409` server crash is
+  temperature-independent.
+- **Q3 (evidence policy)** unchanged and reinforced: exact-substring caught real
+  truncation + residual fabrication even on the good model.
+
+**Lesson (logged):** verify a determinism/seed lever *actually takes effect* (run
+twice, diff) before trusting any eval number — provider-abstraction layers can drop
+params silently depending on which endpoint they hit.
+
+**Files changed:** `scripts/phase0_smoke_test.R`, `HANDOFF.md`.
