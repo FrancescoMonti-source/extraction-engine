@@ -32,7 +32,9 @@ DATASETS       <- Sys.getenv("DATASETS_DIR", "C:/Users/franc/Documents/Datasets"
 POOL           <- file.path(DATASETS, "tabac_eval_pool_1000.rds")
 MODELS         <- strsplit(Sys.getenv("SMOKE_MODELS", "gemma4"), ",")[[1]]  # ellmer strips :latest -> use "gemma4" not "gemma4:latest"
 N              <- as.integer(Sys.getenv("SMOKE_N", "12"))
-NUM_CTX        <- as.integer(Sys.getenv("SMOKE_NUM_CTX", "8192"))
+NUM_CTX        <- as.integer(Sys.getenv("SMOKE_NUM_CTX", "8192"))    # window: input+output share this (memory cost)
+MAX_TOKENS     <- as.integer(Sys.getenv("SMOKE_MAX_TOKENS", "512"))  # output cap only: sized to a long legit quote,
+                                                                     # not the window ceiling (~6400 free here)
 SEED           <- 20260619L
 SCHEMA_VERSION <- "tabac-v1"
 PROMPT_VERSION <- "tabac-fr-v1"
@@ -79,7 +81,7 @@ make_chat <- function(model) {
   ellmer::chat_ollama(
     model         = model,
     system_prompt = SYSTEM_PROMPT,
-    params        = ellmer::params(temperature = 0, seed = SEED),
+    params        = ellmer::params(temperature = 0, seed = SEED, max_tokens = MAX_TOKENS),
     api_args      = list(options = list(num_ctx = NUM_CTX)),  # best-effort; /v1 may ignore
     echo          = "none"
   )
@@ -131,8 +133,8 @@ idx  <- unlist(lapply(split(d$.row_id, tert), function(ids) sample(ids, min(per,
 idx  <- head(idx, N)
 samp <- d[idx, ]
 
-cat(sprintf("Phase 0 smoke test | pool=%d rows | sample=%d | num_ctx=%d | seed=%d\n",
-            nrow(d), nrow(samp), NUM_CTX, SEED))
+cat(sprintf("Phase 0 smoke test | pool=%d rows | sample=%d | num_ctx=%d | max_tokens=%d | seed=%d\n",
+            nrow(d), nrow(samp), NUM_CTX, MAX_TOKENS, SEED))
 cat(sprintf("schema=%s prompt=%s | models: %s\n\n",
             SCHEMA_VERSION, PROMPT_VERSION, paste(MODELS, collapse = ", ")))
 

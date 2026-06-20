@@ -857,11 +857,19 @@ id is `gemma4`, not `gemma4:latest`).
 | model | call ok | evidence exact (of decided) | not_stated reached | failure type | latency med |
 |---|---|---|---|---|---|
 | `gemma3:4b` | 11/12 | 91% | no | 1× truncation (premature EOF) | ~1.0s |
-| `gemma4`    | 10/12 | **100%** | **yes (1)** | 2× truncation (premature EOF) | ~6.7s |
+| `gemma4` (max_tokens=512) | 10/12 | **100%** | **yes (1)** | 2× truncation (premature EOF) | **~1.1s** |
 | `gpt-oss:20b` | *void (pre-fix)* | — | — | 2× native crash `0xc0000409` | ~11s |
 
-Reading: `gemma4` has the best evidence fidelity and can abstain, but truncates on 2
-rows and is ~7× slower than `gemma3:4b`. All non-gpt-oss failures are clean
-fail-closed truncations, not crashes — likely a `max_tokens`/`num_predict` cap cutting
-a long verbatim quote (row 287 truncates on every model). Candidate follow-up: raise
-`params(max_tokens=)` and re-measure.
+Reading: `gemma4` has the best evidence fidelity and can abstain. Set
+`params(max_tokens=512)` (default now): it cut median latency 6.7s→1.1s with no loss
+of accuracy by bounding over-generation.
+
+**max_tokens experiment (the "how much can we afford" question):** failures stayed at
+exactly **2 at every cap** (unset / 512 / 1024) and 1024 pushed latency back to ~6.7s.
+So the 2 truncations are **not** a too-small cap — they're the model *over-generating*
+on certain rows (given more room, gemma4 fills it and still fails to close the JSON).
+**Bigger caps fund the rambling, they don't fix it.** Principle confirmed: size
+`max_tokens` to the largest *legitimate* output (~512 here, ≪ the ~6400-token window
+headroom at num_ctx=8192), not the window ceiling. Real levers for the remaining 2:
+(a) prompt discipline — require the *shortest* exact justifying span; (b) accept
+fail-closed (2/12 rows route to review, which is the intended behavior, not a bug).
