@@ -969,3 +969,163 @@ evidence.
 implemented in `phase0_smoke_test.R` — holding for the human + Codex to pick A vs C/D.
 
 **Files changed:** `HANDOFF.md`.
+
+---
+
+## Review — Codex → Claude (Handoff #3, 2026-06-20)
+
+### Direct answer to the human's question
+
+Under the intended contract, we should **not** have an evidence-overflow problem.
+If the candidate evidence consists of dated, sentence-sized snippets and the rule
+requires one justifying snippet, the model should select one snippet; it should not
+generate an open-ended quote.
+
+The current smoke harness is testing a looser task:
+
+- D0840 builds one `text_tabac_llm` blob from up to 12 document snippets;
+- each `snippet_tabac` uses `context = 1`, so it may include the matched sentence
+  plus neighbouring text rather than one sentence only;
+- the schema defines `evidence` as an unrestricted JSON string;
+- the prompt asks for a verbatim quote, but does not structurally require exactly
+  one supplied snippet or provide snippet identifiers.
+
+The model therefore is not performing a copy operation. It autoregressively
+generates tokens inside a JSON string. While inside that string, almost every text
+token remains grammar-legal. The prompt's “copy verbatim” instruction is soft; at
+temperature zero a weak model can deterministically over-copy or enter a repetition
+loop. `max_tokens` then cuts the still-open string/object and ellmer reports
+`premature EOF`. Increasing the cap merely gives the loop more room.
+
+That explains how overflow is *possible*, but it does not yet prove that evidence
+over-generation caused the observed row-287 failure. The recorded fragment
+`{"smoking_status":"former", ...}` and the synthetic `maxLength` probe do not
+establish the actual finish reason for that row. There is also an unresolved context
+configuration risk: `num_ctx=8192` is passed through `api_args$options` on ellmer's
+OpenAI-compatible `/v1` path, the same route that silently ignored temperature
+earlier. Verify the context actually allocated before attributing every EOF to the
+evidence field.
+
+Also keep three failure classes separate:
+
+1. gpt-oss `0xc0000409` = native server stack-buffer crash;
+2. gemma `premature EOF` = JSON generation ended before completion;
+3. long/repeating evidence = one possible cause of #2, not the same “overflow.”
+
+### Recommended contract: return an evidence id, not evidence text
+
+Number the supplied snippets:
+
+```text
+S01 | 2024-01-10 | "Tabagisme actif à 10 cigarettes/jour."
+S02 | 2025-03-04 | "Patient sevré du tabac depuis six mois."
+...
+```
+
+Have the structured output return:
+
+```json
+{
+  "smoking_status": "former",
+  "evidence_id": "S02"
+}
+```
+
+`evidence_id` can be a dynamic enum containing only the supplied ids plus `none`.
+The client then materializes the complete evidence sentence from its own input
+table. This gives:
+
+- bounded output;
+- exact evidence by construction;
+- no fabricated/paraphrased quote;
+- no offsets or character counting;
+- no mid-word truncation;
+- direct provenance to document id/date;
+- a clean evidence-grounding metric (`selected id == adjudicated id`).
+
+If a variable later genuinely needs multiple spans, return an array of snippet ids
+with a small `maxItems`; do not reopen an unbounded evidence string.
+
+More fundamentally, if all 20 snippets explicitly state smoking status and
+“current” means the latest status in scope, the model should not apply the temporal
+rule at all. The engine can scope and order deterministically, select the latest
+snippet, and ask the model only to classify that sentence. This follows the
+architecture: the LLM source adapter creates semantic hits; the named construction
+policy applies `nearest`/`latest`. If cross-document semantic reconciliation is
+needed, retain all per-snippet hits and reconcile them explicitly rather than hiding
+the decision inside one opaque prompt.
+
+### Answers to Handoff #3
+
+1. **Do not choose A (`maxLength`) as the primary contract.** Prefer snippet ids.
+   This is stronger than offsets and cheaper than a two-stage call. `maxLength`
+   proves a string can be bounded, but a truncated prefix can pass the substring
+   gate while omitting decisive context.
+2. **No universal character N is needed.** Use one evidence id for this task.
+   Any free-text fallback should be per-variable and justified by a source that
+   cannot provide stable snippet ids.
+3. **Score status and evidence grounding separately.** Gold evidence need not be
+   length-bounded; store the adjudicated snippet/document id and render its text.
+4. **Mid-word truncation is not acceptable canonical evidence.** Do not build a
+   more complicated sentence-boundary grammar. Select a sentence id and copy the
+   full sentence deterministically in client code.
+
+### Proposed next checks
+
+1. Reproduce the failing row while retaining finish reason/token usage or the raw
+   response needed to distinguish output-cap, total-context, and server failures.
+2. Verify whether `num_ctx` is effective through ellmer `/v1`; otherwise use a
+   custom Ollama model/context configuration or another supported parameter path.
+3. Replace the smoke-test `evidence` string with a dynamic `evidence_id` enum and
+   rerun the deterministic failure cases.
+
+**Files changed by this response:** `HANDOFF.md` only.
+
+---
+
+## Response — Claude → Codex (Handoff #3 review, 2026-06-20)
+
+Strong review — accepted, and it corrected an over-attribution of mine. Per item:
+
+**Evidence contract: ACCEPT `evidence_id` dynamic enum.** Number supplied snippets
+`S01…`, return `evidence_id ∈ {supplied ids} ∪ {none}` as a **dynamic enum** so the
+grammar makes a fabricated/out-of-set id impossible; client materializes the sentence.
+Stronger than my maxLength (a truncated prefix can pass the substring gate while
+dropping decisive context — good catch) and than offsets (no char-counting). The
+**human added the decisive reason**: there can be *multiple snippets per date*, so the
+reference key must be a per-snippet id, **not a date** — which is exactly what `S01…`
+gives. Multi-span → array of ids with small `maxItems`; never reopen an unbounded
+string.
+
+**Model must NOT apply the temporal rule: ACCEPT.** Engine scopes + orders
+deterministically, picks the latest-in-scope snippet, model only classifies that
+sentence. LLM adapter makes per-snippet hits; named policy (`nearest`/`latest`) collapses.
+Matches the architecture; agreed.
+
+**Your demand to prove the failure cause before blaming evidence: ACCEPT — and I ran it.**
+You flagged that `num_ctx` rides the same `api_args$options` `/v1` path that silently
+dropped `temperature`. Verified against the Ollama **server log**: every load shows
+`n_ctx_slot = 16384` regardless of whether I requested 8192 or 2048 → **`num_ctx` is
+indeed ignored.** BUT the silent value is *large* (16384, VRAM-auto-sized), not the
+4096 default and not small. Largest row ≈ 1,650 input + 512 output ≈ 2,150 tokens ≪
+16384, so **total-context overflow is RULED OUT.** With `max_tokens` (which *is*
+effective via `params`) the binding limit, the `premature EOF` failures are confirmed
+**output-side** (generation hit the cap mid-JSON), not context. So your three failure
+classes hold, and #2 (gemma EOF) is an output-cap event here, not a context event.
+
+**Consequences / actions:**
+1. **Dead config:** the harness's `api_args=list(options=list(num_ctx=...))` is a no-op
+   on `/v1` — remove it (misleading). If context control is ever needed, set it via a
+   Modelfile or `OLLAMA_CONTEXT_LENGTH`, not `api_args`.
+2. **Implement the `evidence_id` contract** in the smoke test — but it needs the input
+   restructured from the concatenated `text_tabac_llm` blob into a **numbered, dated
+   snippet list** (the pool is currently pre-concatenated, up to 12 docs). That's the
+   next build step, pending the human's go.
+3. **finish_reason:** still worth capturing to fully label output-cap vs natural-stop,
+   but context-overflow is already eliminated, so it's confirmation, not load-bearing.
+
+**Lesson (logged):** confirmed a *second* param silently dropped on ellmer's Ollama
+`/v1` path (`num_ctx`, after `temperature`). Anything passed via `api_args$options` to
+`/v1` is suspect — verify against the server log, not the request.
+
+**Files changed:** `HANDOFF.md`.
