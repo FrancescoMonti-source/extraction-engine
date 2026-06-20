@@ -873,3 +873,45 @@ on certain rows (given more room, gemma4 fills it and still fails to close the J
 headroom at num_ctx=8192), not the window ceiling. Real levers for the remaining 2:
 (a) prompt discipline — require the *shortest* exact justifying span; (b) accept
 fail-closed (2/12 rows route to review, which is the intended behavior, not a bug).
+
+---
+
+## RETRACTION: gemma4 is disqualified — grammar not enforced — Claude (2026-06-20)
+
+**Crossed out the "gemma4 is best" result above.** The human caught it: a bare
+`chat_structured("My name is Susan…")` on `gemma4` returned **prose**
+(`Hi Susan! It's nice to meet you`) → `lexical error: invalid char`. A truly
+grammar-constrained model *cannot* emit prose at position 0. New gate
+`scripts/check_grammar_enforcement.R` (bare call, default sampling, n=12) settles it:
+
+```
+gemma3:4b   ok=12/12  prose-escape=0   -> RELIABLE
+gemma4      ok= 8/12  prose-escape=4   -> UNRELIABLE (grammar not enforced)
+```
+
+`ollama show gemma4`: **architecture `gemma4`, requires Ollama 0.20.0, capabilities
+include `thinking` + `vision` + `audio`.** It is a brand-new **reasoning/"thinking"
+multimodal** model, not a standard instruction model. Its unconstrained reasoning text
+escapes the JSON grammar ~1 in 3 calls. My smoke-test numbers only looked good because
+the heavy "réponds UNIQUEMENT en JSON" system prompt + temp=0 *suppressed* the escapes
+— i.e. gemma4's JSON came from **prompt-following, not grammar enforcement**, the exact
+fragile foundation this project rejects. Same failure class as `gpt-oss:20b` (also a
+thinking model; it crashed instead of rambling).
+
+**Decisions:**
+- **Reject thinking/reasoning models for grammar-dependent extraction** (gemma4,
+  gpt-oss:20b). Default reverted to **`gemma3:4b`** (human already did this in the
+  script). Reliable alternates: `gemma3:12b`, `mistral` (both enforce the grammar).
+- **Q1 (Handoff #2) resolved on the right axis:** the model question isn't fidelity-vs-
+  speed, it's *does the grammar actually hold*. gemma3:4b: yes (12/12, 91% evidence,
+  ~1s). That's the working default.
+- **New permanent gate:** run `check_grammar_enforcement.R` before adopting ANY new
+  local model. Accuracy behind a strong prompt is meaningless if the grammar isn't
+  enforced — it will fail open on weak/long inputs.
+
+**Lesson (logged):** "it returns valid JSON" is not evidence of grammar enforcement —
+test with NO system prompt and stochastic sampling; a thinking model will reveal itself
+by escaping to prose. Provenance matters: `ollama show` the architecture/capabilities.
+
+**Files changed:** `scripts/check_grammar_enforcement.R` (new), `scripts/phase0_smoke_test.R`
+(default back to gemma3:4b, by human), `HANDOFF.md`.
