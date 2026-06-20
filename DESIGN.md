@@ -1,10 +1,13 @@
 # extraction-engine — Design
 
-> **Status:** design seed. No code yet.
+> **Status:** Phase 0 step 1 (contract smoke test) **built and run** — see `scripts/`
+> and the running log in `HANDOFF.md`. Design ratified across 4+ Claude↔Codex review
+> rounds.
 > **Name:** `extraction-engine` is a **placeholder** — rename later.
 > **Lineage:** focused successor to `gptr`. Captured from an extended design
-> conversation on 2026-06-19. This doc carries the *rationale*, not just the
-> conclusions — the "Decisions & rationale" section is the point.
+> conversation begun 2026-06-19. **This doc is the source of truth and is kept current
+> with every ratified decision** — `HANDOFF.md` holds the rationale/history, but the
+> *current* design lives here. The "Decisions & rationale" section is the point.
 
 ---
 
@@ -80,8 +83,10 @@ value   = (subject_id, variable_id, timepoint_id, value, unit,
 
 - `recorded_at` vs `effective_at`: a note *recorded* near the anchor can describe
   an event years earlier — keep both.
-- Evidence is anchored to `source_record_id` and **verified as an exact substring**
-  of the source before it counts (kills hallucinated quotes). Model-reported
+- Evidence is a **reference, not a copied quote**: the model returns an `evidence_id`
+  (the id of the justifying snippet, e.g. `S02`) drawn from a dynamic enum, and the
+  client materializes the text from its own snippet table — exact by construction, no
+  hallucinated quotes possible. See §5 "Evidence by reference". Model-reported
   `confidence` is non-canonical raw metadata only.
 - **Build incrementally, but a *minimal* attempt record starts in Phase 0**
   (Review #2): Phase 0 already measures attempt failures, latency, model, and
@@ -232,7 +237,20 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   (or via ellmer structured output) is compiled into a GBNF grammar that masks
   illegal tokens at each decode step (it *forbids*, never *boosts*; the model's
   preference still chooses among the survivors). **Guarantees JSON shape, never
-  truth.** Enforcement is server-side; the client just passes the schema.
+  truth.** It also guarantees a string is *a* string, not a *short* or *honest* one
+  (hence the evidence design below). Enforcement is server-side; the client just
+  passes the schema.
+- **Vet grammar enforcement per model; reject "thinking" models.** Masking is
+  model-agnostic *in principle*, but reasoning/"thinking" models emit free-text
+  reasoning that is **not** under the schema grammar and escapes to prose. Verified:
+  `gemma4` (a thinking+multimodal model, arch `gemma4`) escaped to prose on ~4/12 bare
+  structured calls; `gpt-oss:20b` (also a thinking model) crashed the server instead.
+  Plain instruction models enforce reliably (`gemma3:4b` 12/12, `gemma3:12b`,
+  `mistral`). **Before adopting any local model, run
+  `scripts/check_grammar_enforcement.R`** — a bare structured call, no system prompt,
+  stochastic sampling; a thinking model reveals itself by escaping. "Returns valid JSON
+  behind a strong prompt" is **not** evidence of enforcement — it can be
+  prompt-following that fails open on weak/long inputs. **Default model: `gemma3:4b`.**
 - **Fail closed, do not repair (Review #1).** Grammar kills *syntax* errors, but
   truncation / cancellation / server failure still produce partial objects (a probe
   with `max_tokens=2` gave `premature EOF` even under structured output). So
@@ -242,16 +260,48 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   can invent the very field being audited. Missing extraction is visible;
   synthesized extraction is not. Keep gptr's *validation + failure-metadata*;
   retire its *repair* to a legacy/diagnostic adapter.
-- **Per-variable evidence.** Each value carries its own verbatim quote, because the
-  text justifying `pack_years` differs from the text justifying `smoking_status`.
-  **Evidence lives on the `hit`** (anchored to a `source_record_id`, substring-
-  verified); a constructed `value` references its `selected_hit_ids` rather than
-  copying quotes. The canonical contract is the three tables in §2
-  (attempt / hit / value), **not** a single flat
-  `(subject, date, variable, value, evidence, .valid, .failure)` long table — that
-  earlier formulation predates the three-contract split (Review #2). A flat
-  long-format *view* for review/eval is still trivial to materialize by joining
-  value → selected hits.
+- **Evidence by reference (`evidence_id`), not copied text (Handoff #3).** Each value
+  still carries the evidence behind it, but the model returns the **id of the
+  justifying snippet** from a **dynamic enum of the supplied snippet ids + `none`**. The
+  grammar then makes a fabricated or out-of-set id impossible, and the client
+  materializes the sentence from its own table. This beats a copied quote on every axis:
+  no fabrication, no unbounded output / overflow, no char-counting, no mid-word
+  truncation, direct provenance to doc-id/date, and a clean grounding metric
+  (`selected id == adjudicated id`). The reference key is a **per-snippet id, not a
+  date** — one date can carry several snippets. Multi-span evidence → an **array of ids
+  with a small `maxItems`**, never a reopened unbounded string. *Mechanics:* this
+  requires the text source to be presented as a **numbered, dated snippet list**
+  (Layer 1), not a concatenated blob. `evidence` lives on the `hit` (which carries the
+  snippet id); a constructed `value` references its `selected_hit_ids`. The canonical
+  contract is the three tables in §2 (attempt / hit / value), **not** a flat
+  `(subject, date, variable, value, evidence, …)` long table (Review #2); a flat
+  long-format *view* for review/eval is trivial to materialize.
+  *(A schema `maxLength` on a free-text evidence string is also grammar-enforced end to
+  end — tested: gemma3:4b capped at exactly N even when told to over-copy — but a
+  truncated prefix can pass a substring check while dropping decisive context, so
+  reference-by-id is preferred; `maxLength` is only a fallback for sources that cannot
+  provide stable snippet ids.)*
+- **The model classifies; deterministic R applies the temporal rule (Handoff #3).** Do
+  **not** hand the model 20 dated snippets and ask it to "apply the rule relative to the
+  anchor." The engine scopes and orders snippets deterministically (the construction
+  policy — `nearest`/`latest`/`any`), selects the in-scope snippet(s), and the LLM only
+  *classifies the selected sentence*. Recency/window logic stays in named, tested R:
+  weak local models are unreliable at multi-document "which is latest in window"
+  reasoning, and a rule baked into a prompt is neither auditable nor reusable.
+- **Engine wiring (ellmer ↔ Ollama), with verified gotchas.** ellmer drives Ollama via
+  its **OpenAI-compatible `/v1`** endpoint. Consequences, all confirmed the hard way:
+  (1) generation params must go through **`params(temperature=, seed=, max_tokens=)`** —
+  anything in **`api_args$options` is silently dropped** on `/v1`. We lost determinism
+  to this (`temperature=0` ignored → stochastic output; two identical runs diverged),
+  and **`num_ctx` is dropped the same way** (the server ran at its own large default,
+  16384, regardless of the request — verified in the Ollama server log). (2) `max_tokens`
+  is the **output cap** (size it to the largest *legitimate* output, not the context
+  window); `num_ctx` is the **window** (input+output share it, a memory cost) and is
+  **not** settable via `api_args` on `/v1` — use a Modelfile / `OLLAMA_CONTEXT_LENGTH`.
+  (3) ellmer strips the `:latest` tag — pass `gemma4`, not `gemma4:latest`.
+  **Rule: verify any such lever actually took effect** — run twice and diff, or read the
+  server log — because the abstraction layer drops params silently depending on the
+  endpoint.
 - **Missing values.** `not_stated` (an enum sentinel) is a *generation-time
   device* giving a weak model a legal "I don't know" token so the grammar does not
   force a real category; it collapses to `NA` in the output. `required` (structural
@@ -291,38 +341,55 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 | Engine = **ellmer** (ratified R#1); raw Ollama = escape hatch | `type_from_schema()` keeps specs JSON-Schema *data* while ellmer supplies providers / structured-output / conversion / parallelism | Our own provider layer; raw Ollama as a co-equal engine |
 | Build app first, extract library later | Don't guess abstractions; we have prior art + ≥2 fields | Premature packaging |
 | Focused successor, not gptr rewrite | The JSON-repair/validation engine is hard-won | From-scratch rewrite loses it |
-| Per-variable evidence (nested), substring-verified | Review needs the quote behind *each* value; verification kills hallucinated quotes | Shared/flat evidence; trusting model quotes |
+| Evidence by reference: `evidence_id` dynamic enum, not copied text (Handoff #3) | Exact-by-construction, bounded output, clean grounding metric; per-snippet id handles multiple snippets per date | Copied quotes (fabrication/overflow); offsets (weak models can't count); date as key (ambiguous) |
 | Three contracts: attempt / hit / value (R#1) | Failures, no-hit, conflicts, lineage become representable; build hits + value + a minimal attempt record first | One overloaded long table with nullable junk |
 | Observed-task specs vs plain-R derivation (R#1, tightened R#2) | Don't run extraction on a subtraction; derived = plain R with **no spec/registry entry at all** (not "two spec shapes" — only observed tasks get a spec) | One spec shape; a `rule:` interpreter (reinvents R); even a doc-only registry entry (a second spec system) |
 | Named construction-policy registry, not "5 reducers" (R#1) | D0840 needs reconcile / rank_select / count-distinct; closed tested set, not a DSL | Fixed 5-reducer list (too small); `aggregate(fn)` hiding arbitrary code |
 | Fail closed, never auto-repair (R#1) | Repair can invent the audited field; missing is visible, synthesized is not | Auto-repairing partial clinical objects |
 | Candidate recall measured separately (R#1) | An accurate model score can hide systematic retrieval false-negatives | Extraction accuracy as the only metric |
+| Reject thinking models; vet grammar enforcement per model (Phase 0) | Thinking models' reasoning escapes the grammar (gemma4 ~4/12 prose escapes); valid JSON behind a prompt ≠ enforcement | Trusting any model that "returns JSON"; gemma4 / gpt-oss as default |
+| Model classifies; deterministic R applies the temporal rule (Handoff #3) | Weak models unreliable at multi-doc recency; prompt-encoded rules aren't auditable/reusable | LLM applies anchor/window reasoning over many snippets |
+| Engine params via `params()`, not `api_args$options` on `/v1` (Phase 0) | `temperature` **and** `num_ctx` are silently dropped via `api_args` on Ollama's OpenAI `/v1` path | Trusting a lever without verifying it took effect (run twice / read server log) |
 
 ---
 
 ## 7. Open questions
 
 Resolved by Review #1: hit schema (→ three contracts), engine (→ ellmer),
-anchor/window expression (→ bounded resolver registry). Remaining:
+anchor/window expression (→ bounded resolver registry). Resolved by Handoff #3:
+evidence shape (→ `evidence_id` reference); array-valued evidence (→ array of snippet
+ids with `maxItems`); who applies the temporal rule (→ deterministic R, not the LLM).
+Remaining:
 
 - **Where specs live:** R list (code) vs external YAML/CSV (clinician-editable).
   Specs are JSON-Schema-shaped *data* either way; D0740's most-refined artifacts
   were CSV tables — leans toward data; decide when a real catalogue is built.
 - **Eval gold mapping:** in the spec vs a separate eval config (lean: separate).
-- **Array-valued variables:** evidence per item vs per list.
-- **Call granularity:** one call per *extraction task per subject/timepoint*
-  (renamed from "per variable", which was ambiguous); document-level vs bundled is
-  an empirical Phase-0 comparison, not an axiom.
+- **Snippet construction:** re-derive snippets from source docs (corpustools KWIC, one
+  per match with doc-id + date) vs split an existing concatenated blob — the real
+  Layer-1 input wants the former; a blob-split is only a quick prototype.
+- **Bundling:** document-level vs bundled calls is an empirical comparison, not an
+  axiom (the granularity itself is decided: one extraction task per subject/timepoint).
 - **Name.**
 
 ---
 
 ## 8. Phased build plan
 
-- **Phase 0 — spike (do this first), two steps** (revised per Review #1):
-  1. **Contract smoke test** — 12–20 *synthetic* French fixtures (current / former
-     / never / not-stated / negation / contradiction / truncated). Verify the
-     ellmer→Ollama path, schema enforcement, missingness, evidence-substring check,
+- **Phase 0 — spike (do this first), two steps** (revised per Review #1).
+  **Status (2026-06-20): step 1 built and run** (`scripts/phase0_smoke_test.R`) on the
+  real `tabac` pool. Validated: the ellmer→Ollama `/v1` path, `type_from_schema()` as
+  the spec-as-data mechanism, schema enforcement, deterministic runs (after the
+  `params()` fix), minimal attempt log, and failure capture (a real `premature EOF`
+  fail-closed, a real server crash). Model chosen: **`gemma3:4b`** (grammar-reliable);
+  `gemma4`/`gpt-oss:20b` rejected (thinking models, see §5). Outstanding in step 1:
+  switch evidence to the `evidence_id` enum, which needs the input restructured into a
+  **numbered, dated snippet list**; and add the **synthetic fixtures** below for the
+  `not_stated`/negation path (the real pool is pre-filtered and under-exercises it).
+  1. **Contract smoke test** — the harness above, plus 12–20 *synthetic* French
+     fixtures (current / former / never / not-stated / negation / contradiction /
+     truncated) for the negative-control cases the real pool lacks. Verify the path,
+     schema enforcement, missingness, evidence grounding (`selected id == expected id`),
      failure capture. *No gold needed — validates the mechanism.*
   2. **Accuracy set** — a *frozen, independently-adjudicated* stratified `tabac`
      set. The pool (`tabac_eval_pool_1000.rds`, copied to `Datasets/`) is **confirmed
@@ -414,3 +481,11 @@ enum) but **cannot** guarantee the value is *correct* — among the legal surviv
 the model's own (possibly wrong) preference still chooses. You give the server a
 schema (the rulebook); the server is the bouncer; your client code never sees a
 masked token.
+
+**Two caveats this design leans on.** (1) The mask bounds *structure*, not *length* or
+*truth*: an unbounded string field can still grow without limit (why evidence is a
+bounded `evidence_id` reference, not free text — §5). (2) The bouncer only works if the
+model's tokens actually pass through it. A **reasoning/"thinking" model** emits a
+free-text reasoning stream that is *not* under the grammar and leaks as prose, breaking
+the JSON — so grammar enforcement must be **vetted per model**
+(`scripts/check_grammar_enforcement.R`), and thinking models are rejected (§5).
