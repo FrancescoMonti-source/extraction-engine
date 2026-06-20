@@ -844,3 +844,24 @@ twice, diff) before trusting any eval number — provider-abstraction layers can
 params silently depending on which endpoint they hit.
 
 **Files changed:** `scripts/phase0_smoke_test.R`, `HANDOFF.md`.
+
+---
+
+## Deterministic results so far — Claude (2026-06-20)
+
+All with `temperature=0, seed=20260619`, same 12 rows, evidence = exact substring.
+Verified each model with two byte-identical runs. (gpt-oss:20b still pending a post-fix
+re-run.) Default model switched to **`gemma4`** (note: ellmer strips `:latest`, so the
+id is `gemma4`, not `gemma4:latest`).
+
+| model | call ok | evidence exact (of decided) | not_stated reached | failure type | latency med |
+|---|---|---|---|---|---|
+| `gemma3:4b` | 11/12 | 91% | no | 1× truncation (premature EOF) | ~1.0s |
+| `gemma4`    | 10/12 | **100%** | **yes (1)** | 2× truncation (premature EOF) | ~6.7s |
+| `gpt-oss:20b` | *void (pre-fix)* | — | — | 2× native crash `0xc0000409` | ~11s |
+
+Reading: `gemma4` has the best evidence fidelity and can abstain, but truncates on 2
+rows and is ~7× slower than `gemma3:4b`. All non-gpt-oss failures are clean
+fail-closed truncations, not crashes — likely a `max_tokens`/`num_predict` cap cutting
+a long verbatim quote (row 287 truncates on every model). Candidate follow-up: raise
+`params(max_tokens=)` and re-measure.

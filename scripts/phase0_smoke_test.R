@@ -17,7 +17,8 @@
 # outputs/ (gitignored) — never to the console.
 #
 # Run:  Rscript scripts/phase0_smoke_test.R
-# Env overrides: SMOKE_MODELS="gemma3:4b,gpt-oss:20b"  SMOKE_N=12  DATASETS_DIR=...
+# Env overrides: SMOKE_MODELS="gemma4,gpt-oss:20b"  SMOKE_N=12  DATASETS_DIR=...
+# NOTE: ellmer strips the :latest tag, so pass "gemma4"/"mistral", not "gemma4:latest".
 # =============================================================================
 
 suppressWarnings(suppressMessages({
@@ -29,7 +30,7 @@ suppressWarnings(suppressMessages({
 # ---- config -----------------------------------------------------------------
 DATASETS       <- Sys.getenv("DATASETS_DIR", "C:/Users/franc/Documents/Datasets")
 POOL           <- file.path(DATASETS, "tabac_eval_pool_1000.rds")
-MODELS         <- strsplit(Sys.getenv("SMOKE_MODELS", "gemma3:4b"), ",")[[1]]
+MODELS         <- strsplit(Sys.getenv("SMOKE_MODELS", "gemma4"), ",")[[1]]  # ellmer strips :latest -> use "gemma4" not "gemma4:latest"
 N              <- as.integer(Sys.getenv("SMOKE_N", "12"))
 NUM_CTX        <- as.integer(Sys.getenv("SMOKE_NUM_CTX", "8192"))
 SEED           <- 20260619L
@@ -147,8 +148,10 @@ rows     <- list()   # full per-row detail  -> outputs/ only (contains PHI)
 attempts <- list()   # minimal attempt log  -> outputs/
 
 for (model in MODELS) {
-  chat <- tryCatch(make_chat(model), error = function(e) NULL)
-  if (is.null(chat)) { cat(sprintf("[%s] could not init chat - skipped\n", model)); next }
+  chat <- tryCatch(make_chat(model),
+                   error = function(e) { cat(sprintf("[%s] could not init chat: %s\n",
+                                                     model, conditionMessage(e))); NULL })
+  if (is.null(chat)) next
 
   for (i in seq_len(nrow(samp))) {
     r   <- samp[i, ]
@@ -178,6 +181,10 @@ for (model in MODELS) {
   }
 }
 
+if (length(rows) == 0L) {
+  cat("\nNo model produced any rows (all chats failed to init?). Nothing to write.\n")
+  quit(status = 1)
+}
 res_df <- do.call(rbind, rows)
 att_df <- do.call(rbind, attempts)
 stamp  <- format(Sys.time(), "%Y%m%d_%H%M%S")
