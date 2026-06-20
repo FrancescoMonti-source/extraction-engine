@@ -240,17 +240,16 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   truth.** It also guarantees a string is *a* string, not a *short* or *honest* one
   (hence the evidence design below). Enforcement is server-side; the client just
   passes the schema.
-- **Vet grammar enforcement per model; reject "thinking" models.** Masking is
-  model-agnostic *in principle*, but reasoning/"thinking" models emit free-text
-  reasoning that is **not** under the schema grammar and escapes to prose. Verified:
-  `gemma4` (a thinking+multimodal model, arch `gemma4`) escaped to prose on ~4/12 bare
-  structured calls; `gpt-oss:20b` (also a thinking model) crashed the server instead.
-  Plain instruction models enforce reliably (`gemma3:4b` 12/12, `gemma3:12b`,
-  `mistral`). **Before adopting any local model, run
-  `scripts/check_grammar_enforcement.R`** — a bare structured call, no system prompt,
-  stochastic sampling; a thinking model reveals itself by escaping. "Returns valid JSON
-  behind a strong prompt" is **not** evidence of enforcement — it can be
-  prompt-following that fails open on weak/long inputs. **Default model: `gemma3:4b`.**
+- **Vet grammar enforcement per model; reject any model that fails the gate.** Masking
+  is model-agnostic *in principle*, but some models (e.g. certain reasoning/"thinking"
+  models) emit a free-text stream that isn't under the schema grammar and escapes to
+  prose. The **durable rule is the gate, not a ban on a model *category***: before
+  adopting any local model, run `scripts/check_grammar_enforcement.R` — a bare structured
+  call, no system prompt, stochastic sampling — and **reject any model that escapes**.
+  "Returns valid JSON behind a strong prompt" is **not** evidence of enforcement; it can
+  be prompt-following that fails open on weak/long inputs. *(Which models were tested,
+  which passed/failed, and the current default are **configuration**, recorded in
+  `HANDOFF.md` — not architecture.)*
 - **Fail closed, do not repair (Review #1).** Grammar kills *syntax* errors, but
   truncation / cancellation / server failure still produce partial objects (a probe
   with `max_tokens=2` gave `premature EOF` even under structured output). So
@@ -281,27 +280,26 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
   truncated prefix can pass a substring check while dropping decisive context, so
   reference-by-id is preferred; `maxLength` is only a fallback for sources that cannot
   provide stable snippet ids.)*
-- **The model classifies; deterministic R applies the temporal rule (Handoff #3).** Do
-  **not** hand the model 20 dated snippets and ask it to "apply the rule relative to the
-  anchor." The engine scopes and orders snippets deterministically (the construction
-  policy — `nearest`/`latest`/`any`), selects the in-scope snippet(s), and the LLM only
-  *classifies the selected sentence*. Recency/window logic stays in named, tested R:
-  weak local models are unreliable at multi-document "which is latest in window"
-  reasoning, and a rule baked into a prompt is neither auditable nor reusable.
-- **Engine wiring (ellmer ↔ Ollama), with verified gotchas.** ellmer drives Ollama via
-  its **OpenAI-compatible `/v1`** endpoint. Consequences, all confirmed the hard way:
-  (1) generation params must go through **`params(temperature=, seed=, max_tokens=)`** —
-  anything in **`api_args$options` is silently dropped** on `/v1`. We lost determinism
-  to this (`temperature=0` ignored → stochastic output; two identical runs diverged),
-  and **`num_ctx` is dropped the same way** (the server ran at its own large default,
-  16384, regardless of the request — verified in the Ollama server log). (2) `max_tokens`
-  is the **output cap** (size it to the largest *legitimate* output, not the context
-  window); `num_ctx` is the **window** (input+output share it, a memory cost) and is
-  **not** settable via `api_args` on `/v1` — use a Modelfile / `OLLAMA_CONTEXT_LENGTH`.
-  (3) ellmer strips the `:latest` tag — pass `gemma4`, not `gemma4:latest`.
-  **Rule: verify any such lever actually took effect** — run twice and diff, or read the
-  server log — because the abstraction layer drops params silently depending on the
-  endpoint.
+- **R scopes and orders; the model selects evidence and classifies — one bundled call
+  (Handoff #3).** R owns anchor resolution, scope filtering, ordering, numbering, and
+  validation. The model receives the **numbered in-scope snippets** in **one bundled
+  call per subject/timepoint** and returns `status + evidence_id` — it *selects which
+  supplied snippet is the evidence*. R does **not** pre-pick "the latest snippet": the
+  latest note can copy-forward stale text, contradict itself, or mix donor/recipient, so
+  the temporal *scoping/ordering* belongs to R while *selecting the decisive snippet*
+  belongs to the model. **Deterministic single-snippet preselection is a policy option,
+  not a universal rule**; call granularity (bundled vs per-snippet-then-collapse) is
+  decided **empirically** from the adjudicated set. Per-snippet classification + collapse
+  is an *escalation path*, used only if bundled calls measurably mishandle dated
+  contradictions / copy-forward / target-role.
+- **Provider parameters must be verified to take effect (durable rule).** An
+  abstraction layer can silently drop a param depending on the endpoint, so **verify
+  every lever** — run twice and diff, or read the server log — never trust that setting
+  it worked. *(Confirmed in Phase 0: ellmer drives Ollama via its OpenAI `/v1` endpoint,
+  where generation params must go through `params()` and `api_args$options` is ignored —
+  `temperature` and `num_ctx` were both silently dropped; `max_tokens` is the output cap,
+  `num_ctx` the shared window. The specific incidents, values, and fixes live in
+  `HANDOFF.md`.)*
 - **Missing values.** `not_stated` (an enum sentinel) is a *generation-time
   device* giving a weak model a legal "I don't know" token so the grammar does not
   force a real category; it collapses to `NA` in the output. `required` (structural
@@ -347,9 +345,9 @@ Source-specific **logic** = adapter code (write once). Source-specific **config*
 | Named construction-policy registry, not "5 reducers" (R#1) | D0840 needs reconcile / rank_select / count-distinct; closed tested set, not a DSL | Fixed 5-reducer list (too small); `aggregate(fn)` hiding arbitrary code |
 | Fail closed, never auto-repair (R#1) | Repair can invent the audited field; missing is visible, synthesized is not | Auto-repairing partial clinical objects |
 | Candidate recall measured separately (R#1) | An accurate model score can hide systematic retrieval false-negatives | Extraction accuracy as the only metric |
-| Reject thinking models; vet grammar enforcement per model (Phase 0) | Thinking models' reasoning escapes the grammar (gemma4 ~4/12 prose escapes); valid JSON behind a prompt ≠ enforcement | Trusting any model that "returns JSON"; gemma4 / gpt-oss as default |
-| Model classifies; deterministic R applies the temporal rule (Handoff #3) | Weak models unreliable at multi-doc recency; prompt-encoded rules aren't auditable/reusable | LLM applies anchor/window reasoning over many snippets |
-| Engine params via `params()`, not `api_args$options` on `/v1` (Phase 0) | `temperature` **and** `num_ctx` are silently dropped via `api_args` on Ollama's OpenAI `/v1` path | Trusting a lever without verifying it took effect (run twice / read server log) |
+| Reject any model that fails the grammar-enforcement gate (Phase 0) | Valid JSON behind a prompt ≠ enforcement; verify with a bare-call gate. Tested thinking models failed — but the rule is the *gate*, not the category | Banning a model *category*; trusting any model that "returns JSON" |
+| R scopes/orders; model selects `evidence_id` + classifies in one bundled call; granularity is empirical (Handoff #3) | R does temporal scoping/ordering; the model selects among in-scope snippets (the latest isn't always right — copy-forward, contradiction). Preselection is a policy option | R pre-picks one snippet (too rigid); LLM does the temporal reasoning |
+| Verify provider params take effect; model choice is config, not architecture (Phase 0) | Abstraction layers silently drop params by endpoint (ellmer/Ollama `/v1` dropped `temperature` + `num_ctx`) | Trusting a lever unverified; baking a model name into the architecture |
 
 ---
 
@@ -377,15 +375,13 @@ Remaining:
 ## 8. Phased build plan
 
 - **Phase 0 — spike (do this first), two steps** (revised per Review #1).
-  **Status (2026-06-20): step 1 built and run** (`scripts/phase0_smoke_test.R`) on the
-  real `tabac` pool. Validated: the ellmer→Ollama `/v1` path, `type_from_schema()` as
-  the spec-as-data mechanism, schema enforcement, deterministic runs (after the
-  `params()` fix), minimal attempt log, and failure capture (a real `premature EOF`
-  fail-closed, a real server crash). Model chosen: **`gemma3:4b`** (grammar-reliable);
-  `gemma4`/`gpt-oss:20b` rejected (thinking models, see §5). Outstanding in step 1:
-  switch evidence to the `evidence_id` enum, which needs the input restructured into a
-  **numbered, dated snippet list**; and add the **synthetic fixtures** below for the
-  `not_stated`/negation path (the real pool is pre-filtered and under-exercises it).
+  **Status (2026-06-20): step 1 built and run** (`scripts/phase0_smoke_test.R`).
+  Validated the spec-as-data path (`type_from_schema()`), schema enforcement,
+  deterministic runs, a minimal attempt log, and fail-closed failure capture.
+  Outstanding: restructure the input into a **numbered, dated snippet list** and switch
+  evidence to the bundled `status + evidence_id` call; add **synthetic fixtures** for the
+  `not_stated`/negation path. Model choice, exact numbers, and incident history live in
+  `HANDOFF.md` (configuration, not architecture).
   1. **Contract smoke test** — the harness above, plus 12–20 *synthetic* French
      fixtures (current / former / never / not-stated / negation / contradiction /
      truncated) for the negative-control cases the real pool lacks. Verify the path,
@@ -485,7 +481,8 @@ masked token.
 **Two caveats this design leans on.** (1) The mask bounds *structure*, not *length* or
 *truth*: an unbounded string field can still grow without limit (why evidence is a
 bounded `evidence_id` reference, not free text — §5). (2) The bouncer only works if the
-model's tokens actually pass through it. A **reasoning/"thinking" model** emits a
-free-text reasoning stream that is *not* under the grammar and leaks as prose, breaking
-the JSON — so grammar enforcement must be **vetted per model**
-(`scripts/check_grammar_enforcement.R`), and thinking models are rejected (§5).
+model's tokens actually pass through it. Some models (e.g. certain reasoning/"thinking"
+models) emit a side stream that is *not* under the grammar and can leak as prose,
+breaking the JSON — so grammar enforcement must be **vetted per model**
+(`scripts/check_grammar_enforcement.R`): reject any model that escapes, whatever its
+category (§5).
