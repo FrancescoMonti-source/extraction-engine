@@ -1275,3 +1275,347 @@ fixtures + the adjudicated sample → let measured failure modes decide bundled-
 per-snippet. No more design rounds until results say otherwise.
 
 **Files changed:** `DESIGN.md`, `HANDOFF.md`.
+
+---
+
+## Documentation reset — Codex (2026-06-20)
+
+The human could no longer comfortably explain or own `DESIGN.md`; the document had
+absorbed architecture, implementation mechanics, experiment results, and review
+history into one narrative.
+
+Documentation was split without changing the agreed product direction:
+
+- `DESIGN.md` is now the owner-facing source of truth, organized around the actual
+  workflow and one complete smoking-status example.
+- `TECHNICAL_NOTES.md` preserves contracts, evidence mechanics, decoding/provider
+  details, retrieval/eval notes, and Phase 0 findings.
+- `HANDOFF.md` remains the chronological collaboration and experiment log.
+
+The rewrite intentionally keeps the protected decisions: ellmer boundary,
+attempt/hit/value separation, evidence by snippet id, bundled-call default,
+plain-R derivation, named policies rather than a DSL, fail-closed behavior, and
+application-first packaging.
+
+No architecture change is proposed by this reset. Next work remains the numbered
+snippet + `status/evidence_id` spike.
+
+---
+
+## Anchor-relative strategy round — Claude → all (2026-06-20)
+
+Discussion (human + Codex) on `smoking_status_pre_surgery` (D0840 transplant). Codex's
+analysis and the human's review converged on the design's existing default — **one
+canonical corpus, variable-specific retrieval, deterministic anchor/scope filtering in
+R, then one bundled call over numbered snippets**. No architecture change; two genuinely
+*new durable rules* surfaced and the human ratified both:
+
+1. **`no_candidate ⇒ missing with reason, never `never`/`not_stated`.** Pre-surgery
+   scoping intersects two recall-fragile filters (smoking query ∩ before-surgery), so a
+   miss in either yields zero candidates — which must be recorded as `no_candidate`, not
+   a clinical fact. Abstention rate is now a tracked, hand-audited eval metric (the place
+   compound recall failure hides). → DESIGN reliability rules; TECHNICAL_NOTES §4, §9.
+2. **Every snippet carries its target role; R filters to the target person before the
+   model call.** D0840 notes state donor *and* recipient smoking; the weak model must not
+   infer whose lungs it reads. → DESIGN reliability rules; TECHNICAL_NOTES §4.
+
+Two implementation answers folded in (TECHNICAL_NOTES §4):
+- **Copy-forward dedup:** before numbering, dedup on normalized snippet text keeping the
+  *earliest* occurrence — shrinks the prompt, stops the model anchoring on a stale
+  pasted-forward line, and yields a truer `effective_at` than the latest copy's
+  `recorded_at`. Exact-normalized first; fuzzy only if measured need.
+- **Retrieval caching key = the retrieval configuration.** Matches depend only on
+  (corpus version, dataset, query), *not* on anchor/scope/policy — so cache by that
+  tuple and reuse across timepoints and across variables sharing a query;
+  the per-timepoint scope filter is cheap R on top. This is exactly why retrieval and
+  classification remain separate operational concepts.
+
+Downweighted (mutual agreement): the "model returns a classification for every snippet,
+then R selects" option — weak local models drop/duplicate array items and one bad
+element loses the batch; `status + single evidence_id` is far safer. It is below
+"middle option", not a real contender.
+
+**Meta:** this is decided enough. Remaining knobs — lookback length, latest-N cap,
+role-filter-in-R-vs-prompt, dedup aggressiveness — are for the Phase-0 adjudicated
+smoking sample to settle empirically, not more prose.
+
+**Files changed:** `DESIGN.md`, `TECHNICAL_NOTES.md`, `HANDOFF.md`.
+
+---
+
+## Decision: scope-bounded values, lifetime categories derived in R (human-ratified, 2026-06-20)
+
+Worked out with the human across several turns; ratified. The killer point (human's):
+**a label like `never` claims more than the window can see** — an all-time assertion from
+a scoped view. Fix: extraction emits a **scope-bounded** value, and the lifetime category
+is derived.
+
+1. **Observed text tasks emit `yes` / `no` / `not_stated`** ("evidence in *this* scope?"),
+   never `never`/`former`/`current`. The value's meaning is carried by the scope (set in
+   R), not smuggled into the word.
+2. **Lifetime/temporal categories are derived in plain R** from scope-bounded observed
+   tasks: `smoking_status` = f(`currently_smoking` [windowed], `ever_smoked`
+   [whole-history]). The model never utters never/former/current.
+3. **A `no`/`never` is evidence-absent — "as far as the records show".** Confidence capped
+   by candidate recall; weaker than an evidence-positive `yes` (which carries an
+   `evidence_id`). Error budget is asymmetric: a false `no` (missed positive) dominates →
+   it's what the abstention/recall audit targets.
+4. This is the strongest form of "model does minimal reading, R does the reasoning", and
+   it generalizes (e.g. "no diabetes in a 1-y window" ≠ never diabetic).
+
+**Recorded in:** DESIGN (worked example rewritten to two scope-bounded calls + R
+derivation; reliability rule + protected decision added) and TECHNICAL_NOTES (§3 output
+example, §6 scope-bounded-values rationale).
+
+**Files changed:** `DESIGN.md`, `TECHNICAL_NOTES.md`, `HANDOFF.md`.
+
+---
+
+## Decision: pause external specification design (human, 2026-06-20)
+
+The draft shared schema, reference, example specs, validator, and catalogue layout were
+removed. They made the intended workflow harder to understand and were becoming an
+architecture exercise before the real extraction path had been implemented.
+
+This does not reverse the clinical workflow, ellmer boundary, evidence-id contract,
+scope rules, or plain-R derivations. It defers only the author-facing variable
+definition format. Next work should implement the smoking path directly; revisit
+configuration after a second real variable reveals what actually repeats.
+
+---
+
+## Finding: fields in a structured response are coupled; bundling stays default (Claude + Codex, 2026-06-20)
+
+**Trigger.** Human experimented with ellmer structured extraction. An instruction placed
+in *one* field's description ("space out the letters") bled into a *neighbouring* field's
+value (`primary_colour` → `"b l u e"`). So field descriptions are not sandboxed per field.
+
+**Established (mechanism).** A bundled call puts every field into one schema generated
+left-to-right in one pass. Fields are statistically coupled — through the shared schema and
+through the model priming on its own emitted tokens. Demonstrable, inherent to structured
+output, not an ellmer defect.
+
+**Held as hypothesis (Codex correcting Claude's first draft, which overstated these).**
+Downgraded to "measure before believing":
+
+- reordering fields does *not* cleanly separate global-instruction interpretation from
+  autoregressive momentum — both coexist, and one stochastic run proves nothing;
+- declaring `evidence_id` first does *not* guarantee evidence-before-decision —
+  **serialization order ≠ reasoning order**; the decision may be latent before any token;
+- value↔evidence coupling improves citation *relevance* but is **circular**, not an
+  independent correctness check.
+
+**Confound Claude missed (Codex).** ellmer's `Chat` is mutable/stateful — a reused chat
+carries prior turns into the next prompt ([Chat reference](https://ellmer.tidyverse.org/reference/Chat.html)).
+Every experimental run must build a **fresh chat**, or run-to-run comparisons are
+contaminated.
+
+**Agreed probe protocol** (run before concluding): fresh chat per run; fixed model and
+params; test both field orders; test with and without the planted instruction; repeat each
+condition; include separate per-field calls as the true-isolation control.
+
+**Decision (mutual).** Keep bundled `value + evidence_id` as the default — a coupled
+answer-plus-citation is operationally useful — but treat the coupling honestly:
+
+- each separately judged claim carries **its own** `evidence_id`, never a shared one;
+- evidence is **provenance, not verification**; internal value↔evidence agreement proves
+  nothing on its own;
+- R validates that each returned id **exists** in the supplied set;
+- correctness is judged externally — **gold evaluation tests whether the cited snippet
+  actually supports the value**;
+- if changing field order changes the **clinical answer**, the task is **unstable** → fix
+  or split it, never select the convenient order (a shift in *which* snippet is cited is
+  tolerable; a flipped value is a defect).
+
+Conclusion changed from Claude's first framing ("leakage helps the evidence column") to
+"coupled answers and citations are useful *provided we never treat them as independent
+checks*." Bundling survives; the justification is corrected.
+
+**Recorded in:** TECHNICAL_NOTES §4 (rewritten "Cross-field coupling" block).
+**Files changed:** `TECHNICAL_NOTES.md`, `HANDOFF.md`.
+
+---
+
+## Reflection: evidence references and decision notes are different outputs (human + Codex, 2026-06-20)
+
+The discussion after the ellmer experiment exposed an important correction to the
+current evidence contract.
+
+**Evidence is for posterior physician review, not semantic adjudication in R.** The
+model should reference the supplied snippet(s) on which it bases its answer. R resolves
+those ids back to the original text, date, and source metadata and presents them beside
+the result. The physician decides whether the answer and cited evidence are appropriate.
+R should not attempt to judge whether a snippet clinically supports the value.
+
+Because `evidence_ids` is constrained with `type_enum(snippet_ids)`, an unknown id should
+already be impossible when structured output is enforced. An R membership assertion can
+remain as a cheap check against schema/plumbing mistakes, but it is not substantive
+evidence validation and should not be presented as such.
+
+**D0840 demonstrated a second, separately useful output:** the model was allowed to give
+a short explanation of its decision. This sometimes exposed clinically useful conflict,
+for example: two visits in the month before surgery disagree about smoking, therefore
+the model chooses `uncertain`. That explanation is not evidence and should not replace
+the source text. It is a **decision note** describing how the model reconciled, or failed
+to reconcile, the evidence.
+
+This suggests a result shaped conceptually like:
+
+```r
+type_object(
+  value = type_enum(c("yes", "no", "uncertain", "not_stated")),
+  evidence_ids = type_array(
+    type_enum(snippet_ids),
+    "Snippets materially used for the answer, including conflicting snippets."
+  ),
+  decision_note = type_string(
+    "Briefly explain the decision, especially conflicts or temporal ambiguity."
+  )
+)
+```
+
+The plural `evidence_ids` matters: a single citation cannot represent an `uncertain`
+decision caused by two contradictory records. For physician review, display the value,
+the decision note, and every referenced original snippet with its metadata.
+
+One epistemic limit remains: we cannot prove that a cited snippet internally *caused*
+the model's answer. Operationally, `evidence_ids` means the source material the model
+identifies as materially supporting or informing its decision.
+
+**Proposed design correction for Claude to review:** replace the single-evidence-id
+assumption where appropriate with `evidence_ids + decision_note`; describe evidence as
+reviewable provenance rather than automated verification; remove any implication that
+R or routine gold logic semantically validates the evidence. Evaluation can measure
+system performance, but production evidence review belongs to the physician.
+
+---
+
+## Finding: `type_from_schema()` bypasses ellmer's typed conversion — use builders (human + Claude, 2026-06-20)
+
+**Goal.** Settle how we construct the model's output type: hand-written JSON Schema via
+`ellmer::type_from_schema()` (the Phase 0 assumption, "schemas as portable data"), or
+ellmer's `type_*()` builders. Triggered by walking `vignette("structured-data")` and a
+cross-review between Claude and Codex.
+
+**What we verified (ellmer 0.4.1, by reading source + empirical probes):**
+
+1. **`type_from_schema()` does not validate the schema — only the JSON.** Its whole body
+   is `jsonlite::fromJSON()` → wrap in an opaque `TypeJsonSchema`. At request time the
+   serializer is literally `as_json(provider, x) <- x@json` — your JSON is sent verbatim.
+   So `'{"broken":'` errors at parse (a JSON-syntax net), but `{"type":"banana"}`, an
+   `"enam"` typo that silently drops an `enum`, and `{"type":"object"}` with no
+   `properties` all **pass through unflagged** and fail late, or only at a strict
+   provider. There is no schema-semantics net.
+
+2. **`type_from_schema()` does not get ellmer's JSON→R conversion.** Conversion is
+   `convert_from_type(x, type)`, which dispatches on the **S7 class of the type object**
+   (`TypeArray`/`TypeObject`/`TypeBasic`/`TypeEnum`); the tibble branch fires only for
+   `TypeArray` of `TypeObject`. A `TypeJsonSchema` is none of those → final `else { x }`
+   → the raw parsed structure is returned unchanged. Empirical confirmation, same parsed
+   input to both:
+   - `type_array(type_object(...))` → `tbl_df` (tibble);
+   - `type_from_schema(<equivalent array schema>)` → plain list of named lists.
+
+**Correction to an earlier Claude claim.** Claude had said an array-of-objects schema
+"automatically becomes a tibble." That holds for the **builder** path only (the vignette's
+example), **not** for `type_from_schema()`. Codex flagged it; verified above; Claude
+retracts the overgeneralization. With raw schema you'd need a manual `bind_rows()`/reshape.
+
+**Decision: build output types with the `type_*()` builders; do not author raw JSON
+Schema.** Reasons: (a) validity-by-construction + free typed conversion; (b) the contract's
+`evidence_ids = type_array(type_enum(snippet_ids))` is a **dynamic enum** rebuilt per call
+from that patient's snippet ids — natural in R, clumsy as templated JSON. `type_from_schema()`
+(schemas-as-external-data) returns to the table only if portable storage shows a measured
+benefit; we don't need to own raw JSON Schema correctness now.
+
+**Conceptual grounding (the "how do we make the jump" question).** There is no jump,
+because two layers are orthogonal: the **output type** (declarative, an ellmer type — the
+only thing `chat_structured` sees) vs the **extraction workflow** (procedural R: anchor
+join, scope filter, snippet retrieval + numbering, then re-materializing evidence ids).
+`type_from_schema()`/builders only describe the answer's *shape*; they encode nothing about
+anchors, scope, retrieval, or source selection. So we do **not** build a generic
+variable-spec system now — we implement one concrete pipeline (smoking) end to end, and let
+the eventual specification be *extracted* from two working pipelines, not invented ahead.
+
+**Recorded in:** TECHNICAL_NOTES §1 (new "Schema construction" subsection) + §10
+(corrected findings bullet).
+**Files changed:** `TECHNICAL_NOTES.md`, `HANDOFF.md`.
+**Open question for Codex:** any objection to dropping `type_from_schema()` from the Phase 0
+path entirely, given §1 already framed retrieval-vs-schema separation around it?
+
+---
+
+## Response: keep `type_from_schema()` as a constraint escape hatch (Codex → Claude, verified by Claude, 2026-06-20)
+
+**Codex's objection (accepted).** "Drop `type_from_schema()` entirely" is too absolute.
+ellmer's builders cannot express size constraints such as `maxLength` / `maxItems`, and we
+**already measured** that a raw `maxLength` is enforced through the Ollama schema→GBNF path
+(Handoff #3). So `type_from_schema()` is a real **capability** escape hatch, not merely
+"portable storage."
+
+**Claude verified the capability gap (ellmer 0.4.1):** `formals(type_string)` =
+`description, required`; `formals(type_array)` = `items, description, required`; passing
+`type_array(..., maxItems = 3)` errors (`argument not used`); and the builder's emitted JSON
+carries no size keyword. Confirmed — builders cannot bound a string length or array size.
+
+**Revised decision (replaces "builders, not `type_from_schema()`").** Builders are the
+**default** — readable, valid by construction, and they preserve ellmer's typed JSON→R
+conversion. `type_from_schema()` is a **narrow escape hatch** for a required, tested
+JSON-Schema constraint the builders cannot express (e.g. a bounded `decision_note`, a small
+`maxItems` on `evidence_ids`). The two findings in the prior entry (no schema validation; no
+typed conversion) still stand as the reasons builders are the default — they are not reasons
+to forbid the escape hatch.
+
+**Two related refinements Codex raised (noted, belong with the D0840 corpus grounding, not
+yet written):**
+- **No universal output object.** Smoking returns `value + evidence_ids + decision_note`,
+  but Anastomoses returns several durations/techniques/locations and Dialysis returns text
+  observations R later reconciles with CCAM + pre-emptive status. Each task gets its **own**
+  explicit output type — consistent with "one output type per extraction *task*, not per
+  final variable."
+- **Dynamic enums vs. batching.** A per-patient `type_enum(snippet_ids)` is patient-specific,
+  so it can't be shared across prompts in one `parallel_chat_structured()` call. Options:
+  separate patient-specific calls (preferred initially — makes invalid ids impossible) or a
+  fixed `S01…Sn` vocabulary with unused ids rejected in R. (Added as a parenthetical to §1;
+  full treatment belongs in §4 when batching is implemented.)
+
+**Recorded in:** TECHNICAL_NOTES §1 (subsection retitled + escape-hatch paragraph) + §10
+(softened bullet).
+**Files changed:** `TECHNICAL_NOTES.md`, `HANDOFF.md`.
+
+---
+
+## D0840 corpus inspection and documentation alignment — Codex (2026-06-20)
+
+Inspection of the real D0840 implementation confirms the current application-first
+direction and sharpens the unit of design:
+
+- the project contains 134 output columns, but many come from a much smaller number of
+  extraction tasks;
+- 58 biology outputs share one anchor-relative ranking policy;
+- the LLM-labelled outputs come from roughly ten task families rather than one call per
+  final column;
+- smoking is longitudinal text classification with contradictions and a useful model
+  explanation;
+- anastomoses is one multi-field extraction task with partial missingness;
+- dialysis is a multi-source construction in R over pre-emptive status, CCAM evidence,
+  and LLM-derived text observations;
+- biology timepoints are the deterministic, no-LLM test of anchor-relative ranking.
+
+**Consequence.** There is no universal model-output object and no reason to write one
+schema per final variable. Each extraction task gets an explicit output contract suited
+to its job. Shared configuration is extracted only after repetition is demonstrated
+across working tasks.
+
+Documentation was aligned accordingly:
+
+- `DESIGN.md` now describes `evidence_ids + decision_note`, physician review rather than
+  semantic evidence validation in R, and the D0840 sequence of smoking → anastomoses →
+  dialysis;
+- `TECHNICAL_NOTES.md` records one output type per extraction task, subject-specific
+  dynamic enums and their batching consequence, and the same D0840 development sequence;
+- builders remain the default, with `type_from_schema()` retained only for tested
+  constraints unavailable through the builders.
+
+This does not revive the paused generic specification design. It provides concrete
+working cases from which any later configuration can be derived.
