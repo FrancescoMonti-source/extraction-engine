@@ -915,3 +915,57 @@ by escaping to prose. Provenance matters: `ollama show` the architecture/capabil
 
 **Files changed:** `scripts/check_grammar_enforcement.R` (new), `scripts/phase0_smoke_test.R`
 (default back to gemma3:4b, by human), `HANDOFF.md`.
+
+---
+
+## Handoff #3 — Claude → Codex (2026-06-20): evidence overflow — bound the quote how?
+
+**Problem.** The `evidence` field is an unbounded JSON string. The grammar guarantees
+it's *a* string, not a *short* one, so on some inputs the model generates a very long
+evidence (verbatim over-copy, or — at temp=0 — a degenerate repetition loop), hits
+`max_tokens` mid-string, and fails with `premature EOF`. Not gemma4-specific: the
+**chosen** model `gemma3:4b` also truncates ≥1 row (287) at temp=0. We confirmed it's
+not a too-small cap — failures held at 2 across max_tokens unset/512/1024, and 1024
+only worsened latency. So overflow is a *content* problem, not a budget problem.
+
+**Solution space considered:**
+- **A. `maxLength` on evidence in the schema.** Grammar would force the string to close
+  at N chars → overflow structurally impossible.
+- **B. Prompt discipline** — ask for the *shortest* exact justifying span (soft).
+- **C. Offsets instead of text** — model returns (start,end) and we extract. Tiny
+  output, zero fabrication, but weak local models can't count chars reliably.
+- **D. Two-stage decouple** — classify first (tiny, always succeeds), fetch evidence
+  in a second call; if evidence overflows, keep the status + route to review.
+- **E. Accept fail-closed** — overflow rows go to review.
+- **F. Repetition penalty** (`frequency_penalty`) — targets the loop subtype only.
+
+**Empirical finding (tested today).** `maxLength` **IS grammar-enforced end to end**
+(ellmer `type_from_schema` → Ollama schema→GBNF). Probe: evidence `maxLength:60`,
+gemma3:4b ×8, prompt explicitly told it to "copy as much as possible" → **every call
+returned exactly 60 chars.** The grammar hard-caps the string. (`scripts/_maxlen.R`,
+not committed — synthetic probe.)
+
+**Claude's recommendation:** **A + B.** Put `maxLength ~200–300` on evidence as a hard
+backstop (overflow becomes impossible, no latency blowup), and prompt for the
+*shortest* justifying span so typical evidence sits well under the cap (avoids ugly
+mid-word truncation on normal rows). This pairs with the substring gate: `maxLength`
+bounds length, substring-verification still catches non-verbatim — a truncated 200-char
+*prefix* of a real quote is still an exact substring, so legit evidence passes; a
+paraphrase truncated at 200 still fails and is flagged. C/D/E become unnecessary for the
+common case; D stays as the fallback if a variable genuinely needs long multi-span
+evidence.
+
+**Questions for Codex (please don't rubber-stamp):**
+1. Is `maxLength` + shortest-span prompt the right primary lever, or do you prefer
+   **C (offsets)** / **D (two-stage)** on grounds I'm undervaluing (auditability of a
+   mid-word-truncated quote; multi-span evidence; weak-model counting)?
+2. What N? 200–300 chars? Per-variable, or one engine default?
+3. Does a hard `maxLength` interact badly with the eval/gold plan — e.g. should gold
+   evidence also be bounded, or do we score status only and treat evidence as advisory?
+4. Mid-word truncation: acceptable for a *machine-checked* substring anchor, or do we
+   need a "close on a word/sentence boundary ≤ N" grammar (more complex) instead?
+
+**How to respond.** Append `## Review — Codex → Claude` (Handoff #3) below. Not yet
+implemented in `phase0_smoke_test.R` — holding for the human + Codex to pick A vs C/D.
+
+**Files changed:** `HANDOFF.md`.
