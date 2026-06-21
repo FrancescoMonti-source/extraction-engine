@@ -1619,3 +1619,147 @@ Documentation was aligned accordingly:
 
 This does not revive the paused generic specification design. It provides concrete
 working cases from which any later configuration can be derived.
+
+---
+
+## Decision: smoking task conforms to D0840's contract for evaluability (human-ratified, 2026-06-20)
+
+Two prior rounds had refined the smoking contract (separate `uncertain` vs `not_stated`,
+an explicit lifetime `never`, a 30-day pre-op window, English values). Inspecting the real
+D0840 implementation (`D0840.R` §4.4, lines 782–911) showed our draft had drifted from the
+corpus that supplies our gold labels. Key findings from the source:
+
+- the model enum is `actif / sevre / non_fumeur / indetermine` — **no `never` level**;
+  the prompt explicitly maps "non-fumeur", "jamais fumé", and "absence de tabagisme" all to
+  `non_fumeur` ([D0840.R:864](file:///C:/Users/franc/Desktop/projects/D0840/D0840.R));
+- `indetermine` covers **both** contradictory and insufficient evidence
+  ([D0840.R:867](file:///C:/Users/franc/Desktop/projects/D0840/D0840.R)) — D0840 does not
+  split conflicting from silent;
+- the window is `[anchor − 365 days, anchor + 7 days]`, not 30 days
+  ([D0840.R:787-788](file:///C:/Users/franc/Desktop/projects/D0840/D0840.R)), and includes
+  a post-op week to catch the operative/anaesthesia note;
+- snippet-less candidates are filtered before any call (`no_candidate`, R-side).
+
+**The fork** was: (a) reproduce D0840's contract so Phase 0 can be graded against existing
+gold, or (b) build the refined variable and commit to producing new gold. The human chose
+**(a)** — Phase 0's goal is to validate the *mechanism*, and "good enough" is only
+measurable against labels we already have.
+
+**Decision (applied to DESIGN + TECHNICAL_NOTES):**
+
+- values `actif / sevre / non_fumeur / indetermine`; window `[anchor − 365d, anchor + 7d]`;
+  `no_candidate` stays R-side;
+- variable renamed `smoking_status_pre_op` → **`smoking_status_periop`** (≙ D0840
+  `tabac_statut`), because the real scope is a peri-operative year incl. a post-op week, not
+  a pre-op month;
+- the `uncertain`/`not_stated` split and an explicit lifetime `never` are **deferred
+  refinements**, each gated on new gold that encodes the distinction. The general two-mode
+  engine framework keeps these concepts; only the smoking *instance* coarsens to match gold;
+- fixed a contract bug found in passing: the smoking-silent fixture now requires
+  `indetermine` (was `not_stated`).
+
+**Files changed:** `DESIGN.md`, `TECHNICAL_NOTES.md`, `HANDOFF.md`.
+**Open for Codex:** object to the `smoking_status_periop` rename or to coarsening to D0840's
+four values for Phase 0? Both are reversible if you prefer building (b) with fresh gold.
+
+---
+
+## Correction: D0840 has no adjudicated gold; review is posterior (human + Codex, 2026-06-20)
+
+The preceding entry incorrectly states that D0840 supplies existing gold labels. The
+human clarified that **there is no gold standard anywhere at present** and that results
+will be reviewed by the physician *a posteriori*.
+
+Verified artifacts:
+
+- `gptr/manual-eval/tabac_eval_pool_1000.rds` contains 450 input rows and six input/
+  provenance columns, with no label or adjudication field;
+- D0840 `tabac_gpt` and `test tabac.xlsx` contain model outputs
+  (`tabac_statut`, summaries, raw output, and validity metadata), not physician gold.
+
+Therefore the D0840 enum and peri-operative window are retained for **task fidelity and
+review comparability**, not because they permit accuracy grading against existing truth.
+Posterior physician corrections can be frozen as labels for future regression. Since the
+reviewer sees the suggested value and evidence, agreement on that same run is descriptive
+and model-assisted, not an independent accuracy estimate. A later independent estimate
+requires fresh cases or blinded/independent adjudication.
+
+The absence path is also split correctly:
+
+- no smoking-related retrieval candidate → R records `no_candidate`; no model call;
+- a retrieved but non-informative candidate (e.g. “père fumeur”) → model may return
+  `indetermine`, never `non_fumeur`.
+
+This correction supersedes only the preceding entry's claims about gold and grading; it
+does not change the chosen D0840-compatible vocabulary, window, or
+`smoking_status_periop` name.
+
+---
+
+## Decision: every extraction task declares an absence policy (human + Codex, 2026-06-20)
+
+The smoking discussion exposed a general issue: `no_candidate` is a pipeline fact, not a
+universal clinical negative. The consequence depends on the variable.
+
+Smoking can contain explicit negative documentation (`non_fumeur`), but silence still
+does not imply `non_fumeur`. Diabetes is more revealing: clinicians rarely write “not
+diabetic,” so no retrieved diabetes candidate cannot safely become `diabetes = no`.
+
+Current task definitions therefore answer a fifth question in addition to anchor,
+scope, sources, and construction policy:
+
+> **Absence policy:** what, if anything, may be concluded when no eligible positive
+> evidence is found?
+
+The durable policies are:
+
+- **open world (default):** absence remains missing or
+  `no_documented_evidence`, never a clinical negative;
+- **explicit negative required:** a negative value requires an eligible source that
+  states it;
+- **closed world by construction:** absence may become negative only under a documented
+  rule with adequate source coverage.
+
+The policy may be source-specific: no qualifying code in a complete structured extract
+is not equivalent to no lexical hit in text, which may be a retrieval miss.
+
+Even when a closed-world rule constructs a negative, the underlying `no_candidate` and
+coverage state remain available for audit. This decision is recorded in `DESIGN.md`
+under variable definitions and reliability rules, and in `TECHNICAL_NOTES.md` §5 with
+smoking and diabetes examples.
+
+---
+
+## Parallel round 1 brief: independently reproduce D0840 smoking (human + Codex, 2026-06-20)
+
+Claude and Codex will independently reproduce D0840's smoking task using ellmer before
+reading each other's implementation.
+
+**Reference implementation:** `C:\Users\franc\Desktop\projects\D0840\D0840.R`, §4.4,
+lines 782–911.
+
+**Local input data:** `C:\Users\franc\Documents\Datasets\D0840` (`docs`, `bio`,
+`bio_raw`, `pmsi`). The Windows localized path
+`C:\Users\franc\Documenti\Datasets\D0840` resolves to the same directory.
+
+**Round-one scope:**
+
+- reproduce `tabac_statut` as `smoking_status_periop`;
+- preserve the real `[anchor − 365 days, anchor + 7 days]` document window;
+- preserve the values and meanings
+  `actif / sevre / non_fumeur / indetermine`;
+- add numbered snippets, `evidence_ids`, and `decision_note`;
+- keep `no_candidate` R-side under the task's open-world absence policy;
+- keep clinical data and row-level model outputs local and uncommitted.
+
+The D0840 legacy output is a behavioral-comparison baseline, **not truth**. There is no
+adjudicated gold. Agreement with it measures compatibility, not accuracy; the physician
+will review results a posteriori.
+
+Each implementation lives on its own branch/worktree. Neither model inspects the
+other's code before both declare round one complete. Internal structure is deliberately
+unconstrained: use explicit, readable R and do not build a generic specification system.
+
+After both smoking implementations are compared and reconciled, repeat the independent
+exercise for transplant anastomoses. Decide after that whether a duplicate biology
+implementation still provides useful alignment evidence.

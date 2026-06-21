@@ -83,7 +83,7 @@ required, tested JSON-Schema constraint is unavailable through the builders. Sch
 external/portable data remains a separate, deferred question.
 
 An output type belongs to an **extraction task**, not necessarily to one final cohort
-column. Smoking may return a scope-bounded value, several evidence references, and a
+column. Smoking may return a peri-operative status, several evidence references, and a
 decision note. An anastomosis task may return several related durations, techniques,
 and locations. Dialysis text extraction produces observations that R later reconciles
 with CCAM and pre-emptive status. There is therefore no universal output object; each
@@ -130,12 +130,18 @@ source_record_id
 source_event_id
 recorded_at
 effective_at
-evidence_id
+evidence_ids
 attempt_id
 ```
 
 `recorded_at` and `effective_at` are distinct because a recent note can describe a
 remote historical event.
+
+`evidence_ids` is a **list-column**: the snippet ids supporting *one* hit (a single hit
+may rest on several snippets, e.g. an `uncertain` call citing two conflicting notes).
+This is distinct from `selected_hit_ids` on a value (§ below): `evidence_ids` links a hit
+to its supporting snippets, while `selected_hit_ids` links a constructed value to the
+hits used to build it.
 
 Structured sources such as ICD-10, CCAM, and labs create hits deterministically.
 A bundled text extraction may create one text hit for a subject/timepoint, supported
@@ -169,24 +175,37 @@ The model does not generate an evidence quote. Candidate snippets are assigned s
 ids and supplied with dates and source identifiers:
 
 ```text
-S01 | 2024-01-10 | document 104 | Tabagisme actif à dix cigarettes par jour.
-S02 | 2025-03-04 | document 287 | Patient sevré du tabac depuis six mois.
+S01 | 2025-02-20 | document 104 | Ancien fumeur, sevré depuis 2010.
+S02 | 2025-03-04 | document 287 | Tabac : sevré.
 ```
 
-The output type contains a dynamic enum. The value is **scope-bounded**
-(`yes`/`no`/`uncertain`/`not_stated`), not a lifetime category — see §6:
+For `smoking_status_periop`, these snippets were selected from documents recorded in
+`[anchor − 365 days, anchor + 7 days]` around surgery. The output type contains a dynamic
+evidence enum and a task-specific status enum:
 
 ```json
 {
-  "value": "no",
-  "evidence_ids": ["S02"],
-  "decision_note": "The most recent preoperative statement reports smoking cessation."
+  "smoking_status_periop": "sevre",
+  "evidence_ids": ["S01", "S02"],
+  "decision_note": "Both peri-operative notes describe smoking cessation."
 }
 ```
 
 The allowed evidence values are the supplied snippet ids. Client code resolves each
 id to the complete stored snippet. The decision note is a concise explanation of how
 the model handled the supplied evidence; it is not itself evidence.
+
+The status enum for this task is `actif` / `sevre` / `non_fumeur` / `indetermine`,
+matching D0840's `tabac_statut` so outputs use the same vocabulary as the legacy task.
+D0840 currently has no adjudicated smoking gold.
+`actif` = an in-scope record describes current smoking; `sevre` = ex-smoker or cessation;
+`non_fumeur` transcribes a documented non-smoker label (D0840 deliberately lumps
+"non-fumeur", "jamais fumé", and "absence de tabagisme" here — it is not upgraded to the
+lifetime claim "never smoked"); `indetermine` = the supplied evidence is contradictory or
+insufficient. `no_candidate` is a separate workflow state produced by R before any model
+call and is not part of the enum. Splitting `indetermine` into distinct `uncertain`
+(conflicting) vs `not_stated` (silent) states, or adding a stronger lifetime `never`, are
+deferred refinements that would each require reviewed labels encoding the distinction.
 
 This avoids:
 
@@ -207,8 +226,8 @@ The Phase 0 default is one bundled call per extraction task, subject, and timepo
 1. R resolves the anchor, filters the scope, and **filters to the target role** (e.g.
    recipient, not donor) so the model never has to infer whose record it is reading.
 2. R **deduplicates copy-forward snippets**, then orders and numbers the candidates.
-3. **If no candidates remain, the value is `missing` with reason `no_candidate` — never
-   `never`/`not_stated` — and no model call is made.**
+3. **If no candidates remain, the value is `missing` with reason `no_candidate` —
+   never a clinical status or `not_stated` — and no model call is made.**
 4. Otherwise one model call receives the in-scope snippet list, **with the anchor date
    as a context header** so it can weigh recency relative to the anchor when snippets
    conflict. R remains the gatekeeper for scope and eligibility — the model never
@@ -258,9 +277,14 @@ What is *not* established, and must stay hypothesis until measured:
 
 - that reordering fields cleanly separates "global-instruction interpretation" from
   autoregressive momentum — both can act at once, and a single stochastic run shows little;
-- that declaring `evidence_id` first makes the model choose evidence *before* deciding —
-  **serialization order is not reasoning order**; emitting the id first conditions later
-  tokens, but the decision may already be latent before any token is emitted;
+- that declaring `evidence_ids` first makes the model "choose evidence before deciding" —
+  this is **conceptually backwards**, not merely unproven: the *supporting* ids are defined
+  relative to the value, so you cannot select what justifies an answer you have not yet
+  formed. Evidence selection is posterior to, or co-determined with, the decision, never
+  prior to it. Emitting the ids first only conditions later tokens; **serialization order
+  is not reasoning order**, and the decision may already be latent before any token is
+  emitted. (The reasoning-first pattern that *does* help is CoT — emit a rationale such as
+  `decision_note` before the value — which is distinct from pre-selecting citations.)
 - that value/evidence coupling validates correctness — it likely improves citation
   *relevance*, but value-vs-evidence agreement is **circular**, not an independent check.
 
@@ -317,15 +341,91 @@ A scope can combine temporal and relational constraints:
 - `same_stay`;
 - `same_event OR within [-365d, +7d]`.
 
-**The scope *is* the clinical question — match it to intent.** No evidence in scope is
-`missing`, and that is *correct*, not a bug: `smoking_status_pre_surgery` with an
-`anchor − 365d` window asks "what is known about smoking in the year before surgery?",
-and "nothing" is an honest answer. The lifelong-non-smoker intuition belongs to a
-*different* variable — `ever_smoked` — declared with whole-history scope, where the older
-"non-fumeur" notes are in scope and resolve to `never`. So pick the scope per variable to
-match intent (a window for time-relative status, whole-history for monotone "ever"
-questions); do not try to make one window serve both, and do not map a scoped `missing`
-to a clinical value.
+**The declared source scope bounds which records may answer the question; it does not
+erase history explicitly summarized inside those records.** For
+`smoking_status_periop`, a `[anchor − 365 days, anchor + 7 days]` source scope means only
+documents recorded in the year before surgery through the first post-operative week are
+eligible. An eligible note saying “ex-fumeur, sevré en 2010” supports `sevre` directly:
+the note is an in-scope assessment that contains historical information. We do not combine
+a current-status task with a whole-history `ever_smoked` task to manufacture the status.
+
+The variable dictionary must state at least:
+
+```text
+variable:     smoking_status_periop   (≙ D0840 tabac_statut)
+anchor:       surgery date
+source scope: recorded_at in [anchor - 365 days, anchor + 7 days]
+meaning:      smoking status documented around surgery
+values:       actif / sevre / non_fumeur / indetermine
+absence:      open world
+no candidate: no_candidate (R-side, no model call); never infer non_fumeur
+```
+
+If no eligible candidate exists, record `no_candidate` and make no model call. If
+eligible supplied material is contradictory or does not establish a status, return
+`indetermine` (D0840 folds both cases into this one value). `non_fumeur` requires an
+explicit documented non-smoker statement and is never inferred from silence. Two
+refinements are deliberately deferred until reviewed labels can encode them: splitting
+`indetermine` into distinct `uncertain` (conflicting) vs `not_stated` (silent) states, and
+adding a stronger lifetime `never` (which would require explicit “jamais fumé” evidence). A
+question such as “ever smoked anywhere in the available record” would be a separate
+whole-history variable.
+
+### Two text-extraction modes
+
+The earlier blanket rule—“the model never returns current/former/never; R always derives
+the category”—was too broad. Use one of two modes according to the variable's meaning:
+
+1. **Documented-status transcription.** An eligible clinical record already states the
+   category. The model returns the task's enum directly and cites the record. The source
+   scope filters where that documented assessment may come from; the statement itself
+   may summarize older history. `smoking_status_periop` uses this mode.
+2. **Derived synthesis.** No single documented status answers the question. The engine
+   extracts independently meaningful observations from their appropriate scopes, and R
+   combines them with an explicit rule. This remains appropriate for genuine lifetime
+   reconstruction or cross-source composites.
+
+Neither mode permits inference from silence. The first transcribes a documented
+assessment; the second combines explicit observations.
+
+### Absence policy
+
+`no_candidate` describes retrieval and scoping: no eligible candidate reached the
+extractor. It is not a universal clinical value. Every task must separately declare what
+may be concluded when no positive evidence is found.
+
+Absence policies may differ by source. No qualifying ICD-10 code in a complete,
+well-defined extract can support a stronger conclusion than no lexical text hit, which
+may simply be a retrieval miss. Preserve the source-level reason and coverage state;
+never pool unlike absences into one undocumented negative.
+
+Use three broad policies:
+
+1. **Open world (default).** Absence of documentation is unknown. Keep the analytical
+   value missing or explicitly report `no_documented_evidence`; do not return a clinical
+   negative.
+2. **Explicit negative required.** A negative value is allowed only when an eligible
+   source explicitly states it. Smoking uses this pattern: `non_fumeur` requires a
+   documented non-smoker statement. Silence remains `no_candidate` or `indetermine`,
+   depending on whether any relevant candidate reached the model.
+3. **Closed world by construction.** Absence may become negative only when the task
+   defines sufficient source coverage and a defensible ascertainment rule. The rule and
+   coverage requirements must be versioned and preserved with the result. A retrieval
+   or source-access failure remains missing even for an otherwise closed-world task.
+
+Diabetes illustrates why this is necessary. Clinical notes rarely say “not diabetic.”
+A text or code search with no candidate means only “no diabetes evidence was retrieved,”
+not `diabetes = no`. A diabetes variable may produce:
+
+```text
+yes                     explicit qualifying evidence exists
+no_documented_evidence  required sources were available, but no qualifying evidence exists
+missing                 source coverage was insufficient or retrieval failed
+```
+
+Calling `no_documented_evidence` simply `no` requires a deliberate, documented
+closed-world decision. Even then, retain the underlying candidate and coverage state so
+the analytical negative remains auditable.
 
 Source adapters turn raw records into hits. Construction policies turn scoped hits
 into values. Initial policy families grounded in D0740/D0840 are:
@@ -362,27 +462,11 @@ There is no derived-variable spec, registry entry, or rule interpreter. If linea
 documentation is later needed, it should be generated from or kept next to the R
 code rather than maintained as a second executable description.
 
-**Scope-bounded values → derived lifetime categories.** An extracted value must not
-assert more than its scope shows, so observed text tasks emit `yes` / `no` /
-`not_stated` ("is there evidence in *this* scope?"), never `never` — an all-time claim a
-window cannot support. Clinical categories that span scopes are *derived*:
-
-```r
-smoking_status <- dplyr::case_when(
-  currently_smoking == "yes" ~ "current",   # windowed observed task
-  ever_smoked       == "yes" ~ "former",    # whole-history observed task
-  ever_smoked       == "no"  ~ "never",
-  TRUE                       ~ "not_stated"
-)
-```
-
-Two consequences. (1) A `no` / `never` is **evidence-absent**: "no positive evidence
-found, as far as retrieval reached" — not proof of absence, so its confidence is capped
-by candidate recall and is weaker than an evidence-positive `yes` (which carries an
-`evidence_id`). The error budget is asymmetric — a false `no` (a missed positive) is the
-dominant risk, which is exactly what the abstention/recall audit targets. (2) The model
-does the minimal reading (one yes/no per scope); all temporal and lifetime reasoning
-stays in auditable R.
+Do not introduce derivation merely to split one clinical question across mismatched
+horizons. `smoking_status_periop` is an observed categorical value extracted directly
+from eligible in-scope records. Ordinary R derivation remains appropriate for true
+computed variables such as deltas, change indicators, or composites over independently
+meaningful inputs.
 
 ## 7. Structured decoding and failure handling
 
@@ -437,9 +521,11 @@ Evaluate retrieval separately from extraction:
 - extraction accuracy: given candidates, was the value correct?
 - evidence grounding: did the model select the adjudicated snippet?
 - abstention: how often retrieval/scoping returns `no_candidate`, with a hand-audited
-  sample to confirm true absence rather than a recall miss (a `no_candidate` is never
-  reported as `never`). This is where compound recall failure — a query miss *and* a
-  scope miss — hides, so it is the highest-value thing to audit by hand.
+  sample to distinguish true lack of documented evidence from a recall miss. A
+  `no_candidate` is interpreted only through the task's absence policy and is never
+  silently reported as `non_fumeur` or `diabetes = no`. This is where compound recall
+  failure—a query miss and a scope miss—hides, so it is the highest-value thing to audit
+  by hand.
 - operational reliability: failures, latency, and retries.
 
 Gold is usually absent at first. Review-ready output is still useful:
@@ -448,6 +534,14 @@ Gold is usually absent at first. Review-ready output is still useful:
 2. record agreement or a corrected value;
 3. preserve reviewed rows as gold;
 4. enable evaluation as labels accrue.
+
+That is the current D0840 situation: the available smoking pool contains inputs, and
+`tabac_gpt` / `test tabac.xlsx` contain prior model outputs, not adjudicated truth.
+Posterior physician review creates reviewed labels. Because the reviewer sees the
+suggested answer and evidence, agreement on that same run is descriptive and
+model-assisted; it must not be reported as an independent accuracy estimate. A later
+independent estimate requires fresh cases or adjudication performed without exposing
+the tested model's prediction.
 
 Absolute retrieval recall is generally unknowable without an oracle. Report recall
 on labelled samples, coded silver standards, or relative query comparisons.
@@ -470,15 +564,86 @@ The next experiment is:
 
 1. reconstruct numbered, dated snippets rather than using an opaque concatenated
    blob;
-2. make one bundled `value + evidence_ids + decision_note` call per subject-specific
-   output type;
-3. add synthetic negative and abstention fixtures;
-4. run the frozen adjudicated smoking sample;
-5. compare per-snippet extraction only if bundled errors justify its extra cost.
+2. make one bundled
+   `smoking_status_periop + evidence_ids + decision_note` call per subject-specific
+   output type, using only documents in the declared peri-operative source scope;
+3. add two distinct absence-path fixtures:
+   - no smoking-related retrieval candidate → `no_candidate`, with no model call;
+   - a retrieved but non-informative smoking-related candidate (for example,
+     “père fumeur”) → `indetermine`, never `non_fumeur`;
+4. freeze an unlabelled real smoking sample, run extraction, then export it for
+   posterior physician review and correction;
+5. preserve those reviewed labels for future regression and compare per-snippet
+   extraction only if bundled errors justify its extra cost.
 
-D0840 is the development corpus for what follows. The sequence is deliberately
-heterogeneous: smoking establishes longitudinal text extraction and reviewable
-evidence; transplant anastomoses tests a multi-field task with partial missingness;
-dialysis tests reconciliation of LLM observations with CCAM and pre-emptive status;
-biology timepoints tests deterministic anchor-relative ranking without an LLM. Only
-repetition observed across these working tasks should become shared configuration.
+## 11. D0840 development corpus
+
+### Purpose and inventory
+
+D0840 is a development corpus, not a model-fine-tuning dataset. It is used to develop
+and compare extraction workflows: retrieval, scoping, prompts, output contracts,
+deterministic policies, provenance, review exports, and evaluation.
+
+It does not currently contain adjudicated gold. Existing cached outputs are useful
+baselines and debugging material, not truth labels.
+
+The existing project contains 134 final output columns, but those columns arise from a
+much smaller number of reusable task shapes:
+
+- 58 columns use the same biology timepoint-selection machinery;
+- 31 columns are labelled as LLM-produced in the data dictionary;
+- the implementation contains roughly ten `gpt_column()` task families;
+- several final variables are constructed by combining LLM observations with PMSI or
+  other deterministic sources.
+
+The important unit is therefore the **extraction task**, not the final wide-table
+column. One task may emit several related observations, and one final variable may
+combine several tasks or sources.
+
+### Representative task set
+
+| D0840 task | What it teaches |
+|---|---|
+| Smoking status around surgery (`[anchor − 365d, +7d]`) | Window-bounded source selection, target-role filtering, explicit status categories, contradictions, `evidence_ids`, and a useful `decision_note`. |
+| Transplant anastomoses | One context producing several related durations, techniques, and locations; partial missingness; cross-field coupling. |
+| Dialysis before transplant | Multi-source construction: pre-emptive status, CCAM counts and thresholds, text observations, source precedence, and disagreement review. |
+| Biology timepoints | Deterministic anchor-relative selection with tolerances and ordered tie-breakers; proves the engine is not an LLM-only system. |
+| Delayed graft function | Explicit positive and negative text rules, risk-only mentions, conflicting values, and routing to review. |
+| Surgical antecedents | Whole-history scope, several clinical categories in one task, repeated mentions, exclusions, and multi-item evidence. |
+
+The implementation order is smoking → anastomoses → dialysis → biology. Delayed graft
+function and surgical antecedents then test whether the emerging abstractions survive
+different conflict and scope patterns. Only repetition demonstrated across working
+tasks should become shared configuration or package code.
+
+### Development, validation, and held-out discipline
+
+Split at the **patient or transplant-pair level**, never at the snippet or document
+level. Otherwise records from the same clinical case can leak across sets and make
+performance look better than it is. If a patient has several linked episodes, keep
+those episodes in the same split unless the evaluation question explicitly concerns
+generalisation across episodes.
+
+- **Development set:** visible during implementation. Use it to inspect failures,
+  improve retrieval and prompts, refine output types, and write synthetic regression
+  fixtures. Posterior physician corrections may become frozen regression labels.
+- **Validation set:** frozen while one round of alternatives is compared. Use it to
+  choose models, prompts, bundling strategy, thresholds, and other design options.
+  Repeatedly consulting it eventually turns it into development data; when that
+  happens, freeze a new validation set.
+- **Held-out set:** untouched until the task contract and decision rules are fixed.
+  Use it for the final estimate reported for that version. Do not alter the approach
+  in response to held-out errors without declaring a new development cycle and
+  reserving a new held-out set. For a defensible accuracy estimate, adjudicate these
+  cases without showing the tested model's prediction, or use an independently reviewed
+  set.
+
+Stratify each split where feasible so rare but important cases are represented:
+positive, explicit negative, not stated/no candidate, uncertain or contradictory,
+multi-document, long-context, and known retrieval traps. Synthetic fixtures complement
+these sets but do not replace held-out real cases.
+
+Keep all clinical text, split assignments, adjudications, and row-level model outputs
+local and gitignored. The repository may contain code, synthetic fixtures, aggregate
+metrics, and documented conclusions. Persist split membership and task/prompt/model
+versions locally so later comparisons use the same cases.
