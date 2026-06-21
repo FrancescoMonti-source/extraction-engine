@@ -1,6 +1,7 @@
 # extraction-engine — Design
 
-> Status: Phase 0 is in progress. The name is temporary.
+> Status: active development on D0840. Smoking spikes are complete; anastomoses and
+> biology are next. The name is temporary.
 
 ## What we are building
 
@@ -38,26 +39,32 @@ calls:
 
 For each observed variable:
 
-1. Resolve the patient's anchor date **if the variable is time-relative** — such as the
-   first DMO examination or a transplant date. **Some variables have no anchor:** they
-   cover the whole patient history (e.g. "ever smoked", "any history of cardiac
-   surgery").
-2. Keep records inside the relevant scope — the previous year, the same hospital stay,
-   ±30 days, or **the entire history** when the variable is "ever".
-3. Extract source-backed observations from codes, labs, procedures, or text.
-4. Apply a named R policy to produce the analytical value.
-5. Save the value with links to the observations that support it.
+1. A project adapter creates a task table: who the task concerns, its optional anchor,
+   and any project-specific context. The engine does not know how a transplant,
+   consultation, or study visit was identified.
+2. Resolve the eligible records for all tasks — the previous year, the same hospital
+   stay, ±30 days, or **the entire history** when the variable is "ever".
+3. Retrieve source-backed observations from codes, labs, procedures, or text.
+4. Apply a task-specific extractor or named R policy.
+5. Save the value with native source references and enough coverage information to
+   explain missing results.
 
 Afterward, ordinary project R computes derived columns such as deltas and change
 indicators.
 
 ```text
 records
-  → anchor (optional) and scope
+  → project task table (optional anchor)
+  → scope
   → source observations
   → analytical value
   → ordinary R derivations
 ```
+
+For text, one canonical persisted corpus is built per document collection and reused
+across variables. Each variable computes the union of documents eligible for its tasks,
+temporarily subsets the canonical corpus without mutating it, runs one retrieval query,
+then joins hits back to each task's exact scope.
 
 ## Worked example: smoking status around surgery
 
@@ -77,15 +84,23 @@ absence:      open world — no candidate does not imply non_fumeur
 This is one observed extraction task. We do not combine a current-status task with a
 separate whole-history task.
 
-### 1. R prepares the candidates
+### 1. R retrieves citable evidence
 
-R scopes, deduplicates, numbers the snippets, and keeps their provenance (document,
-event, date, target role):
+The project adapter supplies patient/transplant tasks. R computes the union of eligible
+documents, temporarily subsets the canonical corpus, runs the smoking Lucene query once,
+and joins sentence hits back to each task's exact window.
+
+The citable unit is the hit sentence. Its native reference is stable within the
+canonical corpus; neighbouring sentences provide context but are not independently
+citable unless they are themselves hits:
 
 ```text
-S01 | 2025-02-20 | Ancien fumeur, sevré depuis 2010.
-S02 | 2025-03-04 | Tabac : sevré.
-S03 | 2025-03-04 | Son conjoint est fumeur.
+context:                  Habitus :
+104::42 | 2025-02-20 | Ancien fumeur, sevré depuis 2010.
+context:                  Arrêt confirmé en consultation.
+
+287::7  | 2025-03-04 | Tabac : sevré.
+319::12 | 2025-03-04 | Son conjoint est fumeur.
 ```
 
 An in-scope note may summarize older history. “Sevré depuis 2010” legitimately supports
@@ -93,20 +108,23 @@ An in-scope note may summarize older history. “Sevré depuis 2010” legitimat
 scope. The engine does not need to retrieve records from 2010 to construct another
 variable.
 
+Literal copy-forward sentences are deduplicated within each task using a deterministic
+tie-break, while duplicate source references and dates remain available for audit.
+
 ### 2. One task-specific call
 
 The bundled call returns the requested status, evidence references restricted to the
-supplied ids, and a short decision note:
+supplied native references, and an optional decision note:
 
 ```text
-smoking_status_periop → value: sevre, evidence: [S01, S02],
+smoking_status_periop → value: sevre, evidence: [104::42, 287::7],
                         note: "Both peri-operative notes describe smoking cessation."
 ```
 
-The model cannot return an id outside the supplied set, never copies a quotation, and
-never asserts more than its scope shows. Multiple ids can expose conflicting or
+The model cannot return a reference outside the supplied set, never copies a quotation,
+and never asserts more than its scope shows. Multiple references can expose conflicting or
 longitudinal evidence to the physician. The decision note explains the model's handling
-of that evidence but does not replace it. (S03, about the spouse, is correctly ignored.)
+of that evidence but does not replace it. (The spouse sentence is correctly ignored.)
 
 The states are distinct (matching D0840's `tabac_statut`):
 
@@ -117,20 +135,33 @@ The states are distinct (matching D0840's `tabac_statut`):
   the patient smoked earlier in life — it is not upgraded to a lifetime "never");
 - `indetermine`: relevant in-scope evidence is contradictory or insufficient;
 
-`no_candidate` is not a model value. It is the R-side workflow state used when no
-eligible candidate exists and no model call is made.
+`no_candidate` is not a model value. It is a coverage state used when no eligible
+candidate exists and no model call is made.
 
 Separating `indetermine` into distinct conflicting (`uncertain`) vs silent (`not_stated`)
 states, or adding a stronger lifetime `never`, are deferred refinements that would each
 require reviewed labels that encode the distinction.
 
 R stores the returned status directly, resolves each evidence reference to the original
-snippet, and prepares the review view. The physician—not R—judges whether the evidence
+sentence and document, and prepares the review view. The physician—not R—judges whether the evidence
 and decision are appropriate.
 
-## The three tables
+## The four operational tables
 
-The implementation keeps three concepts separate.
+The current working contract keeps four concepts separate. These are operational views,
+not a claim that every source must share one universal internal row shape.
+
+### Coverage
+
+Which tasks were expected and whether evidence was available:
+
+```text
+task id, subject, anchor/context, eligible document count, candidate count,
+processing state
+```
+
+Coverage includes tasks with no candidates. This distinguishes “nothing retrieved”
+from “not processed” without turning absence into a clinical value.
 
 ### Attempt
 
@@ -142,26 +173,28 @@ model, prompt/schema version, status or error, latency
 
 A failed call still creates an attempt row.
 
-### Hit
-
-What one source reported:
-
-```text
-patient, variable, value, source record, dates, evidence ids
-```
-
-ICD codes, procedures, labs, and text all become hits with the same general shape.
-
 ### Value
 
-What the engine retained for analysis:
+What the extractor returned for a modelled task:
 
 ```text
-patient, variable, timepoint, value, selected hit ids, validity/review state
+task id, variable, value, validity/review state, evidence references,
+decision note
 ```
 
-Keeping these tables separate makes failures, conflicting sources, and provenance
-representable without stuffing everything into one wide or heavily nullable table.
+Invalid or review-required responses are retained for diagnosis but cannot silently
+become cohort values.
+
+### Evidence
+
+One row per cited source reference:
+
+```text
+task id, evidence reference, source record, source date, hit text, surrounding context
+```
+
+Structured sources may later expose additional observation tables where that helps their
+construction policies. They do not need to imitate text retrieval artificially.
 
 ## Variable definitions
 
@@ -177,9 +210,20 @@ answers five questions:
    evidence is found, given the coverage and failure modes of each source?
 
 The exact author-facing representation is deliberately undecided. We will implement
-the smoking workflow directly, then use a second real variable to determine which
-parts deserve configuration. We are not committing yet to JSON files, a shared
+multiple real variables independently, then determine which parts deserve
+configuration. We are not committing yet to JSON files, a shared
 variable-spec schema, or a catalogue layout.
+
+At runtime, the generic engine consumes a task table with stable engine-facing columns
+such as:
+
+```text
+task_id, PATID, anchor_date
+```
+
+`anchor_date` may be missing for whole-history tasks. Project adapters may attach any
+additional metadata needed by the extractor. They own source-specific columns such as
+`DATEACTE`, donor/recipient pairing, visit identifiers, or study timepoints.
 
 One extraction task may produce several related observations. The output contract
 therefore belongs to the task, not necessarily to each final cohort column. D0840's
@@ -210,14 +254,14 @@ events could use derived synthesis.
 
 ## Source adapters and construction policies
 
-Each source adapter converts raw records into hits:
+Each source adapter converts raw records into source-backed observations:
 
 - ICD-10 diagnoses;
 - CCAM procedures;
 - laboratory measurements;
 - LLM-assisted text extraction.
 
-Named R policies then convert eligible hits into values. Initial policies are based
+Named R policies then convert eligible observations into values. Initial policies are based
 on real D0740 and D0840 logic:
 
 - use the only valid observation directly;
@@ -249,9 +293,12 @@ There is no derived-variable spec or interpreted expression language.
   ([`scripts/check_grammar_enforcement.R`](scripts/check_grammar_enforcement.R)).
 - Provider parameters must be verified to have taken effect.
 - Model and prompt failures are recorded.
-- Partial clinical output is never silently repaired; extraction fails closed.
-- **No candidates after retrieval and scoping is `missing` with a recorded reason
-  (`no_candidate`).** This is a pipeline fact, not a clinical negative. The task's
+- Partial clinical output is never silently repaired. Raw responses remain available
+  for diagnosis, but invalid or review-required responses cannot silently become cohort
+  values.
+- **No candidates after retrieval and scoping is recorded in coverage as
+  `no_candidate`; no model call or value row is created.** Joining values back to the
+  cohort naturally produces `NA`. This is a pipeline fact, not a clinical negative. The task's
   declared absence policy determines whether downstream construction leaves it missing,
   reports `no_documented_evidence`, or—only under an explicit closed-world rule with
   adequate source coverage—constructs a negative value. The original `no_candidate`
@@ -261,10 +308,11 @@ There is no derived-variable spec or interpreted expression language.
   when an eligible in-scope record explicitly supports that status. Absence of a smoking
   statement is never converted into `non_fumeur`: no eligible candidate is `no_candidate`
   (R-side), while contradictory or insufficient supplied material is `indetermine`.
-- **Every snippet carries its target role** (e.g. donor vs recipient); R filters to the
+- **Every evidence unit carries its target context** (e.g. donor vs recipient); R filters to the
   target person *before* the model sees it, so the model never has to infer whose record
   it is reading.
-- Evidence is selected by id and materialized from stored source text.
+- Evidence is selected by native source reference when available and materialized from
+  stored source text.
 - Retrieval recall and model accuracy are evaluated separately.
 - Clinical data and model outputs containing clinical text stay outside the
   repository.
@@ -285,7 +333,7 @@ The engine must remain useful when no gold labels exist:
 5. evaluate models and retrieval as gold accumulates.
 
 D0840 currently has no adjudicated smoking gold. Initial labels will be created by the
-physician reviewing the model value, decision note, and materialized source snippets.
+physician reviewing the model value, decision note, and materialized source evidence.
 Those posterior reviews are useful for corrections and future regression tests, but
 they are not an independent accuracy estimate for the same run that produced the
 suggested answers.
@@ -294,7 +342,7 @@ Evaluation separates:
 
 - retrieval: did the relevant record enter the candidate set?
 - extraction: was the returned value correct?
-- grounding: was the correct evidence snippet selected?
+- grounding: was the correct evidence reference selected?
 - operations: did the call fail, retry, or run slowly?
 
 ## Build plan
@@ -310,8 +358,8 @@ The representative sequence is:
 
 1. smoking — longitudinal text, contradictions, evidence references, and a decision note;
 2. transplant anastomoses — several related outputs with partial missingness;
-3. dialysis — explicit reconciliation of text, CCAM, and pre-emptive status in R;
-4. biology timepoints — deterministic anchor-relative ranking without an LLM;
+3. biology timepoints — deterministic anchor-relative ranking without an LLM;
+4. dialysis — explicit reconciliation of text, CCAM, and pre-emptive status in R;
 5. delayed graft function and surgical antecedents — conflict routing and whole-history
    multi-category extraction.
 
@@ -320,37 +368,32 @@ validation, and held-out sets. Development cases may be inspected while prompts 
 change. Validation cases choose among competing approaches. The held-out set is opened
 only after the approach is fixed, so it remains a credible estimate of performance.
 
-### Phase 0 — smoking spike
+### Completed smoking rounds
 
-Current work:
+Independent smoking implementations established the task contract, native evidence by
+reference, bundled structured extraction, and the difference between clinical values
+and coverage states.
 
-- restructure the existing smoking input into numbered, dated snippets;
-- return `smoking_status_periop`, `evidence_ids`, and a concise `decision_note`;
-- add synthetic negation, contradiction, abstention, and non-informative-candidate
-  fixtures;
-- freeze a real smoking sample before running the models;
-- export review-ready results for posterior physician correction;
-- measure grounding, failures, latency, and descriptive agreement with the resulting
-  reviewed labels.
+Independent retrieval implementations then established:
 
-The goal is to test the contract and determine whether bundled extraction is good
-enough. Per-snippet calls are added only if the results justify their cost.
+- one canonical corpus per document collection;
+- persistence and reload rather than retokenization per variable;
+- temporary metadata subsetting to the union of eligible documents;
+- one query followed by an exact task-window join;
+- hit-sentence evidence with configurable neighbouring-sentence context;
+- deterministic copy-forward deduplication.
 
-### Phase 1 — prove the reusable core
+### Next independent rounds
 
-Implement the attempt, hit, and value tables plus the minimum adapters and policies
-needed for two different D0840 task shapes:
+Claude and Codex continue implementing the same real variables independently before
+reviewing each other's code:
 
-- smoking status, for longitudinal text and conflicting evidence;
-- transplant anastomoses, for several related fields and partial missingness.
+1. transplant anastomoses — several related outputs, shared operative evidence, and
+   partial missingness;
+2. biology timepoints — deterministic structured-source selection around anchors.
 
-Then use dialysis as the multi-source stress test: text observations are reconciled
-with CCAM and pre-emptive status in explicit R.
-
-### Phase 2 — generalize from evidence
-
-Generalize anchor resolvers, scopes, adapters, and policies only where the representative
-D0840 tasks demonstrate repetition.
+Dialysis remains the later multi-source stress test. Only repetition demonstrated across
+these implementations should become shared configuration or a reusable package core.
 
 ### Later
 
@@ -361,8 +404,12 @@ the abstractions. An xlsx review round-trip is sufficient initially.
 
 - ellmer handles LLM transport.
 - This project owns clinical extraction, time, provenance, construction, and eval.
-- The hit is the common shape between sources and policies.
-- Evidence is referenced by snippet id rather than generated as text.
+- A project adapter builds generic engine tasks; the engine does not construct
+  transplant-, visit-, or study-specific anchors.
+- Text collections use one persisted canonical corpus, temporarily subset to the union
+  of eligible documents before each query.
+- Evidence is referenced by native source coordinates where available rather than
+  generated as text.
 - One bundled call is the default; more calls require measured justification.
 - Derived variables are ordinary R.
 - Reusable configuration should select bounded, tested functions rather than form a
@@ -381,5 +428,6 @@ the abstractions. An xlsx review round-trip is sufficient initially.
 
 ## Open questions
 
-- After two real variables, which parts of their workflow should become configuration?
+- After several independent variable rounds, which repeated parts should become
+  configuration?
 - What should the project be called?

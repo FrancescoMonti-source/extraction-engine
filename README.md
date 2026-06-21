@@ -5,7 +5,9 @@ engine that turns clinical free text **and** structured EHR sources (ICD-10,
 CCAM, labs) into validated, evidenced, **evaluated** analytical variables for
 longitudinal cohort studies.
 
-Phase 0 is in progress.
+Development is grounded in real D0840 tasks. The smoking extraction and retrieval
+spikes are complete; transplant anastomoses and biology are the next independent
+implementation rounds.
 
 Start with:
 

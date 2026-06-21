@@ -26,7 +26,7 @@ This project owns:
 - attempts, evidence, and provenance;
 - review and evaluation.
 
-Phase 0 keeps retrieval configuration and the model's output type separate:
+The design keeps retrieval configuration and the model's output type separate:
 the model never sees the corpustools query, and the output type is built in R with
 ellmer's **type builders** (`type_object()` / `type_enum()` / `type_array()`) by
 default. Raw JSON Schema is reserved for tested constraints unavailable through the
@@ -62,21 +62,21 @@ ellmer 0.4.1:
    back as a list of named lists, *not* a tibble). The builder path
    (`type_array(type_object(...))`) is what drives typed columns and the tibble.
 
-Builders are also favoured by the contract itself: `evidence_ids =
-type_array(type_enum(snippet_ids))` carries a **dynamic enum** whose legal ids depend
-on how many snippets *that* patient produced, so the type is rebuilt per call
-(`type_enum(candidate$snippet_id)`) — natural with builders, clumsy as templated JSON.
-Builders also fail loudly on a typo at construction time. (A per-patient dynamic enum
-means the type is patient-specific, so it cannot be shared across prompts in one
+Builders are also favoured by the contract itself: `evidence_refs =
+type_array(type_enum(candidate_refs))` carries a **dynamic enum** whose legal references
+depend on the evidence presented for that task, so the type is rebuilt per call —
+natural with builders, clumsy as templated JSON.
+Builders also fail loudly on a typo at construction time. (A per-task dynamic enum
+means the type is task-specific, so it cannot be shared across prompts in one
 `parallel_chat_structured()` call — see §4 on batching; the trade-off is separate
-patient-specific calls vs. a fixed `S01…Sn` vocabulary with unused ids rejected in R.)
+task-specific calls vs. a fixed short-alias vocabulary with unused aliases rejected in R.)
 
 **The escape hatch is a real capability gap, not just portable storage.** The builders
 expose only `description` / `required` (`type_string`) and `items` / `description` /
 `required` (`type_array`) — there is **no `maxLength`, no `maxItems`** (passing them
 errors), and the emitted JSON carries no size keyword. We have **measured** that a raw
 `maxLength` *is* enforced through the Ollama schema→GBNF path (Handoff #3), so a bounded
-`decision_note` or a small-`maxItems` `evidence_ids` is expressible **only** via
+`decision_note` or a small-`maxItems` `evidence_refs` is expressible **only** via
 `type_from_schema()`. So the rule is: **builders by default** (readable, valid by
 construction, typed conversion); **`type_from_schema()` as a narrow escape hatch** when a
 required, tested JSON-Schema constraint is unavailable through the builders. Schemas as
@@ -89,9 +89,30 @@ and locations. Dialysis text extraction produces observations that R later recon
 with CCAM and pre-emptive status. There is therefore no universal output object; each
 task gets one explicit, readable contract.
 
-## 2. Data contracts
+## 2. Operational data contracts
 
-The workflow uses three linked tables rather than one overloaded result table.
+The current text workflow uses four linked tables rather than one overloaded result
+table. They are operational views; future structured-source adapters may expose
+additional observation tables when their construction policies need them.
+
+### Coverage
+
+One row per expected extraction task, including tasks that never reach a model:
+
+```text
+task_id
+subject_id
+anchor_date
+n_eligible_documents
+n_candidates
+processing_state
+retrieval_version
+```
+
+`processing_state` distinguishes at least candidate-bearing, `no_candidate`, retrieval
+failure, and intentionally unprocessed tasks. Coverage is the canonical task census.
+It prevents a missing joined value from ambiguously meaning “no evidence,” “call
+failed,” or “task forgotten.”
 
 ### Attempts
 
@@ -100,8 +121,6 @@ One row per model execution, including failures:
 ```text
 attempt_id
 task_id
-subject_id
-timepoint_id
 provider
 model
 schema_version
@@ -112,87 +131,87 @@ status
 error
 ```
 
-Phase 0 records this minimal set. Token counts, retry chains, and complete input
-lineage can be added when they become useful.
+Token counts, retry chains, and complete input lineage can be added when useful.
 
-### Hits
+### Values
 
-One row per source-backed observation:
+One row per captured extractor response:
 
 ```text
-hit_id
-subject_id
+task_id
 variable_id
 value
 unit
+evidence_refs
+decision_note
+validity_state
+review_status
+attempt_id
+```
+
+`evidence_refs` is a list-column. Capture and validity classification are separate:
+raw responses remain diagnosable, while invalid or review-required rows cannot silently
+become cohort values.
+
+### Evidence
+
+One row per source reference cited by a value:
+
+```text
+task_id
+evidence_ref
 source
 source_record_id
 source_event_id
 recorded_at
 effective_at
-evidence_ids
-attempt_id
+hit_text
+context_before
+context_after
 ```
 
-`recorded_at` and `effective_at` are distinct because a recent note can describe a
-remote historical event.
+`recorded_at` and `effective_at` remain distinct because a recent note can describe a
+remote historical event. The physician judges whether the materialized evidence
+clinically supports the value; R checks only mechanical provenance and validity.
 
-`evidence_ids` is a **list-column**: the snippet ids supporting *one* hit (a single hit
-may rest on several snippets, e.g. an `uncertain` call citing two conflicting notes).
-This is distinct from `selected_hit_ids` on a value (§ below): `evidence_ids` links a hit
-to its supporting snippets, while `selected_hit_ids` links a constructed value to the
-hits used to build it.
-
-Structured sources such as ICD-10, CCAM, and labs create hits deterministically.
-A bundled text extraction may create one text hit for a subject/timepoint, supported
-by one or more supplied snippet ids.
-
-### Values
-
-One row per constructed analytical decision:
-
-```text
-subject_id
-variable_id
-timepoint_id
-value
-unit
-selected_hit_ids
-n_candidates
-policy
-policy_version
-.valid
-.failure
-review_status
-```
-
-A flat review table is a view produced by joining values to selected hits and their
-source snippets. It is not the canonical storage contract.
+A flat review table is a view produced by joining values to evidence and coverage. It is
+not the canonical storage contract.
 
 ## 3. Evidence by reference
 
-The model does not generate an evidence quote. Candidate snippets are assigned stable
-ids and supplied with dates and source identifiers:
+The model does not generate an evidence quote. Where a source already has stable
+coordinates, use them directly. For corpustools sentence retrieval the reference is:
 
 ```text
-S01 | 2025-02-20 | document 104 | Ancien fumeur, sevré depuis 2010.
-S02 | 2025-03-04 | document 287 | Tabac : sevré.
+ELTID::sentence
 ```
 
-For `smoking_status_periop`, these snippets were selected from documents recorded in
+Example:
+
+```text
+104::42 | 2025-02-20 | Ancien fumeur, sevré depuis 2010.
+287::7  | 2025-03-04 | Tabac : sevré.
+```
+
+The hit sentence is citable. Configurable neighbouring sentences may be shown as
+context, but they are not independently citable unless they are themselves hits.
+Synthetic short aliases remain an optional model-compatibility optimization, not the
+durable source identity.
+
+For `smoking_status_periop`, these sentences were selected from documents recorded in
 `[anchor − 365 days, anchor + 7 days]` around surgery. The output type contains a dynamic
 evidence enum and a task-specific status enum:
 
 ```json
 {
   "smoking_status_periop": "sevre",
-  "evidence_ids": ["S01", "S02"],
+  "evidence_refs": ["104::42", "287::7"],
   "decision_note": "Both peri-operative notes describe smoking cessation."
 }
 ```
 
-The allowed evidence values are the supplied snippet ids. Client code resolves each
-id to the complete stored snippet. The decision note is a concise explanation of how
+The allowed evidence values are the supplied references. Client code resolves each
+reference to the stored source sentence and document. The decision note is a concise explanation of how
 the model handled the supplied evidence; it is not itself evidence.
 
 The status enum for this task is `actif` / `sevre` / `non_fumeur` / `indetermine`,
@@ -213,60 +232,61 @@ This avoids:
 - unbounded evidence strings and output overflow;
 - character-offset counting;
 - mid-word truncation;
-- ambiguity when several snippets share a date.
+- ambiguity when several evidence units share a date.
 
-For genuinely multi-span evidence, return an array of supplied ids with a small
+For genuinely multi-span evidence, return an array of supplied references with a small
 `maxItems`. A free-text evidence field with `maxLength` is only a fallback for a
-source that cannot provide stable snippet ids.
+source that cannot provide stable references.
 
-## 4. Text-call granularity
+## 4. Text retrieval and call granularity
 
-The Phase 0 default is one bundled call per extraction task, subject, and timepoint:
+The current default is one bundled call per extraction task, subject, and timepoint:
 
-1. R resolves the anchor, filters the scope, and **filters to the target role** (e.g.
-   recipient, not donor) so the model never has to infer whose record it is reading.
-2. R **deduplicates copy-forward snippets**, then orders and numbers the candidates.
-3. **If no candidates remain, the value is `missing` with reason `no_candidate` —
-   never a clinical status or `not_stated` — and no model call is made.**
-4. Otherwise one model call receives the in-scope snippet list, **with the anchor date
-   as a context header** so it can weigh recency relative to the anchor when snippets
+1. A project adapter supplies generic tasks (`task_id`, `PATID`, optional
+   `anchor_date`, plus project metadata).
+2. R computes the union of documents eligible for those tasks, creates a temporary
+   metadata subset of the persisted canonical corpus with `copy = TRUE`, and runs the
+   variable's retrieval query once.
+3. R joins hits back to each task's exact patient/date eligibility, reconstructs the hit
+   sentence plus configured neighbouring sentences, and deduplicates literal
+   copy-forward evidence.
+4. **If no candidates remain, coverage records `no_candidate`; no value row or model
+   call is created.** Joining values to the complete task/cohort table later produces
+   `NA`, never a clinical status or `not_stated`.
+5. Otherwise one model call receives the in-scope evidence list, **with the anchor date
+   as a context header** so it can weigh recency relative to the anchor when evidence
    conflict. R remains the gatekeeper for scope and eligibility — the model never
    recomputes the window.
-5. The model returns its task-specific fields, including the value,
-   `evidence_ids`, and (when useful) a `decision_note`.
-6. R resolves the ids and materializes the original evidence for physician review.
+6. The model returns its task-specific fields, including the value,
+   `evidence_refs`, and (when useful) a `decision_note`.
+7. R resolves the references and materializes the original evidence for physician
+   review.
 
-**Dynamic enums and batching.** Because the legal evidence ids come from one
-subject's supplied snippets, the output type is subject-specific. The initial
+**Dynamic enums and batching.** Because the legal evidence references come from one
+task's supplied candidates, the output type is task-specific. The initial
 implementation therefore makes separate structured calls with separately built types.
 `parallel_chat_structured()` cannot apply different types to different prompts in one
-batch. A fixed `S01…Sn` vocabulary plus an R check for unused ids remains a later
+batch. A fixed short-alias vocabulary plus an R check for unused references remains a later
 optimization only if measured throughput justifies weakening the grammar-level
 constraint.
 
-**Copy-forward handling (step 2).** Clinical notes frequently paste a prior statement
+**Copy-forward handling.** Clinical notes frequently paste a prior statement
 forward unchanged, so the same sentence reappears under many later dates. Dedup here is
 an **efficiency** step (smaller prompt, no anchoring on a stale pasted line), not a
-correctness mechanism — the model already tolerates several agreeing snippets. Before
-numbering, R deduplicates on normalized snippet text, keeping one representative. *Which*
-copy to keep is a minor reviewer-facing choice — the earliest is the first-recorded date
-(useful when a one-time statement was copied forward); the most recent is the latest
-confirmation (often more useful for a current-status question). Either way it is **not** a
-reliable `effective_at`: the true clinical date comes from the text content or a
-structured source, and a *standing state* such as "non-smoker" has no single effective
-date at all. Note this is only a *display* choice — the deduped value is unchanged, and an
-in-window candidate still exists. Dedup runs **after** scoping, so it never drops an in-window restatement in
-favour of an out-of-window original. **Exact-normalized matching is enough** — it catches
-literal copy-forward, while semantic restatement ("non-fumeur" vs "pas de tabac") is left
-alone, because extra *agreeing* snippets are harmless; add near-duplicate matching only
-if a measured need appears.
+correctness mechanism. Dedup runs within each task after scoping and uses
+`tolower(str_squish(hit_text))`. The canonical occurrence is the smallest absolute
+distance from the anchor, then earliest record date, lexicographically smallest source
+record id, then smallest sentence number. Excluded references and dates remain attached
+for audit. For tasks without an anchor, the task must provide an alternative explicit
+ordering policy. Exact-normalized matching catches literal copy-forward; semantic
+restatement remains separate unless a measured need justifies more aggressive matching.
 
-This keeps the call count bounded. Per-snippet classification followed by
+This keeps the call count bounded. Per-evidence-unit classification followed by
 deterministic collapse is an escalation path if evaluation shows that bundled calls
 mishandle contradictions, copy-forward, or target roles.
 
 **Cross-field coupling (a measured question, not a settled fact).** A bundled call places
-every field (`value`, `evidence_ids`, `decision_note`) into **one schema
+every field (`value`, `evidence_refs`, `decision_note`) into **one schema
 generated left-to-right in one pass**, so the fields are statistically coupled — through
 the shared schema and through the model priming on its own emitted tokens. This much is
 established and demonstrable: a "space out the letters" directive in one field's
@@ -277,7 +297,7 @@ What is *not* established, and must stay hypothesis until measured:
 
 - that reordering fields cleanly separates "global-instruction interpretation" from
   autoregressive momentum — both can act at once, and a single stochastic run shows little;
-- that declaring `evidence_ids` first makes the model "choose evidence before deciding" —
+- that declaring `evidence_refs` first makes the model "choose evidence before deciding" —
   this is **conceptually backwards**, not merely unproven: the *supporting* ids are defined
   relative to the value, so you cannot select what justifies an answer you have not yet
   formed. Evidence selection is posterior to, or co-determined with, the decision, never
@@ -300,31 +320,45 @@ parameters; test **both field orders**; test **with and without** the planted in
 control**.
 
 **Design posture given all this.** Keep bundled
-`value + evidence_ids + decision_note` as the default when the task benefits from all
+`value + evidence_refs + decision_note` as the default when the task benefits from all
 three — a coupled answer, citation set, and explanation are operationally useful — but
 treat the coupling honestly:
 
-- every separately judged claim carries **its own** `evidence_ids`, never one shared
+- every separately judged claim carries **its own** `evidence_refs`, never one shared
   evidence field for unrelated claims;
 - evidence is **provenance, not verification**; internal value↔evidence agreement proves
   nothing on its own;
 - R resolves ids and may assert mechanical consistency, but does not judge whether the
   evidence clinically supports the answer;
-- physician review and adjudicated evaluation determine whether the cited snippets and
+- physician review and adjudicated evaluation determine whether the cited references and
   decision note appropriately support the value;
 - if changing field order changes the **clinical answer**, the task is **unstable**: fix
   or split it, do not select the convenient order. (A minor shift in *which* supporting
-  snippet is cited is tolerable; a flipped value is a defect.)
+  reference is cited is tolerable; a flipped value is a defect.)
 
 So the bleed finding supports bundling — not because "leakage is good," but because
 coupled answers and citations are useful *provided we treat them as coupled, not as
-independent checks*. Per-snippet classification followed by deterministic collapse remains
+independent checks*. Per-evidence-unit classification followed by deterministic collapse remains
 the escalation path if measured bleed proves harmful.
 
-Deterministic single-snippet preselection is also a policy option, not a universal
+Deterministic single-evidence preselection is also a policy option, not a universal
 rule. A latest note can contain stale or contradictory content.
 
 ## 5. Anchors, scopes, and construction policies
+
+The generic engine consumes tasks; it does not construct project events. A project
+adapter maps its native data into a stable engine-facing table:
+
+```text
+task_id
+PATID
+anchor_date
+... project metadata
+```
+
+`anchor_date` is optional. D0840's adapter may derive tasks from `DATEACTE` and retain
+donor/recipient role; another project may use consultation, admission, examination, or
+study timepoints. Source-column names and role logic stay outside the retrieval core.
 
 Anchor rules are data that select a named resolver, for example first, last, or nth
 event. The resolver returns the anchor date plus the event and record identifiers
@@ -427,8 +461,9 @@ Calling `no_documented_evidence` simply `no` requires a deliberate, documented
 closed-world decision. Even then, retain the underlying candidate and coverage state so
 the analytical negative remains auditable.
 
-Source adapters turn raw records into hits. Construction policies turn scoped hits
-into values. Initial policy families grounded in D0740/D0840 are:
+Source adapters turn raw records into source-backed observations. Construction policies
+turn scoped observations into values. Initial policy families grounded in D0740/D0840
+are:
 
 - `identity` for a single valid source result;
 - `any`;
@@ -488,7 +523,13 @@ The runtime path is:
 5. fail closed when retries are exhausted.
 
 Partial clinical JSON is never repaired automatically because repair can invent the
-field being audited.
+field being audited. Capture and consumption are separate: preserve the raw response
+and its validity state, but prevent invalid rows from becoming cohort values.
+
+Evidence requirements may depend on the returned value. For the smoking task,
+`actif`, `sevre`, and `non_fumeur` require at least one valid evidence reference;
+`indetermine` may legitimately return an empty array. An empty `decision_note` is valid
+when there is nothing useful to explain. Unknown references remain structurally invalid.
 
 ## 8. Provider-parameter verification
 
@@ -509,17 +550,93 @@ outputs; verify runtime settings through server telemetry or logs.
 Current model-specific results and incident history belong in `HANDOFF.md`, not in
 the durable architecture.
 
-## 9. Retrieval and evaluation
+## 9. Canonical text corpus, retrieval, and evaluation
 
-Lexical retrieval is the initial, replaceable baseline. It is tuned for sensitivity,
-but may miss abbreviations, spelling variants, indirect evidence, or evidence lost by
-section parsing. Copy-forward also complicates the interpretation of document dates.
+### Canonical corpus
+
+Build one corpustools `tCorpus` per document collection, not one corpus per variable or
+query. The canonical construction currently uses:
+
+```r
+corpustools::create_tcorpus(
+  documents,
+  text_columns = "RECTXT",
+  doc_column = "ELTID",
+  split_sentences = TRUE,
+  remember_spaces = FALSE
+)
+```
+
+No UDPipe model is used. Sentence boundaries come from corpustools' basic tokenizer.
+`ELTID` must remain unique in the document collection; fail clearly if upstream
+manipulation breaks that invariant.
+
+The corpus is persisted with `saveRDS()` and reloaded for later variables. On D0840,
+65,397 non-empty documents produced 44.6 million tokens and 6.1 million sentences:
+build 115.7 seconds, save 65 MB, load 1.3 seconds. Document/token counts, full metadata,
+and the pinned-query hit set were identical after reload. Eleven of the 65,408 source
+rows were excluded because their text was empty after trimming; this is explicit input
+cleaning, not unexplained corpus loss.
+
+Persisted corpora are package/runtime artifacts. Revalidate serialization and hit
+stability when upgrading R or corpustools.
+
+### Subset before search
+
+For one variable:
+
+1. calculate each task's eligible document ids in ordinary R;
+2. take their union;
+3. create a temporary corpus with
+   `canonical_tc$subset(subset_meta = doc_id %in% eligible_ids, copy = TRUE)`;
+4. run the declared retrieval method once;
+5. join hits back to each task's exact patient and temporal eligibility.
+
+`copy = TRUE` is mandatory: the canonical corpus must never be mutated.
+
+This order is measured, not assumed. On D0840, the peri-operative windows selected
+13,287/65,397 documents. Median warm timings were 97.1 seconds for full-corpus search
+versus 11.5 seconds for subset-copy plus search and join, with identical 1,856 eligible
+references. Temporary metadata subsetting is therefore the default execution path.
+
+### Sentence evidence and context
+
+Sentence-level search returns native `ELTID + sentence` coordinates. Reconstruct only
+the hit sentences and their requested neighbours from the temporary subset's tokens;
+do not materialize every sentence in hit documents.
+
+A deterministic normalized untokenizer supplies readable text without claiming exact
+source whitespace. For example:
+
+```text
+non - fumeur , 20 PA .  ->  non-fumeur, 20 PA.
+```
+
+On D0840, reconstructing only hit sentences ±1 produced 5,218 sentences in 0.9 seconds.
+Reconstructing every sentence in hit documents produced 1.68 million sentences and took
+212.5 seconds. Exact-space reconstruction remains an optional fallback only if
+physician review shows normalized text is inadequate.
+
+Context strategy is configuration, not universal architecture. Sentence ±1 is the
+current clinical-text default. Whole-document or other strategies may be selected by a
+task; fixed-token KWIC is not the default because it cuts sentences and has been slow in
+prior use.
+
+### Retrieval method and evaluation
+
+A variable chooses its retrieval method—such as a Lucene query or a regex. The normal
+pipeline does not automatically compare both. Comparison tooling may be used during
+development, but does not belong in the core execution path.
+
+Lexical retrieval may miss abbreviations, spelling variants, indirect evidence, or
+evidence lost by sentence parsing. Copy-forward also complicates the interpretation of
+document dates.
 
 Evaluate retrieval separately from extraction:
 
 - candidate recall: did the evidence-bearing record enter the candidate set?
 - extraction accuracy: given candidates, was the value correct?
-- evidence grounding: did the model select the adjudicated snippet?
+- evidence grounding: did the model select the adjudicated source reference?
 - abstention: how often retrieval/scoping returns `no_candidate`, with a hand-audited
   sample to distinguish true lack of documented evidence from a recall miss. A
   `no_candidate` is interpreted only through the task's absence policy and is never
@@ -544,11 +661,12 @@ independent estimate requires fresh cases or adjudication performed without expo
 the tested model's prediction.
 
 Absolute retrieval recall is generally unknowable without an oracle. Report recall
-on labelled samples, coded silver standards, or relative query comparisons.
+on labelled samples or coded silver standards. Query-overlap counts without labels are
+difference measurements, not recall, precision, or accuracy.
 
-## 10. Phase 0 findings and next experiment
+## 10. Established findings and next variables
 
-Phase 0 has already established:
+The smoking rounds and retrieval experiments established:
 
 - ellmer's **type builders** are the default schema path: they validate by construction
   and drive typed JSON→R conversion (tibbles), whereas `type_from_schema()` neither
@@ -558,23 +676,25 @@ Phase 0 has already established:
 - structured calls can be made deterministic when parameters reach the provider;
 - the attempt log captures real parse and server failures without aborting the run;
 - model grammar enforcement must be tested rather than assumed;
-- generated evidence text is the wrong contract.
+- generated evidence text is the wrong contract;
+- native corpus coordinates are preferable to synthetic evidence aliases when available;
+- one canonical corpus can be persisted and reused across variables;
+- metadata subsetting before search is substantially faster than full-corpus search on
+  the current corpus;
+- reconstructing only hit sentences and requested neighbours avoids enormous sentence
+  tables;
+- exact source whitespace is not required for the default review/model context;
+- coverage (`no_candidate`) and clinical values are separate concepts.
 
-The next experiment is:
+The next independent implementation rounds are:
 
-1. reconstruct numbered, dated snippets rather than using an opaque concatenated
-   blob;
-2. make one bundled
-   `smoking_status_periop + evidence_ids + decision_note` call per subject-specific
-   output type, using only documents in the declared peri-operative source scope;
-3. add two distinct absence-path fixtures:
-   - no smoking-related retrieval candidate → `no_candidate`, with no model call;
-   - a retrieved but non-informative smoking-related candidate (for example,
-     “père fumeur”) → `indetermine`, never `non_fumeur`;
-4. freeze an unlabelled real smoking sample, run extraction, then export it for
-   posterior physician review and correction;
-5. preserve those reviewed labels for future regression and compare per-snippet
-   extraction only if bundled errors justify its extra cost.
+1. transplant anastomoses — one operative context producing several related fields,
+   field-specific evidence, and partial missingness;
+2. biology timepoints — deterministic selection from structured results around anchors.
+
+Claude and Codex implement each independently before mutual review. Dialysis follows as
+the multi-source reconciliation stress test. Shared abstractions are extracted only
+after repetition appears across these real tasks.
 
 ## 11. D0840 development corpus
 
@@ -604,17 +724,18 @@ combine several tasks or sources.
 
 | D0840 task | What it teaches |
 |---|---|
-| Smoking status around surgery (`[anchor − 365d, +7d]`) | Window-bounded source selection, target-role filtering, explicit status categories, contradictions, `evidence_ids`, and a useful `decision_note`. |
+| Smoking status around surgery (`[anchor − 365d, +7d]`) | Persisted-corpus retrieval, window-bounded source selection, target-role filtering, explicit status categories, contradictions, `evidence_refs`, and a useful `decision_note`. |
 | Transplant anastomoses | One context producing several related durations, techniques, and locations; partial missingness; cross-field coupling. |
 | Dialysis before transplant | Multi-source construction: pre-emptive status, CCAM counts and thresholds, text observations, source precedence, and disagreement review. |
 | Biology timepoints | Deterministic anchor-relative selection with tolerances and ordered tie-breakers; proves the engine is not an LLM-only system. |
 | Delayed graft function | Explicit positive and negative text rules, risk-only mentions, conflicting values, and routing to review. |
 | Surgical antecedents | Whole-history scope, several clinical categories in one task, repeated mentions, exclusions, and multi-item evidence. |
 
-The implementation order is smoking → anastomoses → dialysis → biology. Delayed graft
-function and surgical antecedents then test whether the emerging abstractions survive
-different conflict and scope patterns. Only repetition demonstrated across working
-tasks should become shared configuration or package code.
+The duplicate-implementation order is smoking → anastomoses → biology. Dialysis then
+tests multi-source reconciliation. Delayed graft function and surgical antecedents test
+whether the emerging abstractions survive different conflict and scope patterns. Only
+repetition demonstrated across working tasks should become shared configuration or
+package code.
 
 ### Development, validation, and held-out discipline
 
