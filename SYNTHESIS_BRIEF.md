@@ -145,6 +145,94 @@ The physician decides whether the evidence clinically supports the value.
 Use ellmer type builders by default. Raw JSON Schema remains an escape hatch only for a
 tested constraint unavailable through the builders.
 
+### A growing library of response types
+
+In ellmer terminology, `type_object()` describes one complete structured model response.
+In ordinary R terms, it describes the shape of a named `list`. It does **not** necessarily
+mean one clinical variable.
+
+For example:
+
+```r
+type_object(
+  smoking_status = type_enum(c(
+    "actif",
+    "sevre",
+    "non_fumeur",
+    "indetermine"
+  )),
+  evidence_ids = type_array(type_enum(snippet_ids)),
+  decision_note = type_string()
+)
+```
+
+describes one response shaped like:
+
+```r
+list(
+  smoking_status = "sevre",
+  evidence_ids = c("S02", "S05"),
+  decision_note = "Two supplied snippets document cessation."
+)
+```
+
+R may subsequently store these elements in different tables. Being returned in one
+object does not mean that the value and evidence occupy one dataframe cell.
+
+One outer `type_object()` may contain several clinical variables from the same call.
+A nested `type_object()` is useful when one variable has several components:
+
+```r
+type_object(
+  arterial_duration = type_object(
+    status = type_enum(c(
+      "documented",
+      "not_documented",
+      "unusable"
+    )),
+    value = type_integer(required = FALSE),
+    evidence_ids = type_array(type_enum(snippet_ids))
+  ),
+  arterial_location = type_object(
+    status = type_enum(c(
+      "documented",
+      "not_documented",
+      "unusable"
+    )),
+    value = type_string(required = FALSE),
+    evidence_ids = type_array(type_enum(snippet_ids))
+  ),
+  summary = type_string()
+)
+```
+
+Mental translation:
+
+```text
+type_object()  -> named R list
+type_array()   -> R vector
+type_string()  -> length-one character value
+type_integer() -> length-one integer value
+```
+
+Build a library that grows with real use cases:
+
+```text
+R/types/
+  smoking.R
+  anastomoses.R
+  dialysis.R
+```
+
+Entries whose shape is completely fixed may be stored as type objects. Entries containing
+task-specific values—especially the legal `snippet_ids`—must be builder functions such as
+`type_smoking(snippet_ids)` that return a fresh type object for that task.
+
+Start with explicit, understandable task builders. Only after several real tasks repeat
+the same nested pattern should that pattern be extracted into a shared helper such as an
+evidenced-field builder. This is a composable response-type library, not a generic schema
+language or a variable-specification framework.
+
 For fields with partial missingness, use an explicit status:
 
 - `documented`: a usable value is present and at least one evidence ID is required;

@@ -2407,3 +2407,13 @@ and folded into `SYNTHESIS_BRIEF.md`:
 Plus clarification: validity is two-level (field; task = all fields + required-summary
 PRESENCE). Summary *consistency* stays a physician judgment. The brief is now fully
 ratified for the synthesis round.
+
+### Response-type library clarification (human + Codex, 2026-06-21)
+
+The human clarified that the ellmer response types should form a library enriched by
+future real use cases. `SYNTHESIS_BRIEF.md` now explains this in R terms:
+`type_object()` describes one complete named-list response, not necessarily one clinical
+variable; one response may contain several variables, and nested objects may describe
+`status` / `value` / `evidence_ids` for one complex field. Fixed shapes may be stored as
+objects, while task-specific evidence enums require builder functions. Concrete task
+builders come first; shared components are extracted only after repetition proves them.
