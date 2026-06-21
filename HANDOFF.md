@@ -2349,3 +2349,35 @@ This round has a mandatory terminal step that earlier rounds lacked: after compa
 Claude and Codex integrate the selected pieces into **one baseline implementation**
 before beginning another variable. The final baseline—not both independent builds—gets
 the next full-cohort run.
+
+---
+
+## Synthesis brief amendments after Claude review (human + Claude, 2026-06-21)
+
+Three amendments to `SYNTHESIS_BRIEF.md`, ratified with the human after reviewing the
+frozen brief:
+
+1. **`structural_validity` is binary (`valid`/`invalid`) per field, not three-valued.**
+   The human's question — "when does `requires_review` happen, and is detection reliable?"
+   — is the right test. Every mechanical trigger is deterministic (reliable), but sorting
+   them by "is this field safe to surface to the physician?" collapses them to two:
+   ungrounded/inconsistent → `invalid` (escalate), clean+grounded → `valid` (physician
+   review). The would-be middle state had no distinct consumer. `documented`-without-evidence
+   is reclassified `review` → `invalid` (an ungrounded value must not be surfaced; also
+   matches "documented requires ≥1 evidence"). `invalid` is NOT auto-retried: under
+   `temperature=0` + fixed seed the call is deterministic, so retry reproduces the output.
+
+2. **Validation enforces only the conditional invariants the grammar cannot express.**
+   ollama runs structured output as grammar-constrained sampling, so value types, the
+   `status` enum, and snippet-ID membership cannot fail under a schema-honouring backend —
+   R must not re-check them. The real, *general* triggers are the cross-field rules JSON
+   schema can't state: `documented`⇒value+≥1 ref; `unusable`⇒≥1 ref; summary present. The
+   variable-specific "non-integer duration" check is dropped (grammar-prevented and not
+   generalizable).
+
+3. **Tests deferred until after integration.** No automated tests during the independent
+   synthesis builds (fluid interfaces); the small high-risk set is added only on the single
+   integrated baseline.
+
+Privacy note kept as-is (strict column loading): low-stakes for `chirurgie.xlsx` here but
+technically correct.

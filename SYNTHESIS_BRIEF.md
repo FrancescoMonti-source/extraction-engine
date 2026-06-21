@@ -104,12 +104,22 @@ Over-citation is primarily model behaviour, not a new clinical state. Record ref
 counts and expose the cited material for review; do not build a complicated automatic
 semantic judge in R.
 
-R validates only mechanical claims:
+The structured-output grammar already enforces everything it can express: value
+types, the `status` enum, and snippet-ID membership in the supplied set (ollama
+constrains sampling to the schema, so those cannot fail under a schema-honouring
+backend). R must not re-litigate them.
 
-- returned snippet IDs were supplied for that task;
-- required evidence is present;
-- IDs resolve to stored provenance;
-- output shape and status/value rules are respected.
+R validates only the CONDITIONAL, cross-field invariants the grammar cannot express:
+
+- a `documented` field carries a usable value AND at least one snippet ID;
+- an `unusable` field carries at least one snippet ID;
+- the required summary is present.
+
+These are general, not variable-specific. Do NOT add per-variable value checks (e.g.
+"duration is a whole integer") -- that is the field type's job, already grammar-enforced.
+At most one defensive guard may confirm the response parsed and conformed to the declared
+schema, for backends that do not constrain sampling; that is a single check, not per-field
+type/enum re-validation.
 
 The physician decides whether the evidence clinically supports the value.
 
@@ -142,16 +152,23 @@ evidence.
 Do not call every successful model response “valid.” Keep distinct concepts:
 
 - `attempt_status`: provider call completed or failed;
-- `structural_validity`: response obeyed the mechanical contract, requires review, or
-  is invalid;
+- `structural_validity`: BINARY per field -- the response satisfied the conditional
+  contract (`valid`) or did not (`invalid`), with a granular reason message. There is no
+  separate "requires review" structural state: once the grammar guarantees type/enum
+  conformance, the only mechanical failures are ungrounded or inconsistent fields, and an
+  ungrounded value must never be surfaced as if real. The boundary is "is this field safe
+  to surface to the physician?"; `documented`-without-evidence is therefore `invalid`, not
+  a soft flag;
 - `coverage_state`: candidate availability and other pre-model pipeline states;
 - `review_decision`: later physician acceptance or rejection.
 
 A structurally valid response is not a clinically correct response.
 
 Use a fresh chat per task. Record model, attempt count, latency, error, and retry
-outcome. A small bounded retry with backoff is appropriate for transient local-provider
-failures.
+outcome. A small bounded retry with backoff is appropriate only for transient
+local-provider failures (`attempt_status`). It is NOT appropriate for `structural_validity
+== invalid`: under `temperature = 0` and a fixed seed the call is deterministic, so a
+retry reproduces the same output. Invalid -> escalate/drop; valid -> physician review.
 
 ## Review output
 
@@ -185,19 +202,23 @@ clinical artifacts remain outside version control. Console output is aggregate-o
 
 ## Testing discipline
 
-Tests are deliberately small. Pin high-risk behaviour, not temporary organization:
+No automated tests during the independent synthesis builds. Interfaces are still expected
+to change, so tests now would lock down soon-to-be-refactored internals; validate instead
+by small real-data sample runs and aggregate inspection.
+
+Defer the test set until AFTER the two builds are integrated into the single baseline.
+Then add a deliberately small set pinning only high-risk, durable behaviour:
 
 - exact patient/event or patient/window scoping;
 - privacy-safe input loading;
 - stable snippet-ID-to-provenance mapping;
 - `no_candidate` skips the model;
-- documented/null/unusable status rules;
-- backend placeholder values are discarded;
-- unknown evidence IDs cannot become evidence;
-- review rows place each field beside only its own cited evidence.
+- the conditional documented/unusable evidence rules;
+- backend placeholder values are discarded.
 
-Do not build a large suite around helper names or implementation details that are still
-expected to change.
+Do not pin type/enum conformance the grammar already guarantees (e.g. unknown evidence
+IDs cannot occur under a schema-honouring backend), and do not build a large suite around
+helper names or implementation details still expected to change.
 
 ## Verification and convergence
 
