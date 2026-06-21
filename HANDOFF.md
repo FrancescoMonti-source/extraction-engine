@@ -2381,3 +2381,29 @@ frozen brief:
 
 Privacy note kept as-is (strict column loading): low-stakes for `chirurgie.xlsx` here but
 technically correct.
+
+### Codex counter-review resolution (human + Claude + Codex, 2026-06-21)
+
+Codex endorsed the binary-validity direction and proposed three refinements; all resolved
+and folded into `SYNTHESIS_BRIEF.md`:
+
+1. **Keep pipeline/provenance-integrity assertions** (accepted). My amendment conflated
+   *model-output conformance* (grammar's job — skip) with *our pipeline's provenance
+   integrity* (our code — keep). R asserts: every returned snippet ID resolves to exactly
+   one stored snippet; no evidence dropped/duplicated across joins; each review row holds
+   only its field's evidence. These also backstop dynamic-enum enforcement, which the gate
+   (trivial-schema prose test) never proved. The recent field/evidence data-masking bug
+   motivates them.
+2. **Keep four black-box contract tests during the independent builds** (human ruling:
+   keep). Rationale: without shared contract tests the two builds could silently encode
+   different contracts and be compared invalidly. Scoped to exactly: task/document scoping;
+   snippet-ID → exact model-visible snippet; `no_candidate` skips the model; field review
+   row isolation. Black-box, so they lock the contract not the interface. Everything else
+   still deferred to the integrated baseline.
+3. **"Invalid must not be surfaced" was too broad** (accepted). Invalid values are excluded
+   from accepted cohort values but RETAINED in the review/debug output with their reason, so
+   they can be diagnosed.
+
+Plus clarification: validity is two-level (field; task = all fields + required-summary
+PRESENCE). Summary *consistency* stays a physician judgment. The brief is now fully
+ratified for the synthesis round.

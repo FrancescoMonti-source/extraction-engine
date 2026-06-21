@@ -127,6 +127,17 @@ At most one defensive guard may confirm the response parsed and conformed to the
 schema, for backends that do not constrain sampling; that is a single check, not per-field
 type/enum re-validation.
 
+Separately, R MUST assert **pipeline/provenance integrity** — these check our own
+deterministic transforms, not the model:
+
+- every returned snippet ID resolves to exactly one stored snippet;
+- no evidence is dropped or duplicated across joins;
+- every review row contains only its own field's evidence.
+
+(The grammar gate only proved prose-escape on a trivial `{string, number}` schema, so it
+never proved dynamic-enum enforcement; "resolves to exactly one snippet" is the cheap
+backstop. The recent field/evidence data-masking bug is exactly what these catch.)
+
 The physician decides whether the evidence clinically supports the value.
 
 ## Structured output and nulls
@@ -162,19 +173,26 @@ Do not call every successful model response “valid.” Keep distinct concepts:
   contract (`valid`) or did not (`invalid`), with a granular reason message. There is no
   separate "requires review" structural state: once the grammar guarantees type/enum
   conformance, the only mechanical failures are ungrounded or inconsistent fields, and an
-  ungrounded value must never be surfaced as if real. The boundary is "is this field safe
-  to surface to the physician?"; `documented`-without-evidence is therefore `invalid`, not
+  ungrounded value must never enter the analytical dataset as an accepted value (it still
+  appears in the review/debug output with its reason). The boundary is "is this field safe
+  to accept as a cohort value?"; `documented`-without-evidence is therefore `invalid`, not
   a soft flag;
 - `coverage_state`: candidate availability and other pre-model pipeline states;
 - `review_decision`: later physician acceptance or rejection.
 
 A structurally valid response is not a clinically correct response.
 
+Validity exists at two levels: per-field validity, and task validity derived from all
+fields plus required-summary PRESENCE. Summary *consistency* with the fields stays a
+physician judgment unless we later define deterministic checks; only presence is mechanical.
+
 Use a fresh chat per task. Record model, attempt count, latency, error, and retry
 outcome. A small bounded retry with backoff is appropriate only for transient
 local-provider failures (`attempt_status`). It is NOT appropriate for `structural_validity
 == invalid`: under `temperature = 0` and a fixed seed the call is deterministic, so a
-retry reproduces the same output. Invalid -> escalate/drop; valid -> physician review.
+retry reproduces the same output. Invalid -> excluded from accepted cohort values but
+RETAINED in the review/debug output with its reason (never silently dropped, or no one can
+diagnose it); valid -> physician review.
 
 ## Review output
 
@@ -208,19 +226,26 @@ clinical artifacts remain outside version control. Console output is aggregate-o
 
 ## Testing discipline
 
-No automated tests during the independent synthesis builds. Interfaces are still expected
-to change, so tests now would lock down soon-to-be-refactored internals; validate instead
-by small real-data sample runs and aggregate inspection.
+During the independent builds, write exactly FOUR black-box contract tests. They pin the
+shared OBSERVABLE contract (not helper organization), so the two implementations cannot
+silently encode different contracts and then be compared invalidly:
 
-Defer the test set until AFTER the two builds are integrated into the single baseline.
-Then add a deliberately small set pinning only high-risk, durable behaviour:
-
-- exact patient/event or patient/window scoping;
-- privacy-safe input loading;
-- stable snippet-ID-to-provenance mapping;
+- exact task/document scoping;
+- a snippet ID maps to the exact model-visible snippet it was given;
 - `no_candidate` skips the model;
+- a field's review row contains only that field's evidence.
+
+These are black-box (fixture in, behaviour out), so they survive refactors and lock the
+contract, not the interface. Test nothing else during the independent builds; validate the
+rest by small real-data sample runs and aggregate inspection.
+
+Defer the remaining set until AFTER the two builds are integrated into the single baseline.
+Then add a deliberately small set pinning other high-risk, durable behaviour:
+
+- privacy-safe input loading;
 - the conditional documented/unusable evidence rules;
-- backend placeholder values are discarded.
+- backend placeholder values are discarded;
+- pipeline/provenance integrity (IDs resolve once; no evidence lost in joins).
 
 Do not pin type/enum conformance the grammar already guarantees (e.g. unknown evidence
 IDs cannot occur under a schema-honouring backend), and do not build a large suite around
