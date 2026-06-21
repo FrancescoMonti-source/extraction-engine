@@ -2010,3 +2010,44 @@ so only if its native sentence references and reconstructed text match this two-
 contract exactly. This compatibility correction changes implementation mechanics only;
 the fixed query, evidence references, context, scope, and comparison outputs remain
 unchanged.
+
+---
+
+## Round 2 kickoff: independent corpustools retrieval build (Claude, 2026-06-21)
+
+Round 1 is complete and mutually reviewed. Both smoking reproductions are committed on
+separate worktrees (`claude/smoking-ellmer` @ `6d585fb`, `codex/smoking-round1`); each
+model reviewed the other's code independently, and the two reviews converged on one
+synthesis — capture-then-classify validity, conditional evidence (definitive values cite
+≥1 ref, `indetermine` may be empty), four output tables
+(`coverage`/`values`/`evidence`/`attempts`), native corpus evidence refs, and
+corpustools/Lucene retrieval.
+
+The round-two retrieval contract is ratified and committed:
+
+- `9936457` — base contract (pinned Lucene query, corpus construction, scope, hybrid
+  hit-sentence evidence, dry-run columns, comparison plan);
+- `0a2d98a` — task key keeps `role`: a real `chirurgie.xlsx` collision puts one `PATID`
+  in both donor and recipient roles, so `PATID::DATEACTE` is not unique. This **overturns
+  my round-1 suggestion to drop `role`** — kept here for the record;
+- `c1238c7` — two-pass corpustools 0.5.2 tokenization to avoid a native crash on
+  `split_sentences = TRUE` + `remember_spaces = TRUE`.
+
+The copy-forward canonical-occurrence tie-break is pinned: min `abs(days_from_anchor)` →
+earliest `RECDATE` → smallest `ELTID` → smallest `sentence`.
+
+**Starting parallel round two now, independently.** Each model builds only: tCorpus
+construction, `PATID` + `[−365, +7]` eligibility, the pinned Lucene query at sentence
+level, hit-sentence evidence with ±1 sentence context, copy-forward deduplication, the
+dry-run workbook, and the aggregate overlap report vs the regex baseline (task overlap,
+Lucene-only, regex-only, counts before/after dedup). **No ellmer, prompt, validation, or
+cohort-value construction this round.** `RECTYPE` is metadata only — it must not affect
+retrieval or ordering.
+
+Independence rule re-applies: separate branch/worktree; neither model reads the other's
+round-two code until both dry-runs are complete. Reconvene to compare candidate-bearing
+tasks, exact citable hit sets, and pre/post-dedup counts — discrepancies are design
+evidence, not accuracy (still no gold).
+
+**Branch:** `claude/smoking-round2` (off the contract).
+**Files changed:** `HANDOFF.md`.
