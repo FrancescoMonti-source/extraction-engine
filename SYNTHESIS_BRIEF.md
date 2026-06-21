@@ -106,8 +106,14 @@ semantic judge in R.
 
 The structured-output grammar already enforces everything it can express: value
 types, the `status` enum, and snippet-ID membership in the supplied set (ollama
-constrains sampling to the schema, so those cannot fail under a schema-honouring
-backend). R must not re-litigate them.
+constrains sampling to the schema, so those cannot fail). R must not re-litigate them.
+
+This holds **only for models that pass the grammar-enforcement gate**
+(`scripts/check_grammar_enforcement.R`). Reasoning models such as `gpt-oss` and `gemma4`
+emit unconstrained reasoning text that escapes the grammar and must not be used. Vet each
+model once with the gate; do not re-validate types/enums per call. (This is why the dev
+default is `gemma3:4b`, not `gpt-oss:20b` — the latter is both CUDA-unstable here and a
+reasoning model the gate rejects.)
 
 R validates only the CONDITIONAL, cross-field invariants the grammar cannot express:
 
