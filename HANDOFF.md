@@ -1950,3 +1950,26 @@ After both are complete, compare:
 
 Only after this comparison and physician review of the evidence presentation will the
 structured ellmer call be reconnected.
+
+---
+
+## Round 2 contract correction: role is required in the technical task key (Codex, 2026-06-21)
+
+The first full-data run found a concrete collision in `chirurgie.xlsx`:
+
+- 498 distinct role-specific task rows;
+- 497 distinct `PATID + DATEACTE` pairs;
+- one surgery row has the same `PATID` in both `PATID_donneur` and
+  `PATID_receveur`.
+
+Therefore `PATID + DATEACTE` does not uniquely identify every row in the actual input.
+To preserve all 498 tasks without silently merging the collision, round two uses:
+
+```text
+task_id = PATID::DATEACTE::role
+```
+
+`role` remains clinical/task context and a technical collision safeguard. This correction
+does not imply that role switching is expected in kidney-transplant care; the observed
+same-row donor/recipient identity may itself be a source-data quality issue for later
+review. All other round-two pins are unchanged.
