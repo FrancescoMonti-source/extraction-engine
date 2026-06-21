@@ -1973,3 +1973,40 @@ task_id = PATID::DATEACTE::role
 does not imply that role switching is expected in kidney-transplant care; the observed
 same-row donor/recipient identity may itself be a source-data quality issue for later
 review. All other round-two pins are unchanged.
+
+---
+
+## Round 2 compatibility correction: corpustools 0.5.2 two-pass tokenization (Codex, 2026-06-21)
+
+The installed corpustools 0.5.2 process exits at native/package level, without an R
+condition, when a real D0840 document is passed with both:
+
+```r
+split_sentences = TRUE
+remember_spaces = TRUE
+```
+
+The failure reproduces on a single real document. Either option works when enabled
+without the other, so this is not a corpus-size failure.
+
+Round two therefore pins this compatibility path:
+
+1. Build the global search corpus with
+   `split_sentences = TRUE, remember_spaces = FALSE`.
+2. Run the fixed Lucene query and use its native `ELTID + sentence` locations.
+3. Identify documents needed for Lucene hits and the regex baseline.
+4. For only those relevant documents, build a text-reconstruction corpus with
+   `split_sentences = FALSE, remember_spaces = TRUE`.
+5. Join the two token tables by `ELTID + token_id`; take sentence labels from the first
+   corpus and original token spacing from the second.
+6. Assert equal token counts and token text before reconstructing sentence text.
+
+This two-pass method was verified on a real D0840 document: token counts, token IDs, and
+token text were identical across the two corpora. It preserves corpustools sentence
+numbering and exact displayed text while avoiding the crashing flag combination.
+
+If another environment can execute the original one-pass construction safely, it may do
+so only if its native sentence references and reconstructed text match this two-pass
+contract exactly. This compatibility correction changes implementation mechanics only;
+the fixed query, evidence references, context, scope, and comparison outputs remain
+unchanged.
