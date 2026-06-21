@@ -2051,3 +2051,72 @@ evidence, not accuracy (still no gold).
 
 **Branch:** `claude/smoking-round2` (off the contract).
 **Files changed:** `HANDOFF.md`.
+
+---
+
+## Round 3 architecture experiments: canonical corpus persists; subset-before-search wins ~8x (Claude, 2026-06-21)
+
+Both experiments were run once (per agreement, no duplicated benchmarking) on the real
+D0840 collection: **65,397 non-empty docs, 44,610,570 tokens, 6,118,673 sentences**. One
+single-pass canonical corpus (`split_sentences = TRUE, remember_spaces = FALSE`; **no
+keyword prefilter, no cohort filter, no second corpus**). Console output is
+aggregates/timings only; all PHI (the corpus, reconstructed sentences) stayed in
+gitignored `outputs/round3-experiments/`. Script: `scripts/round3_corpus_experiments.R`.
+
+### 1. Canonical-corpus persistence — PASS (foundational)
+
+- build: **115.7s**; ~734 MB tokens+meta in memory; R session peak ~2.5 GB;
+- `saveRDS` -> **65 MB** file (default gzip); save 11.8s; **load 1.3s**;
+- reloaded corpus: docs / tokens / **full meta all equal**; pinned-query hit set
+  **byte-identical** (10,377 hits); **search on the reloaded corpus works with no index
+  rebuild** (verified on the toy probe and at full scale).
+
+Conclusion: build once, persist, reuse. Load is ~90x cheaper than rebuild.
+
+### 2. Full-corpus search vs temporary metadata subset — SUBSET WINS ~8.4x
+
+Eligible docs (cohort ∩ `[-365, +7]` of any task) = **13,287 / 65,397 = 20.3%**. Median
+of 5 warm reps; both paths returned the **identical 1,856 eligible refs**:
+
+| path | subset copy | search | join | total | search RAM |
+|------|------------:|-------:|-----:|------:|-----------:|
+| A  full search + R join              | -     | 97.1s | 0.02s | **97.1s** | ~8.85 GB |
+| B  `subset_meta(copy=TRUE)` + search | 0.6s  | 10.9s | 0.02s | **11.5s** | 7.3M tok / 123 MB |
+
+**This overturns the stated default.** corpustools `search_contexts` is **not** a cheap
+index lookup; its cost scales ~linearly with corpus token count (97s over 44.6M tokens).
+Subsetting to eligible docs first is a real ~8.4x speedup **and** bounds memory. By the
+agreed criterion ("subset only if total measured performance improves"), `subset_meta` is
+now the **engine default**, not an optional optimization. `copy = TRUE` is mandatory (it
+leaves the canonical corpus untouched).
+
+Nuance: the win comes from the **temporal window** (20.3% of docs), not the cohort filter
+(97%) -- matching the prediction that cohort-only scoping is negligible (~3%). For a
+variable with no temporal anchor, eligible ≈ all cohort docs and the subset gives little;
+the 0.6s copy is then the only cost. Rule: always subset to the union of eligible docs;
+the magnitude tracks window selectivity.
+
+### 3. One-pass normalized reconstruction — confirmed, with a correction
+
+A deterministic untokenizer (single tested punctuation policy:
+`non - fumeur , 20 PA .` -> `non-fumeur, 20 PA.`) reconstructs readable sentence text
+from the canonical tokens alone, so the **two-pass exact-spacing corpus (`c1238c7`) is
+unnecessary for the product** -- it survives only as an optional exact-spacing mode.
+
+Correction to my first cut: reconstruct **only hit sentences ±1**, never whole documents.
+My initial Phase 3 rebuilt every sentence in each hit doc (**1,682,707 sentences,
+212.5s**) -- exactly the "enormous persisted sentence table" to avoid. Restricted to
+eligible hits ±1 (off the persisted corpus): **5,218 sentences in 0.9s** (~236x faster,
+~320x smaller). Fixed in the script; corrected runner `scripts/round3_phase3_recon.R`.
+
+### Engine default (validated end-to-end)
+
+persist canonical corpus -> load (1.3s) -> compute eligible doc IDs in R ->
+`subset_meta(doc_id %in% eligible, copy = TRUE)` (0.6s) -> one Lucene search on the
+subset (10.9s) -> R task-window join -> reconstruct hit ±1 sentences from the subset
+tokens (0.9s). No keyword prefilter, no regex baseline, no second corpus. This is exactly
+the "canonical corpus -> temporary subset to union of eligible documents -> one Lucene
+search -> exact task-window join in R" pattern, now measured rather than assumed.
+
+**Files changed:** `HANDOFF.md`, `scripts/round3_corpus_experiments.R`,
+`scripts/round3_phase3_recon.R`.
