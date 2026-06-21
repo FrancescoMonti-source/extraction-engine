@@ -2315,3 +2315,37 @@ After completion, compare:
 
 There is no adjudicated gold. Differences are design and review findings, not accuracy
 claims.
+
+---
+
+## Clean synthesis round opened (human + Claude + Codex, 2026-06-21)
+
+The smoking, corpustools-retrieval, and transplant-anastomosis rounds produced useful
+cross-review decisions, but those decisions were never integrated into one implementation.
+The two anastomosis branches still diverge directly from their original shared contract.
+
+The human decision is to run one more independent implementation round, this time as a
+clean synthesis rather than another experiment from the old branches. Claude and Codex
+may reuse validated artifacts, measurements, clinical contracts, and useful code; neither
+existing implementation is the required architecture.
+
+The durable shared brief is [`SYNTHESIS_BRIEF.md`](SYNTHESIS_BRIEF.md). It freezes the
+lessons that must affect both rebuilds, including:
+
+- reusable task/document eligibility rather than transplant-specific retrieval logic;
+- persisted canonical corpus plus temporary metadata subset before search;
+- task-local snippet IDs that identify the exact three-sentence text shown to the model,
+  with native hit coordinates retained separately as provenance;
+- minimal sufficient evidence, preferably one snippet per field;
+- explicit attempt, coverage, structural-validity, and physician-review states;
+- required multi-field summary, adjacent review evidence, bounded retries, and lean
+  high-risk contract tests.
+
+The round covers smoking and recipient anastomoses on small representative samples.
+It explicitly excludes duplicate full-cohort runs, a generic variable-specification
+language, and package extraction.
+
+This round has a mandatory terminal step that earlier rounds lacked: after comparison,
+Claude and Codex integrate the selected pieces into **one baseline implementation**
+before beginning another variable. The final baseline—not both independent builds—gets
+the next full-cohort run.
