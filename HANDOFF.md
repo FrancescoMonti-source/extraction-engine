@@ -2120,3 +2120,198 @@ search -> exact task-window join in R" pattern, now measured rather than assumed
 
 **Files changed:** `HANDOFF.md`, `scripts/round3_corpus_experiments.R`,
 `scripts/round3_phase3_recon.R`.
+
+---
+
+## Parallel anastomosis contract: D0840 recipient transplant event (human + Claude + Codex, 2026-06-21)
+
+Claude and Codex will independently implement D0840's recipient transplant-anastomosis
+task before reading each other's implementation. This round includes retrieval and
+structured extraction. It deliberately pins observable clinical behaviour while leaving
+retrieval-query design, call decomposition, schemas, module layout, and tests free.
+
+**Reference implementation:** `C:\Users\franc\Desktop\projects\D0840\D0840.R`,
+§4.7, lines 1459–1679.
+
+### Privacy-constrained inputs
+
+Source files:
+
+- `C:\Users\franc\Documents\Datasets\D0840\chirurgie.xlsx`;
+- `C:\Users\franc\Documents\Datasets\D0840\docs`;
+- the persisted canonical corpustools corpus derived from `docs`.
+
+`chirurgie.xlsx` also contains direct identifiers. The project adapter must read only
+the columns needed for this task:
+
+```text
+DATEACTE
+PATID_receveur
+EVTID_receveur
+```
+
+`CODEACTE_receveur` and `LABEL_ACTE_receveur` may be read only if the implementation
+actually uses them. Name, given-name, birth-date, NIP, and other direct-identifier
+columns must never be loaded, printed, or persisted by this task.
+
+From `docs`, use only:
+
+```text
+PATID
+EVTID
+ELTID
+RECDATE
+RECTYPE
+RECTXT / canonical corpus tokens
+```
+
+### Population, tasks, anchor, and scope
+
+- Recipients only. Donors are outside the task and must never contribute evidence.
+- One expected task per valid recipient transplant event.
+- The technical task identifier is:
+
+```text
+PATID::DATEACTE::EVTID
+```
+
+- `DATEACTE` is the surgery anchor retained as task metadata.
+- Scope is **event membership**, not a temporal window:
+
+```text
+docs.PATID == task.PATID
+AND docs.EVTID == task.EVTID
+```
+
+- There is no `[−365, +7]` or other date-window fallback.
+- An anchor may therefore be present even when the scope predicate is relational rather
+  than temporal. The generic engine must not assume that every anchored task uses a
+  date window.
+
+Verified D0840 input shape:
+
+```text
+recipient transplant tasks          244
+tasks with matching event documents 244
+legacy candidate-bearing tasks      242
+legacy candidate documents          763
+```
+
+### Clinical output fields
+
+Use the exact D0840 field names:
+
+```text
+transplantation_duree_anastomose_arterielle       integer minutes or null
+transplantation_type_anastomose_arterielle        short normalized string or null
+transplantation_localisation_anastomose_arterielle short normalized string or null
+transplantation_duree_anastomose_veineuse         integer minutes or null
+transplantation_type_anastomose_ureterale         short normalized string or null
+transplantation_resume_anastomoses                 short free-text summary
+```
+
+Normalized strings remain open labels, with examples rather than closed enums:
+
+- arterial type: `termino-laterale`, `latero-terminale`, `latero-laterale`,
+  `termino-terminale`;
+- arterial location: `artere iliaque externe`, `artere iliaque primitive`, `aorte`;
+- ureteral technique: `Gregoir`, `Politano-Leadbetter`.
+
+Closed vocabularies are premature and are not part of this contract.
+
+### Clinical decision rules
+
+- Use only supplied recipient-event evidence.
+- Ignore donor information.
+- Ignore total operative duration.
+- Arterial and venous durations are explicit integer minutes only.
+- If one combined arterial-plus-venous duration is documented without separable values,
+  both duration fields are null.
+- Warm or cold ischemia duration is never substituted for an anastomosis duration.
+- With several arterial anastomoses, return type and location only when a principal
+  anastomosis is identifiable.
+- If no principal arterial anastomosis is identifiable, arterial type and location are
+  null.
+- Return a ureteral technique only when a technique is explicitly named.
+
+### Evidence contract
+
+- The initial citable unit remains the corpustools hit sentence.
+- Native evidence references use `ELTID::sentence`.
+- Operative-report segmentation failures or list/table-like structures must be recorded
+  as findings; they are not silently solved by changing the citable unit mid-round.
+- Evidence is **per field**, not one task-level list. Every one of the five clinical
+  fields carries its own `evidence_refs` array.
+- A non-null field requires at least one supplied evidence reference.
+
+Null fields have two distinct evidence behaviours:
+
+1. **Not documented:** null; `evidence_refs` may be empty.
+2. **Explicitly documented but unusable:** null; cite the evidence that caused the null
+   decision. Examples include an inseparable combined duration or multiple arterial
+   anastomoses without an identifiable principal.
+
+`transplantation_resume_anastomoses` summarizes the retained evidence and consequential
+null decisions. Its evidence references are the union of the five field-level reference
+arrays, computed deterministically in R rather than selected independently by the
+model.
+
+### Coverage and outputs
+
+Keep the four operational views:
+
+- `coverage`: all 244 expected tasks, eligible document count, candidate count, and
+  processing state;
+- `values`: captured task output plus validity/review state;
+- `evidence`: one row per field/reference pair, materialized to source sentence and
+  provenance;
+- `attempts`: provider/model, latency, status, and error for each call.
+
+No candidate is a coverage state, not a clinical value. No model call or value row is
+created for a task without candidates; joining values back to the task table later
+produces `NA`.
+
+Console output is aggregate-only. Patient-level candidates, values, references, notes,
+and review workbooks remain under gitignored `outputs/`.
+
+### Free implementation choices
+
+The following are deliberately not pinned and are comparison targets:
+
+- Lucene query design and retrieval decomposition;
+- sentence-context width and prompt assembly;
+- one bundled call versus decomposed calls;
+- output schema structure and ellmer type builders;
+- validation representation;
+- function/module organization;
+- caching and performance choices;
+- deterministic and provider integration tests.
+
+Both implementations may use the validated canonical-corpus path:
+
+```text
+load persisted canonical corpus
+→ compute event-eligible document union
+→ subset_meta(copy = TRUE)
+→ retrieve once
+→ join hits to exact event tasks
+→ reconstruct only hit sentences and requested neighbours
+```
+
+### Independence and comparison
+
+Each implementation lives on its own branch/worktree. Neither model reads the other's
+anastomosis code before both declare the round complete.
+
+After completion, compare:
+
+1. coverage of all 244 recipient events;
+2. candidate-bearing tasks and native evidence-reference sets;
+3. handling of operative-report sentence segmentation;
+4. the five clinical values and field-level evidence;
+5. consequential-null classification and evidence;
+6. cross-field coupling, call decomposition, and partial missingness;
+7. physician readability, testability, runtime, and code ownership.
+
+There is no adjudicated gold. Differences are design and review findings, not accuracy
+claims.
