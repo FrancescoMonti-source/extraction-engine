@@ -1763,3 +1763,190 @@ unconstrained: use explicit, readable R and do not build a generic specification
 After both smoking implementations are compared and reconciled, repeat the independent
 exercise for transplant anastomoses. Decide after that whether a duplicate biology
 implementation still provides useful alignment evidence.
+
+---
+
+## Parallel round 2 contract: corpustools smoking retrieval (human + Claude + Codex, 2026-06-21)
+
+Round one converged on the smoking task and exposed retrieval as the main unresolved
+layer. Claude and Codex will therefore independently implement the same **retrieval-only**
+round two. Neither implementation may inspect the other before both are declared
+complete.
+
+This round stops before ellmer. Its deliverable is the evidence that a later model would
+receive, not a smoking-status prediction.
+
+### Fixed inputs and task scope
+
+- Source data: `C:\Users\franc\Documents\Datasets\D0840\docs` and
+  `chirurgie.xlsx`, resolved through the repository's `config/paths.R`.
+- One task is identified by `PATID + DATEACTE`; `role` is retained as task metadata,
+  not as part of task identity.
+- Eligible documents must match the task's `PATID` and satisfy
+  `RECDATE ∈ [DATEACTE − 365 days, DATEACTE + 7 days]`.
+- Internal execution order (scope then search, or search then scope) is free, provided
+  the resulting eligible hit set is identical.
+
+### Fixed tCorpus construction
+
+Construct the corpus from the minimal document fields
+`ELTID, PATID, RECDATE, RECTYPE, RECTXT`:
+
+```r
+corpustools::create_tcorpus(
+  docs_minimal,
+  text_columns = "RECTXT",
+  doc_column = "ELTID",
+  split_sentences = TRUE,
+  remember_spaces = TRUE,
+  verbose = FALSE
+)
+```
+
+All 65,408 D0840 `ELTID` values were verified unique and non-missing, so `ELTID` is the
+durable corpus `doc_id`.
+
+### Fixed Lucene query
+
+Run this exact query at sentence level:
+
+```r
+SMOKING_QUERY <- paste(
+  "tabac*",
+  "tabagi*",
+  "fumeu*",
+  "sevr*",
+  "cigarette*",
+  "paquet*",
+  "<(0* OR 1* OR 2* OR 3* OR 4* OR 5* OR 6* OR 7* OR 8* OR 9*) PA>",
+  "(0*PA OR 1*PA OR 2*PA OR 3*PA OR 4*PA OR 5*PA OR 6*PA OR 7*PA OR 8*PA OR 9*PA)",
+  sep = " OR "
+)
+
+corpustools::search_contexts(
+  tc,
+  SMOKING_QUERY,
+  context_level = "sentence",
+  as_ascii = FALSE
+)
+```
+
+The numeric clauses preserve D0840's `20 PA` / `20PA` retrieval without treating every
+standalone `PA` token as a smoking hit.
+
+### Citable evidence unit and context
+
+- One keyword-bearing sentence is one citable evidence unit.
+- Its durable reference is `ELTID::sentence`; corpustools `hit_id` is not used because
+  it is specific to a search run.
+- The immediately preceding and following sentences in the same document are shown as
+  `context_before` and `context_after`.
+- Neighbouring sentences are context only and are never independently citable unless
+  they are themselves Lucene hits.
+- No synthetic `S01`, `S02`, ... aliases are introduced in round two.
+
+### Copy-forward deduplication and canonical occurrence
+
+Deduplication occurs **within each task** using:
+
+```r
+normalized_hit_text <- tolower(stringr::str_squish(hit_text))
+```
+
+No punctuation removal or ASCII transliteration is applied.
+
+When several occurrences have the same `normalized_hit_text`, retain one canonical
+occurrence using this complete order:
+
+1. smallest `abs(days_from_anchor)`;
+2. if tied, earliest `RECDATE` (therefore the pre-anchor occurrence wins a symmetric
+   pre/post tie);
+3. if tied, lexicographically smallest character `ELTID`;
+4. if tied, smallest integer `sentence`.
+
+The retained `evidence_ref` is the canonical occurrence's `ELTID::sentence`.
+`n_duplicate_occurrences` is the number of collapsed occurrences **excluding** the
+canonical row. `duplicate_refs` and `duplicate_dates` contain the excluded occurrences,
+ordered by the same canonical-occurrence rule. Empty duplicate fields remain empty.
+
+### Retrieval behavior deliberately excluded
+
+- `RECTYPE` is preserved as metadata but does not filter, prioritize, or order hits.
+- There is no silent 12-hit or other top-N cutoff.
+- If an implementation offers a configurable cap for later experiments, the round-two
+  run uses no cap and must expose both the cap and a truncation flag.
+
+### Regex comparison baseline
+
+The D0840 regex remains a **baseline comparator, not a recall oracle or gold standard**:
+
+```r
+"tabac|tabagi|non[- ]?fumeur|ex[- ]?fumeur|ancien fumeur|fumeuse|fumeur|sevr|cigarette|paquet|\\b\\d+\\s*PA\\b"
+```
+
+Apply it case-insensitively to the same eligible sentence texts and compare native
+`ELTID::sentence` references. Report:
+
+- tasks found by both methods, Lucene only, and regex only;
+- sentence references found by both methods, Lucene only, and regex only;
+- counts before and after copy-forward deduplication.
+
+These are overlap/difference measurements only. Do not label them precision, recall, or
+accuracy because no adjudicated retrieval gold exists.
+
+### Fixed dry-run workbook contract
+
+The main deduplicated Lucene-hit sheet has one row per citable hit and these columns in
+this order:
+
+```text
+task_id
+evidence_ref
+hit_text
+context_before
+context_after
+PATID
+DATEACTE
+role
+ELTID
+sentence
+RECDATE
+RECTYPE
+days_from_anchor
+n_duplicate_occurrences
+duplicate_refs
+duplicate_dates
+```
+
+The workbook must also expose the task-level and sentence-reference comparison with the
+regex baseline. Formatting and additional diagnostic sheets are free. Patient-level
+workbooks remain under gitignored `outputs/`; the console prints aggregate counts only.
+
+### Free implementation choices
+
+The following may differ and are comparison targets:
+
+- tCorpus construction/caching architecture;
+- join and scoping strategy;
+- context reconstruction implementation;
+- deduplication implementation;
+- function/module organization;
+- workbook formatting and additional diagnostics;
+- deterministic tests beyond the fixed observable contract.
+
+### Completion and comparison
+
+Each implementation lives on its own branch/worktree. A round-two implementation is
+complete when it can build the corpus, produce the fixed dry-run workbook, report the
+regex/Lucene overlap aggregates, and run without ellmer or any model call.
+
+After both are complete, compare:
+
+1. task coverage;
+2. exact pre-dedup native sentence-reference sets;
+3. exact canonical post-dedup evidence-reference sets;
+4. retained hit/context text and duplicate provenance;
+5. implementation simplicity, testability, runtime, and physician readability.
+
+Only after this comparison and physician review of the evidence presentation will the
+structured ellmer call be reconnected.
