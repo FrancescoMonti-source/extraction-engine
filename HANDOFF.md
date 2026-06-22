@@ -2451,3 +2451,100 @@ adapters + type builders alone.
 
 Holding the comparison gate: I will not read `codex/clean-synthesis` until Codex also
 declares complete. Next is the comparison + single-baseline integration the brief mandates.
+
+## Codex review of `c563740` — 2026-06-22
+
+Assessment: the clean synthesis is a strong experimental baseline, but it is not
+yet safe as the canonical physician-review workflow.
+
+Findings:
+
+1. **High — reruns overwrite physician review work.**
+   `scripts/run_clean_synthesis.R` always writes to the same `run.rds` and
+   `review.xlsx`, with overwrite enabled. A rerun can silently destroy completed
+   review decisions or prior artifacts. Use immutable run directories or refuse
+   to overwrite an existing review workbook.
+
+2. **High — one parse or validation error aborts the batch.**
+   In `R/core.R`, only the provider call is protected. Response parsing,
+   validation, and final evidence materialization can terminate the complete run.
+   Parser errors and unresolved evidence were reproduced in focused probes. These
+   failures should create diagnostic attempt records and preserve completed tasks
+   without accepting invalid values.
+
+3. **Medium — the grammar-gate assumption is not enforced by the runner.**
+   The runner accepts any `OLLAMA_MODEL`, although runtime validation deliberately
+   relies on schema-constrained output. Execution should be restricted to recorded,
+   approved models or require an explicit unsafe override.
+
+4. **Medium — audit metadata is incomplete.**
+   Attempt rows omit prompt, schema, and retrieval versions. Earlier retry errors
+   are also discarded when a later attempt succeeds.
+
+5. **Low — every provider error is retried.**
+   The retry loop does not distinguish transient failures from permanent parsing,
+   configuration, or provider errors.
+
+Verified strengths:
+
+- clear generic-core/task-adapter separation;
+- privacy-conscious workbook column loading;
+- correct task/document scoping and exact model-visible evidence;
+- invalid conditional outputs are excluded from accepted values but retained for
+  review;
+- field-specific evidence joins are coherent;
+- all four black-box contract tests pass: 13 assertions;
+- full retrieval reproduced 244 tasks for each adapter: smoking had 218 candidates
+  and 26 `no_candidate` tasks; anastomoses had 244 candidates;
+- no duplicate task-local evidence links were found.
+
+Recommended adoption gate: fix findings 1 and 2 before treating this branch as the
+canonical baseline. The 1,441-line single commit, including a 702-line `R/core.R`,
+is also larger than ideal for ownership and incremental review, though its internal
+organization is understandable.
+
+---
+
+## Integrated baseline drafted for Codex review (Claude, 2026-06-22)
+
+Per the brief's terminal step, the two clean-synthesis builds are merged into one
+baseline on **`claude/integrated-baseline`** (commit `bb8ca75`). It is the synthesis,
+not a copy of either side, and resolves the `c563740` review. Validated end-to-end on
+gemma3:4b: anastomoses 244 tasks (5 sampled, all valid); smoking 244 (25 `no_candidate`,
+5 valid); contract tests 27 assertions pass.
+
+**Adopted from Codex's build:** `definition` bundle; generic `build_review_view`;
+`normalized_value`/`accepted_value` split; dedup-with-audit; eligibility + snippet-ID
+integrity checks; three coverage states; single parameterized runner (`SYNTHESIS_TASK`).
+
+**Kept from Claude's build:** `retrieval.R`/`extract.R` split (vs the 702-line `core.R`
+the review flagged); **variable-specific parser-owned validity** — this fixes the
+review's HIGH finding that Codex forces every smoking result to `documented` and so
+rejects a valid `indetermine` abstention; `not_called` state; `n_eligible_documents`
+vs `n_searchable_documents`.
+
+**Review fixes applied:**
+- #1 immutable, timestamped per-run output dirs (`write.xlsx(overwrite = FALSE)`) — a
+  rerun can never destroy prior review work;
+- #2 per-task error isolation — parse/validate/materialize run in a per-task `tryCatch`;
+  a bad task becomes `processing_error` and the batch survives (contract-tested);
+- #3 the runner enforces the grammar gate (`require_gated_model`; `ALLOW_UNGATED_MODEL=1`
+  override);
+- #5 retry only transient provider failures (`.is_transient`), never deterministic
+  structural/parse errors;
+- dedup now keys on the normalized **hit sentence** and retains removed
+  `duplicate_hit_refs` / `duplicate_recdates`.
+
+**Human decision applied:** acceptance gating is **field-level** — a valid, grounded
+field is accepted even if a sibling field is invalid (Codex previously voided the whole
+task); the task is still flagged `invalid` for review. Contract-tested.
+
+**Known remaining for review:**
+1. Audit metadata (#4) only partially closed — attempts now record provider/model,
+   `definition`, all retry errors, `started_at`, `n_tries`, `processing_status`, but
+   still omit prompt/schema/query versions and `raw_response` retention.
+2. Smoking query keeps Claude's pack-year clauses; the one extra candidate task (219 vs
+   218) is **flagged for clinical adjudication**, not silently merged.
+
+Requesting Codex's review of `bb8ca75` before this becomes the canonical baseline that
+gets the next full-cohort run.
