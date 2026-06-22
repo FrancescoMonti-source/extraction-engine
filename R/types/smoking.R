@@ -1,14 +1,13 @@
 # =============================================================================
 # types/smoking.R — response-type library entry for peri-operative smoking
-# A flat single-variable shape (enum value + evidence + note), NOT the nested
-# evidenced-field shape anastomoses uses. The same engine consumes it because
-# parse_smoking() normalizes to the engine's (values, evidence) contract.
-# Demonstrates: one type_object != one fixed shape across variables.
+# Flat single-variable shape. Parser OWNS validity with smoking's OWN rule
+# (definitive status => >=1 evidence; indetermine may abstain with none) — it
+# deliberately does NOT use standard_field_validity, which would wrongly reject a
+# valid abstention. This is the lesson from the c563740 review.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
 
-# indetermine is a legitimate 4th value (contradictory OR insufficient), not a null.
 SMOKING_STATUSES <- c("actif", "sevre", "non_fumeur", "indetermine")
 
 SMOKING_SYSTEM_PROMPT <- paste(
@@ -34,8 +33,7 @@ type_smoking <- function(snippet_ids) {
             ellmer::type_enum(snippet_ids),
             "Identifiants S.. justifiant la reponse ; [] seulement si indetermine."),
         decision_note = ellmer::type_string(
-            "Explication clinique tres courte, surtout en cas de conflit ou d'ambiguite.")
-    )
+            "Explication clinique tres courte, surtout en cas de conflit ou d'ambiguite."))
 }
 
 prompt_smoking <- function(task, candidates) {
@@ -43,39 +41,32 @@ prompt_smoking <- function(task, candidates) {
         sprintf("Date de chirurgie: %s", format(task$anchor_date[[1]], "%Y-%m-%d")),
         "Chaque extrait = contexte avant [phrase declenchante] contexte apres.",
         "Tout l'extrait est citable par son identifiant S...",
-        "",
-        "Extraits numerotes:",
-        format_snippet_block(candidates),
-        sep = "\n"
-    )
+        "", "Extraits numerotes:", format_snippet_block(candidates),
+        sep = "\n")
 }
 
-# Normalize to the engine contract. Single field 'smoking_status'. A definitive
-# status (not indetermine) requires >=1 evidence; indetermine may cite none.
-parse_smoking <- function(raw, snippet_ids) {
-    status <- if (length(raw$smoking_status) == 1L) as.character(raw$smoking_status) else NA_character_
-    ids <- unique(as.character(unlist(raw$evidence_ids)))
-    ids <- intersect(ids[!is.na(ids) & nzchar(ids)], snippet_ids)
-    note <- if (is.null(raw$decision_note) || !length(raw$decision_note)) NA_character_
-            else trimws(as.character(raw$decision_note[[1]]))
-
-    reasons <- character()
+parse_smoking <- function(result, snippet_ids) {
+    status <- if (length(result$smoking_status) == 1L) as.character(result$smoking_status) else NA_character_
+    ids <- intersect(unique(as.character(unlist(result$evidence_ids))), snippet_ids)
+    note <- if (is.null(result$decision_note) || !length(result$decision_note)) NA_character_
+            else trimws(as.character(result$decision_note[[1]]))
+    reason <- character()
     if (!status %in% SMOKING_STATUSES) {
-        reasons <- c(reasons, "invalid status")
+        reason <- c(reason, "invalid status")
     } else if (status != "indetermine" && !length(ids)) {
-        reasons <- c(reasons, "definitive status without evidence")
+        reason <- c(reason, "definitive status without evidence")
     }
+    fields <- tibble::tibble(
+        field = "smoking_status", status = status, normalized_value = status,
+        evidence_ids = list(ids),
+        field_validity = if (length(reason)) "invalid" else "valid",
+        validity_reason = paste(reason, collapse = "; "))
+    list(fields = fields, summary = note)
+}
 
-    list(
-        values = tibble::tibble(
-            smoking_status = status, decision_note = note,
-            task_valid = !length(reasons),
-            task_reason = paste(reasons, collapse = " | ")
-        ),
-        evidence = if (length(ids)) {
-            tibble::tibble(field = "smoking_status", snippet_id = ids)
-        } else {
-            tibble::tibble(field = character(), snippet_id = character())
-        }
-    )
+smoking_definition <- function() {
+    new_task_definition(
+        name = "smoking", system_prompt = SMOKING_SYSTEM_PROMPT,
+        type_builder = type_smoking, prompt_builder = prompt_smoking,
+        parser = parse_smoking, summary_field = NULL, summary_required = FALSE)
 }

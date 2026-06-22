@@ -22,6 +22,20 @@ clean_mixed_date <- function(x) {
     out
 }
 
+# Models that have passed scripts/check_grammar_enforcement.R (grammar-constrained
+# output is the premise of runtime validation). Extraction must refuse ungated
+# models unless explicitly overridden, since reasoning models fail open to prose.
+APPROVED_MODELS <- c("gemma3:4b")
+
+require_gated_model <- function(model) {
+    if (!model %in% APPROVED_MODELS && !nzchar(Sys.getenv("ALLOW_UNGATED_MODEL"))) {
+        stop(sprintf(
+            "Model '%s' has not passed the grammar gate (scripts/check_grammar_enforcement.R). Approved: %s. Set ALLOW_UNGATED_MODEL=1 to override.",
+            model, paste(APPROVED_MODELS, collapse = ", ")), call. = FALSE)
+    }
+    invisible(model)
+}
+
 # Path to the persisted canonical corpus: shared dataset dir, else round-3 output.
 corpus_path <- function() {
     shared <- path_data("D0840", "canonical_tcorpus.rds")

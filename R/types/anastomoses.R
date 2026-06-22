@@ -1,7 +1,7 @@
 # =============================================================================
 # types/anastomoses.R — response-type library entry for recipient anastomoses
-# A per-task BUILDER (legal snippet_ids are task-specific), plus the prompt and
-# the deterministic parser/validator the engine calls. Exact D0840 field names.
+# Nested evidenced fields + summary. Parser OWNS validity via the shared
+# standard_field_validity helper and returns the engine's fields/summary contract.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
@@ -36,8 +36,6 @@ ANASTOMOSES_SYSTEM_PROMPT <- paste(
     sep = "\n"
 )
 
-# Per-task structured type. Each clinical field is a nested {status, value,
-# evidence_ids}; the summary is a plain string (its evidence is the R-side union).
 type_anastomoses <- function(snippet_ids) {
     evidenced <- function(kind) {
         vt <- if (kind == "integer") {
@@ -52,8 +50,7 @@ type_anastomoses <- function(snippet_ids) {
             value = vt,
             evidence_ids = ellmer::type_array(
                 ellmer::type_enum(snippet_ids),
-                "Identifiants S.. justifiant la decision; [] seulement si not_documented.")
-        )
+                "Identifiants S.. justifiant la decision; [] seulement si not_documented."))
     }
     args <- setNames(lapply(unname(ANASTOMOSES_FIELDS), evidenced), names(ANASTOMOSES_FIELDS))
     args[[ANASTOMOSES_SUMMARY]] <- ellmer::type_string(
@@ -66,41 +63,37 @@ prompt_anastomoses <- function(task, candidates) {
         sprintf("Date de chirurgie receveur: %s", format(task$anchor_date[[1]], "%Y-%m-%d")),
         "Chaque extrait = contexte avant [phrase declenchante] contexte apres.",
         "Tout l'extrait est citable par son identifiant S...",
-        "",
-        "Extraits numerotes:",
-        format_snippet_block(candidates),
-        sep = "\n"
-    )
+        "", "Extraits numerotes:", format_snippet_block(candidates),
+        sep = "\n")
 }
 
-# Deterministic parse + validate. Returns one-row values tibble (+ task_valid /
-# task_reason / summary) and a (field, snippet_id) evidence tibble.
-parse_anastomoses <- function(raw, snippet_ids) {
-    fields <- names(ANASTOMOSES_FIELDS)
-    vr <- list(); ev <- list(); reasons <- character(); all_refs <- character()
-    for (f in fields) {
-        node <- raw[[f]]
-        ef <- evidenced_field(node$status, node$value, node$evidence_ids,
-                              is_integer = ANASTOMOSES_FIELDS[[f]] == "integer")
-        ids <- intersect(ef$evidence_ids, snippet_ids)
-        vr[[f]] <- ef$value
-        vr[[paste0(f, "_status")]] <- ef$status
-        if (!ef$valid) reasons <- c(reasons, sprintf("%s: %s", f, ef$reason))
-        if (length(ids)) {
-            ev[[length(ev) + 1L]] <- tibble::tibble(field = f, snippet_id = ids)
-            all_refs <- union(all_refs, ids)
-        }
-    }
-    summary <- raw[[ANASTOMOSES_SUMMARY]]
+# Returns the engine contract: fields tibble (+ field_validity) and summary.
+parse_anastomoses <- function(result, snippet_ids) {
+    rows <- lapply(names(ANASTOMOSES_FIELDS), function(f) {
+        node <- result[[f]]
+        status <- if (length(node$status) == 1L) as.character(node$status) else NA_character_
+        ids <- intersect(unique(as.character(unlist(node$evidence_ids))), snippet_ids)
+        is_int <- ANASTOMOSES_FIELDS[[f]] == "integer"
+        raw <- node$value
+        present <- !is.null(raw) && length(raw) == 1L && !is.na(raw)
+        # status-authoritative: a value is meaningful only when documented.
+        nv <- if (identical(status, "documented") && present) {
+            if (is_int) as.character(as.integer(raw)) else trimws(as.character(raw))
+        } else NA_character_
+        v <- standard_field_validity(status, nv, ids)
+        tibble::tibble(field = f, status = status, normalized_value = nv,
+                       evidence_ids = list(ids),
+                       field_validity = v$field_validity, validity_reason = v$validity_reason)
+    })
+    summary <- result[[ANASTOMOSES_SUMMARY]]
     summary <- if (is.null(summary) || !length(summary)) NA_character_ else trimws(as.character(summary[[1]]))
-    if (is.na(summary) || !nzchar(summary)) { summary <- NA_character_; reasons <- c(reasons, "summary missing") }
-    if (length(all_refs)) ev[[length(ev) + 1L]] <- tibble::tibble(field = ANASTOMOSES_SUMMARY, snippet_id = all_refs)
+    list(fields = bind_rows(rows), summary = summary)
+}
 
-    vr[[ANASTOMOSES_SUMMARY]] <- summary
-    vr$task_valid <- !length(reasons)
-    vr$task_reason <- paste(reasons, collapse = " | ")
-    list(
-        values = tibble::as_tibble(vr),
-        evidence = if (length(ev)) bind_rows(ev) else tibble::tibble(field = character(), snippet_id = character())
-    )
+anastomoses_definition <- function() {
+    new_task_definition(
+        name = "anastomoses", system_prompt = ANASTOMOSES_SYSTEM_PROMPT,
+        type_builder = type_anastomoses, prompt_builder = prompt_anastomoses,
+        parser = parse_anastomoses, summary_field = ANASTOMOSES_SUMMARY,
+        summary_required = TRUE)
 }
