@@ -2862,3 +2862,65 @@ Validation on the unified branch:
 This completes branch unification only. The selected structured provenance/audit
 features identified in the parallel comparison still need their dedicated synthesis
 commit before this branch is promoted as the final canonical baseline.
+
+---
+
+## Canonical structured synthesis implemented (Codex, 2026-06-22)
+
+Step 3 was executed in parallel with disjoint ownership: one implementation pass on
+the vectorized structured engine, one loader/runner/test pass, and an independent
+read-only contract review. The canonical result keeps Claude's explicit,
+high-performance measurement functions and ports the selected Codex audit/provenance
+features without introducing the deferred specification framework.
+
+### Canonical structured contract
+
+Both `measure_diabetes()` and `measure_hyperkalaemia()` now return:
+
+- `coverage`: complete task census with source/scope/candidate/usability counts and
+  `no_eligible_source` / `no_candidate` / `measured` / `invalid`;
+- `values`: `normalized_value` separated from gated `accepted_value`, plus validity,
+  reason, and the retained numeric measurement/time where relevant;
+- `evidence`: concise physician evidence selected by exact `source_row_id`;
+- `observations`: all scoped source rows, including non-target and malformed rows,
+  with row-level selection/usability reasons;
+- `derivation`: exactly one deterministic audit row per task, including skipped and
+  no-candidate states.
+
+Every source row preserves native `PATID`, `EVTID`, `ELTID`, and `BIOL_ID` where
+available. Loaders assign deterministic run-local row IDs, reject missing source
+columns, and preserve the Europe/Paris clinical date. Selected evidence must resolve
+exactly once in both the source and scoped observations. The production wrapper turns
+unexpected execution failures into a complete `processing_error` derivation census.
+Non-target biology rows retain the identifiers, date, and analyte needed for coverage,
+but unrelated result values are not persisted.
+
+### Measurement decisions retained
+
+- Diabetes remains an explicit E10-E14 presence rule over overlapping stay intervals.
+  Missing `DATSORT` is a named policy (`use_start` by default; `exclude` supported).
+  Malformed rows are retained but excluded; a mixed usable/malformed task remains
+  measurable, while an all-malformed scoped set is invalid.
+- Biology is loaded before concept filtering, so a subject with biology but no
+  in-scope `K.K` is `no_candidate`, not `no_eligible_source`.
+- `TYPEANA == "K.K"` fixes potassium interpretation; unit is not a dimension.
+- Mixed usable/unparseable potassium rows remain measurable. A task is invalid only
+  when target rows exist in scope but none is parseable.
+- Hyperkalaemia evidence is exactly the deterministic maximum usable potassium row
+  for both `present` and `absent` (strict threshold `> 5.0`; tie-break by date then
+  source row ID).
+
+### Validation
+
+- combined suite: 76/76 assertions pass (31 text, 45 structured);
+- real task-level regression against `39954b2`: zero state differences and zero value
+  differences for both variables across all 244 tasks;
+- real outputs: diabetes 64 present / 180 absent; hyperkalaemia 119 present /
+  125 absent; all tasks measured;
+- audit artifacts: 244 derivation rows per variable, 399 diabetes evidence rows,
+  244 hyperkalaemia evidence rows, and unique evidence links;
+- production runner successfully wrote a complete RDS artifact and review workbook
+  with coverage, values, evidence, observations, derivations, and review views.
+
+Formal `variable_spec` / `concept_spec` constructors remain deferred. The code still
+uses two explicit owner-readable measurement functions.

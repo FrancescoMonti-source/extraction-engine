@@ -10,12 +10,126 @@
 
 suppressWarnings(suppressMessages(library(dplyr)))
 
+# --- contract / provenance helpers ------------------------------------------
+
+.require_columns <- function(x, required, label) {
+    missing <- setdiff(required, names(x))
+    if (length(missing)) {
+        stop(label, " requires: ", paste(required, collapse = ", "),
+             "; missing: ", paste(missing, collapse = ", "), call. = FALSE)
+    }
+}
+
+.validate_structured_inputs <- function(tasks, source_rows, source_required, source_label) {
+    .require_columns(tasks, c("task_id", "PATID", "anchor_date"), "tasks")
+    .require_columns(source_rows, source_required, source_label)
+
+    task_ids <- as.character(tasks$task_id)
+    source_ids <- as.character(source_rows$source_row_id)
+    if (anyNA(task_ids) || any(!nzchar(task_ids)) || anyDuplicated(task_ids)) {
+        stop("tasks$task_id must be non-missing and unique", call. = FALSE)
+    }
+    if (anyNA(tasks$PATID) || any(!nzchar(as.character(tasks$PATID)))) {
+        stop("tasks$PATID must be non-missing", call. = FALSE)
+    }
+    if (anyNA(tasks$anchor_date)) {
+        stop("tasks$anchor_date must be non-missing", call. = FALSE)
+    }
+    if (anyNA(source_ids) || any(!nzchar(source_ids)) || anyDuplicated(source_ids)) {
+        stop(source_label, "$source_row_id must be non-missing and unique",
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+.clinical_date <- function(x) {
+    if (inherits(x, "POSIXt")) {
+        return(as.Date(x, tz = "Europe/Paris"))
+    }
+    as.Date(x)
+}
+
+.assert_evidence_resolves <- function(evidence, observations, source_rows) {
+    if (!nrow(evidence)) return(invisible(TRUE))
+
+    evidence_key <- paste(evidence$task_id, evidence$source_row_id, sep = "\r")
+    observation_key <- paste(observations$task_id, observations$source_row_id, sep = "\r")
+    if (anyDuplicated(evidence_key)) {
+        stop("selected evidence contains duplicate task/source-row links",
+             call. = FALSE)
+    }
+    source_matches <- vapply(
+        evidence$source_row_id,
+        function(id) sum(source_rows$source_row_id == id),
+        integer(1))
+    if (any(source_matches != 1L)) {
+        stop("selected evidence source_row_id must resolve exactly once in source rows",
+             call. = FALSE)
+    }
+    observation_matches <- vapply(
+        evidence_key,
+        function(key) sum(observation_key == key),
+        integer(1))
+    if (any(observation_matches != 1L)) {
+        stop("selected evidence must resolve exactly once in observations",
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+.structured_execution_error <- function(tasks, field, measure_name, error) {
+    coverage <- tasks %>%
+        mutate(
+            n_source_rows = NA_integer_,
+            n_scope_rows = NA_integer_,
+            processing_state = "processing_error")
+    values <- tibble::tibble(
+        task_id = character(), field = character(),
+        normalized_value = character(), accepted_value = character(),
+        measurement_value = double(), measurement_time = as.Date(character()),
+        field_validity = character(), validity_reason = character())
+    evidence <- tibble::tibble(
+        task_id = character(), field = character(), source = character(),
+        source_row_id = character(), evidence_ref = character(),
+        evidence_summary = character())
+    derivation <- tasks %>%
+        transmute(
+            task_id,
+            field = field,
+            rule = paste0("execution:", measure_name),
+            n_source_rows = NA_integer_,
+            n_scope_rows = NA_integer_,
+            status = "processing_error",
+            error = error)
+    list(
+        coverage = coverage, values = values, evidence = evidence,
+        observations = tibble::tibble(), derivation = derivation)
+}
+
+# Production wrapper: programming/data-shape failures remain visible as a
+# complete derivation census rather than disappearing with an aborted script.
+run_structured_measurement <- function(measure, source_rows, tasks, ..., field) {
+    measure_name <- deparse(substitute(measure))
+    tryCatch(
+        measure(source_rows, tasks, ...),
+        error = function(e) {
+            .structured_execution_error(
+                tasks, field, measure_name, conditionMessage(e))
+        })
+}
+
 # --- scope helpers (point / interval) ----------------------------------------
+
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
-# interval [start,end] overlaps [lo,hi]; a missing end is treated as the start
-# (admission-day point) -- an explicit, documented policy, never silent +Inf.
-.overlaps_interval <- function(start, end, lo, hi) {
-    end_eff <- dplyr::coalesce(end, start)
+
+.overlaps_interval <- function(start, end, lo, hi,
+                               missing_datsort = c("use_start", "exclude")) {
+    missing_datsort <- match.arg(missing_datsort)
+    end_eff <- if (identical(missing_datsort, "use_start")) {
+        dplyr::coalesce(end, start)
+    } else {
+        end
+    }
     !is.na(start) & start <= hi & end_eff >= lo
 }
 
@@ -23,130 +137,368 @@ suppressWarnings(suppressMessages(library(dplyr)))
 code_in_family <- function(codes, families) {
     norm <- function(x) toupper(gsub("[^A-Za-z0-9]", "", as.character(x)))
     fam <- norm(families)
-    vapply(norm(codes), function(c) any(startsWith(c, fam)), logical(1))
+    fam <- fam[!is.na(fam) & nzchar(fam)]
+    vapply(norm(codes), function(code) {
+        !is.na(code) && nzchar(code) && length(fam) && any(startsWith(code, fam))
+    }, logical(1))
 }
 
-# Build the coverage census + processing_state for a deterministic variable.
-# patient_has_source: tibble(task_id, has_source); per_task counts: n_eligible, n_matched.
-.structured_coverage <- function(tasks, has_source, counts) {
-    tasks %>%
-        left_join(has_source, by = "task_id") %>%
-        left_join(counts, by = "task_id") %>%
-        mutate(
-            has_source = coalesce(has_source, FALSE),
-            n_eligible = coalesce(as.integer(n_eligible), 0L),
-            n_matched  = coalesce(as.integer(n_matched), 0L),
-            processing_state = case_when(
-                !has_source            ~ "no_eligible_source",
-                n_eligible == 0L       ~ "no_candidate",
-                TRUE                   ~ "measured"))
+.usable_icd10_code <- function(codes) {
+    normalized <- toupper(gsub("[^A-Za-z0-9]", "", as.character(codes)))
+    !is.na(normalized) & grepl("^[A-Z][0-9]{2}[A-Z0-9]{0,4}$", normalized)
 }
 
 # --- diabetes: ICD-10 code presence over pmsi$diag (interval time) ------------
 DIABETES_CODES <- c("E10", "E11", "E12", "E13", "E14")
 
-# diag: pmsi$diag rows (PATID, EVTID, diag, DATENT, DATSORT).
+# diag: pmsi$diag rows
+#   source_row_id, PATID, EVTID, ELTID, diag, DATENT, DATSORT.
 # tasks: task_id, PATID, anchor_date.
 measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
-                             from_days = -1825L, to_days = 7L) {
+                             from_days = -1825L, to_days = 7L,
+                             missing_datsort = c("use_start", "exclude")) {
+    missing_datsort <- match.arg(missing_datsort)
+    .validate_structured_inputs(
+        tasks, diag,
+        c("source_row_id", "PATID", "EVTID", "ELTID", "diag", "DATENT", "DATSORT"),
+        "diagnosis rows")
+
     diag <- diag %>% transmute(
-        PATID = as.character(PATID), EVTID = as.character(EVTID),
-        code = as.character(diag), DATENT = as.Date(DATENT), DATSORT = as.Date(DATSORT))
-    tkeys <- distinct(tasks, task_id, PATID, anchor_date)
+        source_row_id = as.character(source_row_id),
+        PATID = as.character(PATID),
+        EVTID = as.character(EVTID),
+        ELTID = as.character(ELTID),
+        diag = as.character(diag),
+        DATENT = .clinical_date(DATENT),
+        DATSORT = .clinical_date(DATSORT))
+    tkeys <- tasks %>% transmute(
+        task_id = as.character(task_id),
+        PATID = as.character(PATID),
+        anchor_date = .clinical_date(anchor_date))
 
-    has_source <- tkeys %>% transmute(task_id, has_source = PATID %in% unique(diag$PATID))
+    source_counts <- diag %>%
+        filter(!is.na(PATID)) %>%
+        count(PATID, name = "n_source_rows")
+    missing_end_counts <- diag %>%
+        filter(!is.na(PATID), is.na(DATSORT)) %>%
+        count(PATID, name = "n_missing_datsort")
 
-    elig <- diag %>%
+    observations <- diag %>%
         inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
-        filter(.overlaps_interval(DATENT, DATSORT, anchor_date + from_days, anchor_date + to_days)) %>%
-        mutate(is_target = code_in_family(code, codes))
+        filter(.overlaps_interval(
+            DATENT, DATSORT, anchor_date + from_days, anchor_date + to_days,
+            missing_datsort = missing_datsort)) %>%
+        mutate(
+            field = "diabetes_status",
+            source = "diagnosis",
+            in_scope = TRUE,
+            usable = .usable_icd10_code(diag),
+            invalid = !usable,
+            is_target = usable & code_in_family(diag, codes),
+            selected_evidence = is_target,
+            scope_reason = if_else(
+                is.na(DATSORT),
+                "interval overlap; missing DATSORT handled with use_start",
+                "interval overlap"),
+            observation_reason = case_when(
+                is_target ~ "ICD-10 code matches the declared diabetes family",
+                !usable ~ "malformed or missing ICD-10 code; excluded",
+                TRUE ~ "diagnosis code outside the declared diabetes family"))
 
-    counts <- elig %>% group_by(task_id) %>%
-        summarise(n_eligible = n(), n_matched = sum(is_target), .groups = "drop")
-    coverage <- .structured_coverage(tkeys, has_source, counts)
-
-    values <- coverage %>%
-        filter(processing_state == "measured") %>%
-        transmute(task_id, field = "diabetes_status",
-                  value = if_else(n_matched > 0L, "present", "absent"),
-                  n_eligible, n_matched,
-                  field_validity = "valid", validity_reason = "")
-
-    evidence <- elig %>%
-        filter(is_target) %>%
-        semi_join(filter(values, value == "present"), by = "task_id") %>%
-        transmute(task_id, field = "diabetes_status",
-                  evidence_ref = sprintf("%s::%s", EVTID, code),
-                  EVTID, code, DATENT, DATSORT)
-
-    derivation <- values %>%
-        transmute(task_id, field, rule = "icd10_code_presence",
-                  n_eligible, n_matched, status = "measured", error = NA_character_)
-
-    list(coverage = coverage, values = values, evidence = evidence, derivation = derivation)
-}
-
-# --- hyperkalaemia: analyte value threshold over biol (point time) -----------
-# In this warehouse a given analyte is always reported in a fixed unit, so the
-# unit column carries no information and is intentionally ignored. The loader
-# selects the analyte (TYPEANA == "K.K") and labels it "K"; the only data-quality
-# concern left is an unparseable numeric result.
-POTASSIUM_CODES <- c("K", "POTASSIUM", "KALIEMIE")
-
-# biol: result rows (PATID, BIOL_ID, DATEXAM, analyte, value).
-# tasks: task_id, PATID, anchor_date.
-measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
-                                  threshold = 5.0, from_days = -7L, to_days = 7L) {
-    biol <- biol %>% transmute(
-        PATID = as.character(PATID), BIOL_ID = as.character(BIOL_ID),
-        DATEXAM = as.Date(DATEXAM), analyte = as.character(analyte),
-        value = suppressWarnings(as.numeric(value)))
-    tkeys <- distinct(tasks, task_id, PATID, anchor_date)
-    has_source <- tkeys %>% transmute(task_id, has_source = PATID %in% unique(biol$PATID))
-
-    elig <- biol %>%
-        inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
-        filter(.within_point(DATEXAM, anchor_date + from_days, anchor_date + to_days),
-               toupper(analyte) %in% toupper(analytes)) %>%
-        mutate(usable = !is.na(value), above = usable & value > threshold)
-
-    counts <- elig %>% group_by(task_id) %>%
-        summarise(n_eligible = n(), n_usable = sum(usable), n_above = sum(above),
-                  max_value = suppressWarnings(max(value[usable], na.rm = TRUE)),
-                  .groups = "drop") %>%
-        mutate(max_value = ifelse(is.finite(max_value), max_value, NA_real_))
-
+    counts <- observations %>%
+        group_by(task_id) %>%
+        summarise(
+            n_scope_rows = n(),
+            n_usable = sum(usable),
+            n_unusable = sum(invalid),
+            n_matching_rows = sum(is_target),
+            .groups = "drop")
     coverage <- tkeys %>%
-        left_join(has_source, by = "task_id") %>%
+        left_join(source_counts, by = "PATID") %>%
+        left_join(missing_end_counts, by = "PATID") %>%
         left_join(counts, by = "task_id") %>%
-        mutate(has_source = coalesce(has_source, FALSE),
-               across(c(n_eligible, n_usable, n_above), ~ coalesce(as.integer(.x), 0L)),
-               processing_state = case_when(
-                   !has_source       ~ "no_eligible_source",
-                   n_eligible == 0L  ~ "no_candidate",
-                   n_usable == 0L    ~ "invalid",     # potassium in scope but no usable unit/value
-                   TRUE              ~ "measured"))
+        mutate(
+            across(c(n_source_rows, n_missing_datsort, n_scope_rows, n_usable,
+                     n_unusable, n_matching_rows),
+                   ~ coalesce(as.integer(.x), 0L)),
+            processing_state = case_when(
+                n_source_rows == 0L ~ "no_eligible_source",
+                n_scope_rows == 0L ~ "no_candidate",
+                n_usable == 0L ~ "invalid",
+                TRUE ~ "measured"))
 
     values <- coverage %>%
         filter(processing_state %in% c("measured", "invalid")) %>%
-        transmute(task_id, field = "hyperkalaemia",
-                  value = case_when(processing_state == "invalid" ~ NA_character_,
-                                    n_above > 0L ~ "present", TRUE ~ "absent"),
-                  n_eligible, n_usable, n_above, max_value,
-                  field_validity = if_else(processing_state == "invalid", "invalid", "valid"),
-                  validity_reason = if_else(processing_state == "invalid",
-                                            "no usable potassium result (unit/parse)", ""))
+        mutate(normalized_value = case_when(
+            processing_state == "invalid" ~ NA_character_,
+            n_matching_rows > 0L ~ "present",
+            TRUE ~ "absent")) %>%
+        transmute(
+            task_id,
+            field = "diabetes_status",
+            normalized_value,
+            accepted_value = if_else(
+                processing_state == "measured", normalized_value, NA_character_),
+            measurement_value = NA_real_,
+            measurement_time = as.Date(NA),
+            field_validity = if_else(
+                processing_state == "measured", "valid", "invalid"),
+            validity_reason = if_else(
+                processing_state == "measured", "",
+                "diagnosis rows are in scope but none has a usable ICD-10 code"),
+            n_scope_rows,
+            n_usable,
+            n_unusable,
+            n_matching_rows)
 
-    evidence <- elig %>%
-        filter(above) %>%
-        semi_join(filter(values, value == "present"), by = "task_id") %>%
-        transmute(task_id, field = "hyperkalaemia",
-                  evidence_ref = sprintf("%s::K", BIOL_ID),
-                  BIOL_ID, value, DATEXAM)
+    evidence <- observations %>%
+        filter(selected_evidence) %>%
+        transmute(
+            task_id, field, source, source_row_id,
+            evidence_ref = source_row_id,
+            evidence_summary = sprintf(
+                "%s (%s to %s)", diag, DATENT,
+                ifelse(is.na(DATSORT), "missing", as.character(DATSORT))),
+            PATID, EVTID, ELTID, diag, DATENT, DATSORT)
 
-    derivation <- values %>%
-        transmute(task_id, field, rule = sprintf("analyte_above_%.1f", threshold),
-                  n_eligible, n_usable, n_above, status = field_validity, error = NA_character_)
+    rule <- sprintf(
+        "same_subject; interval_overlap[%d,%+d]; ICD-10 prefixes %s; missing_DATSORT=%s",
+        as.integer(from_days), as.integer(to_days), paste(codes, collapse = ","),
+        missing_datsort)
+    derivation <- coverage %>%
+        transmute(
+            task_id,
+            field = "diabetes_status",
+            rule = rule,
+            n_source_rows,
+            n_scope_rows,
+            n_usable,
+            n_unusable,
+            n_matching_rows,
+            status = processing_state,
+            error = NA_character_)
 
-    list(coverage = coverage, values = values, evidence = evidence, derivation = derivation)
+    .assert_evidence_resolves(evidence, observations, diag)
+    list(
+        coverage = coverage,
+        values = values,
+        evidence = evidence,
+        observations = observations,
+        derivation = derivation)
+}
+
+# --- hyperkalaemia: analyte value threshold over biol (point time) -----------
+# In this warehouse the analyte code fixes the interpretation; unit is not a
+# measurement dimension. Concept selection belongs here, not in the loader.
+POTASSIUM_CODES <- "K.K"
+
+# biol: normalized result rows
+#   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM,
+#   analyte, value, value_raw.
+# tasks: task_id, PATID, anchor_date.
+measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
+                                  threshold = 5.0, from_days = -7L, to_days = 7L) {
+    .validate_structured_inputs(
+        tasks, biol,
+        c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID", "DATEXAM",
+          "analyte", "value", "value_raw"),
+        "biology rows")
+
+    biol <- biol %>% transmute(
+        source_row_id = as.character(source_row_id),
+        PATID = as.character(PATID),
+        EVTID = as.character(EVTID),
+        ELTID = as.character(ELTID),
+        BIOL_ID = as.character(BIOL_ID),
+        DATEXAM = .clinical_date(DATEXAM),
+        analyte = as.character(analyte),
+        value = suppressWarnings(as.numeric(value)),
+        value_raw = as.character(value_raw))
+    tkeys <- tasks %>% transmute(
+        task_id = as.character(task_id),
+        PATID = as.character(PATID),
+        anchor_date = .clinical_date(anchor_date))
+    target_analytes <- toupper(trimws(as.character(analytes)))
+
+    source_counts <- biol %>%
+        filter(!is.na(PATID)) %>%
+        count(PATID, name = "n_source_rows")
+
+    observations <- biol %>%
+        inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
+        filter(.within_point(
+            DATEXAM, anchor_date + from_days, anchor_date + to_days)) %>%
+        mutate(
+            field = "hyperkalaemia",
+            source = "biology",
+            in_scope = TRUE,
+            is_target = !is.na(analyte) &
+                toupper(trimws(analyte)) %in% target_analytes,
+            usable = is_target & !is.na(value),
+            invalid = is_target & !usable,
+            above_threshold = usable & value > threshold,
+            scope_reason = "point time inside the task window",
+            observation_reason = case_when(
+                !is_target ~ "analyte outside the declared potassium concept",
+                !usable ~ "potassium value is unparseable and excluded",
+                above_threshold ~ "usable potassium value above the strict threshold",
+                TRUE ~ "usable potassium value at or below the strict threshold"),
+            # Non-target rows establish source/scope coverage; their unrelated
+            # result values are unnecessary in persisted structured artifacts.
+            value_raw = if_else(is_target, value_raw, NA_character_),
+            value = if_else(is_target, value, NA_real_))
+
+    selected <- observations %>%
+        filter(usable) %>%
+        arrange(task_id, desc(value), DATEXAM, source_row_id) %>%
+        group_by(task_id) %>%
+        slice_head(n = 1L) %>%
+        ungroup() %>%
+        transmute(
+            task_id,
+            source_row_id,
+            measurement_value = value,
+            measurement_time = DATEXAM,
+            selected_evidence = TRUE)
+    observations <- observations %>%
+        left_join(
+            select(selected, task_id, source_row_id, selected_evidence),
+            by = c("task_id", "source_row_id")) %>%
+        mutate(selected_evidence = coalesce(selected_evidence, FALSE))
+
+    counts <- observations %>%
+        group_by(task_id) %>%
+        summarise(
+            n_scope_rows = n(),
+            n_candidate_rows = sum(is_target),
+            n_usable = sum(usable),
+            n_unusable = sum(invalid),
+            n_above = sum(above_threshold),
+            .groups = "drop")
+
+    coverage <- tkeys %>%
+        left_join(source_counts, by = "PATID") %>%
+        left_join(counts, by = "task_id") %>%
+        left_join(select(selected, task_id, measurement_value, measurement_time),
+                  by = "task_id") %>%
+        mutate(
+            across(
+                c(n_source_rows, n_scope_rows, n_candidate_rows, n_usable,
+                  n_unusable, n_above),
+                ~ coalesce(as.integer(.x), 0L)),
+            processing_state = case_when(
+                n_source_rows == 0L ~ "no_eligible_source",
+                n_candidate_rows == 0L ~ "no_candidate",
+                n_usable == 0L ~ "invalid",
+                TRUE ~ "measured"))
+
+    values <- coverage %>%
+        filter(processing_state %in% c("measured", "invalid")) %>%
+        mutate(normalized_value = case_when(
+            processing_state == "invalid" ~ NA_character_,
+            measurement_value > threshold ~ "present",
+            TRUE ~ "absent")) %>%
+        transmute(
+            task_id,
+            field = "hyperkalaemia",
+            normalized_value,
+            accepted_value = if_else(
+                processing_state == "measured", normalized_value, NA_character_),
+            measurement_value,
+            measurement_time,
+            field_validity = if_else(
+                processing_state == "measured", "valid", "invalid"),
+            validity_reason = if_else(
+                processing_state == "measured", "",
+                "potassium rows are in scope but none has a parseable value"),
+            n_scope_rows,
+            n_candidate_rows,
+            n_usable,
+            n_unusable,
+            n_above)
+
+    evidence <- observations %>%
+        filter(selected_evidence) %>%
+        transmute(
+            task_id, field, source, source_row_id,
+            evidence_ref = source_row_id,
+            evidence_summary = sprintf(
+                "%s = %s on %s", analyte,
+                ifelse(is.na(value_raw) | !nzchar(value_raw), value, value_raw),
+                DATEXAM),
+            PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
+
+    rule <- sprintf(
+        paste0(
+            "same_subject; point_window[%d,%+d]; analyte=%s; value > %s; ",
+            "maximum usable value selected (ties: DATEXAM, source_row_id); unit ignored"),
+        as.integer(from_days), as.integer(to_days),
+        paste(analytes, collapse = ","), format(threshold, trim = TRUE))
+    derivation <- coverage %>%
+        transmute(
+            task_id,
+            field = "hyperkalaemia",
+            rule = rule,
+            n_source_rows,
+            n_scope_rows,
+            n_candidate_rows,
+            n_usable,
+            n_unusable,
+            n_above,
+            status = processing_state,
+            error = NA_character_)
+
+    .assert_evidence_resolves(evidence, observations, biol)
+    list(
+        coverage = coverage,
+        values = values,
+        evidence = evidence,
+        observations = observations,
+        derivation = derivation)
+}
+
+# One row per task/field with selected evidence collapsed for physician review.
+build_structured_review_view <- function(values, evidence) {
+    .require_columns(
+        values,
+        c("task_id", "field", "normalized_value", "accepted_value",
+          "measurement_value", "measurement_time", "field_validity",
+          "validity_reason"),
+        "structured values")
+    if (!nrow(values)) {
+        return(values %>%
+            mutate(
+                n_evidence = integer(),
+                source_row_ids = character(),
+                evidence = character(),
+                review_decision = character(),
+                review_note = character()))
+    }
+
+    ev <- if (nrow(evidence)) {
+        .require_columns(
+            evidence,
+            c("task_id", "field", "source_row_id", "evidence_summary"),
+            "structured evidence")
+        evidence %>%
+            group_by(task_id, field) %>%
+            summarise(
+                n_evidence = n(),
+                source_row_ids = paste(source_row_id, collapse = ";"),
+                evidence = paste(evidence_summary, collapse = "\n"),
+                .groups = "drop")
+    } else {
+        tibble::tibble(
+            task_id = character(), field = character(), n_evidence = integer(),
+            source_row_ids = character(), evidence = character())
+    }
+
+    values %>%
+        left_join(ev, by = c("task_id", "field")) %>%
+        mutate(
+            n_evidence = coalesce(n_evidence, 0L),
+            source_row_ids = coalesce(source_row_ids, ""),
+            evidence = coalesce(evidence, ""),
+            review_decision = "",
+            review_note = "")
 }

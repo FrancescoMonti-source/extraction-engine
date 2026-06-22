@@ -82,29 +82,69 @@ read_workbook_columns <- function(path, columns) {
 # previous UTC day -- the timezone regression to avoid.
 WAREHOUSE_TZ <- "Europe/Paris"
 
+local_clinical_date <- function(x) {
+    if (inherits(x, "Date")) return(x)
+    if (inherits(x, "POSIXt")) return(as.Date(x, tz = WAREHOUSE_TZ))
+    as.Date(x)
+}
+
+source_row_ids <- function(source, n) {
+    sprintf("%s:%08d", source, seq_len(n))
+}
+
+require_source_columns <- function(x, columns, source) {
+    missing <- setdiff(columns, names(x))
+    if (length(missing)) {
+        stop(source, ": missing columns: ", paste(missing, collapse = ", "),
+             call. = FALSE)
+    }
+    invisible(x)
+}
+
 # pmsi$diag: one row per ICD-10 diagnosis, attached to the parent stay interval.
 load_pmsi_diag <- function(pmsi_path) {
     x <- readRDS(pmsi_path)
     d <- if (is.data.frame(x)) x else x$diag
+    if (!is.data.frame(d)) {
+        stop("pmsi diag: expected a data frame or an object with $diag.", call. = FALSE)
+    }
+    require_source_columns(
+        d, c("PATID", "EVTID", "ELTID", "diag", "DATENT", "DATSORT"), "pmsi diag")
     tibble::tibble(
-        PATID   = as.character(d$PATID),
-        EVTID   = as.character(d$EVTID),
-        diag    = as.character(d$diag),
-        DATENT  = as.Date(d$DATENT,  tz = WAREHOUSE_TZ),
-        DATSORT = as.Date(d$DATSORT, tz = WAREHOUSE_TZ))
+        source_row_id = source_row_ids("pmsi_diag", nrow(d)),
+        PATID   = d$PATID,
+        EVTID   = d$EVTID,
+        ELTID   = d$ELTID,
+        diag    = d$diag,
+        DATENT  = local_clinical_date(d$DATENT),
+        DATSORT = local_clinical_date(d$DATSORT))
 }
 
-# biol results filtered to one analyte. Serum/plasma potassium is TYPEANA "K.K";
-# its unit is fixed by org convention, so UNITE is intentionally not read.
-load_biol_analyte <- function(bio_path, typeana, label) {
-    readRDS(bio_path) %>%
-        filter(as.character(TYPEANA) == typeana) %>%
-        transmute(
-            PATID   = as.character(PATID),
-            BIOL_ID = as.character(biol_ID),
-            DATEXAM = as.Date(DATEXAM, tz = WAREHOUSE_TZ),
-            analyte = label,
-            value   = suppressWarnings(as.numeric(NUMRES)))
+# All biology results. Serum/plasma potassium is TYPEANA "K.K"; its unit is
+# fixed by organisational convention, so UNITE is intentionally not read.
+load_biol_results <- function(bio_path) {
+    d <- readRDS(bio_path)
+    if (!is.data.frame(d)) {
+        stop("biol results: expected a data frame.", call. = FALSE)
+    }
+    require_source_columns(
+        d, c("PATID", "EVTID", "ELTID", "DATEXAM", "TYPEANA", "NUMRES"),
+        "biol results")
+    biol_id <- if ("biol_ID" %in% names(d)) {
+        d$biol_ID
+    } else if ("BIOL_ID" %in% names(d)) {
+        d$BIOL_ID
+    } else {
+        stop("biol results: missing column biol_ID.", call. = FALSE)
+    }
+    tibble::tibble(
+        source_row_id = source_row_ids("biol", nrow(d)),
+        PATID   = d$PATID,
+        EVTID   = d$EVTID,
+        ELTID   = d$ELTID,
+        BIOL_ID = biol_id,
+        DATEXAM = local_clinical_date(d$DATEXAM),
+        analyte = d$TYPEANA,
+        value_raw = d$NUMRES,
+        value = suppressWarnings(as.numeric(as.character(d$NUMRES))))
 }
-
-load_potassium <- function(bio_path) load_biol_analyte(bio_path, "K.K", "K")

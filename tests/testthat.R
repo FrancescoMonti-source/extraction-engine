@@ -5,6 +5,7 @@ suppressWarnings(suppressMessages(library(testthat)))
 
 source("R/retrieval.R")
 source("R/extract.R")
+source("R/data.R")
 source("R/structured.R")
 source("R/adapter_anastomoses.R")
 source("R/adapter_smoking.R")
