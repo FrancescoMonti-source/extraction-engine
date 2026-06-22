@@ -86,19 +86,21 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
     list(coverage = coverage, values = values, evidence = evidence, derivation = derivation)
 }
 
-# --- hyperkalaemia: analyte value threshold over biol (point time, units) -----
-# Synthetic-friendly labels now; real analyte codes supplied when biol is exported.
+# --- hyperkalaemia: analyte value threshold over biol (point time) -----------
+# In this warehouse a given analyte is always reported in a fixed unit, so the
+# unit column carries no information and is intentionally ignored. The loader
+# selects the analyte (TYPEANA == "K.K") and labels it "K"; the only data-quality
+# concern left is an unparseable numeric result.
 POTASSIUM_CODES <- c("K", "POTASSIUM", "KALIEMIE")
 
-# biol: result rows (PATID, BIOL_ID, DATEXAM, analyte, value, unit).
+# biol: result rows (PATID, BIOL_ID, DATEXAM, analyte, value).
 # tasks: task_id, PATID, anchor_date.
 measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
-                                  accepted_units = c("mmol/L", "mEq/L"),
                                   threshold = 5.0, from_days = -7L, to_days = 7L) {
     biol <- biol %>% transmute(
         PATID = as.character(PATID), BIOL_ID = as.character(BIOL_ID),
         DATEXAM = as.Date(DATEXAM), analyte = as.character(analyte),
-        value = suppressWarnings(as.numeric(value)), unit = as.character(unit))
+        value = suppressWarnings(as.numeric(value)))
     tkeys <- distinct(tasks, task_id, PATID, anchor_date)
     has_source <- tkeys %>% transmute(task_id, has_source = PATID %in% unique(biol$PATID))
 
@@ -106,8 +108,7 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
         inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
         filter(.within_point(DATEXAM, anchor_date + from_days, anchor_date + to_days),
                toupper(analyte) %in% toupper(analytes)) %>%
-        mutate(usable = unit %in% accepted_units & !is.na(value),
-               above = usable & value > threshold)
+        mutate(usable = !is.na(value), above = usable & value > threshold)
 
     counts <- elig %>% group_by(task_id) %>%
         summarise(n_eligible = n(), n_usable = sum(usable), n_above = sum(above),
@@ -141,7 +142,7 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
         semi_join(filter(values, value == "present"), by = "task_id") %>%
         transmute(task_id, field = "hyperkalaemia",
                   evidence_ref = sprintf("%s::K", BIOL_ID),
-                  BIOL_ID, value, unit, DATEXAM)
+                  BIOL_ID, value, DATEXAM)
 
     derivation <- values %>%
         transmute(task_id, field, rule = sprintf("analyte_above_%.1f", threshold),

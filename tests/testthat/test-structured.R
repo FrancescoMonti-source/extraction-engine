@@ -59,8 +59,7 @@ hyperk_fixture <- function() {
         BIOL_ID = c("B1", "B2", "B3", "B5"),
         DATEXAM = as.Date(c("2025-03-11", "2025-03-09", "2024-01-01", "2025-03-10")),
         analyte = "K",
-        value   = c(5.6, 4.2, 6.0, 5.5),
-        unit    = c("mmol/L", "mmol/L", "mmol/L", "g/L"))   # P5 has an unusable unit
+        value   = c("5.6", "4.2", "6.0", "hemolyse"))   # P5 result is unparseable
     tasks <- tibble::tibble(
         task_id = c("P1::t", "P2::t", "P3::t", "P4::t", "P5::t"),
         PATID   = c("P1", "P2", "P3", "P4", "P5"),
@@ -75,16 +74,16 @@ test_that("hyperkalaemia: present / absent / no_candidate / no_eligible_source /
     expect_equal(ps, c("measured", "measured", "no_candidate", "no_eligible_source", "invalid"))
     expect_equal(r$values$value[r$values$task_id == "P1::t"], "present")
     expect_equal(r$values$value[r$values$task_id == "P2::t"], "absent")
-    expect_true(is.na(r$values$value[r$values$task_id == "P5::t"]))      # bad unit -> invalid
+    expect_true(is.na(r$values$value[r$values$task_id == "P5::t"]))      # unparseable -> invalid
     expect_equal(r$values$field_validity[r$values$task_id == "P5::t"], "invalid")
     # provenance: present cites the >threshold result; absent cites nothing
     expect_true(any(grepl("^B1::K", r$evidence$evidence_ref)))
     expect_equal(nrow(r$evidence[r$evidence$task_id == "P2::t", ]), 0L)
 })
 
-test_that("threshold is strict: exactly 5.0 mmol/L is absent", {
+test_that("threshold is strict: exactly 5.0 is absent", {
     biol <- tibble::tibble(PATID = "P1", BIOL_ID = "B1", DATEXAM = as.Date("2025-03-10"),
-                           analyte = "K", value = 5.0, unit = "mmol/L")
+                           analyte = "K", value = 5.0)
     tasks <- tibble::tibble(task_id = "P1::t", PATID = "P1", anchor_date = as.Date("2025-03-10"))
     r <- measure_hyperkalaemia(biol, tasks)
     expect_equal(r$values$value, "absent")
