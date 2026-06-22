@@ -54,11 +54,21 @@ flatten <- function(df) {
     }
     df
 }
+# write.xlsx(asTable=TRUE) errors ("subscript out of bounds") on a 0-column frame.
+# A run where every call fails (or every task abstains) legitimately yields empty
+# values/evidence/review and must still emit its coverage census, so swap any empty
+# sheet for a one-row marker rather than crash.
+safe_sheet <- function(df) {
+    if (is.null(df) || nrow(df) == 0L || ncol(df) == 0L) {
+        tibble::tibble(note = "(no rows in this run)")
+    } else df
+}
 openxlsx::write.xlsx(
-    list(physician_review = review, coverage = run$coverage,
-         values = flatten(run$values), evidence = run$evidence,
-         attempts = dplyr::select(run$attempts, -dplyr::any_of("raw_response")),
-         candidates = flatten(run$candidates)),
+    lapply(list(physician_review = review, coverage = run$coverage,
+                values = flatten(run$values), evidence = run$evidence,
+                attempts = dplyr::select(run$attempts, -dplyr::any_of("raw_response")),
+                candidates = flatten(run$candidates)),
+           safe_sheet),
     file.path(out_dir, "review.xlsx"), asTable = TRUE, overwrite = FALSE)
 
 cat(sprintf("========== INTEGRATED BASELINE: %s (model=%s) ==========\n", TASK, MODEL))

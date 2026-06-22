@@ -2998,3 +2998,61 @@ current `master`, with a focused diff and validation.
 The next agreed implementation step is the full-cohort smoking and anastomosis text
 run with review artifacts. Generic `variable_spec` / `concept_spec` constructors remain
 deferred until that operational evidence is reviewed.
+
+---
+
+## Full-cohort text run complete + write-robustness fix — Claude → Codex / human (2026-06-22)
+
+**Branch.** `claude/full-cohort-text-run`, created clean from canonical `master`
+(`03a9a78`) per the baseline rule. Stale `claude/structured-variables` left untouched,
+not merged. One commit carries the fix below.
+
+**Goal (the agreed next step).** Full-cohort smoking + anastomosis **text** run with
+review artifacts, every candidate-bearing task sent to the model (`SYNTHESIS_N=0` ->
+`sample_n=0` -> no cap), not the earlier 3-task smoke. Ran on the approved gated model
+`gemma3:4b`. Console aggregates only; PHI to gitignored
+`outputs/integrated/<task>/<stamp>_<pid>/` (immutable per run).
+
+**Results.**
+
+- Smoking (244 tasks): 219 `valid`, 25 `no_candidate`; 219/219 calls ok, 0 error,
+  0 processing_error; `smoking_status` valid 219/219; evidence 666, review 219;
+  latency med/max 2413/6111 ms.
+- Anastomoses (244 tasks): 187 `valid`, 54 `invalid`, 3 `model_error`; 241/244 calls
+  ok; evidence 2236, review 1205 (241x5). Per-field valid/invalid of 241 completed:
+  arterial duration 241/0; venous duration 227/14; arterial location 206/35;
+  arterial type 213/28; ureteral type 203/38. Latency med/max 6196/9380 ms.
+
+Field-level acceptance is confirmed on real data: each of the 54 `invalid` anastomosis
+tasks had >=1 field fail its rule while its valid sibling fields were still accepted.
+The 3 `model_error` tasks fail closed and route to review.
+
+**Bug found + fixed (this is in the canonical runner too).**
+`scripts/run_synthesis.R` calls `openxlsx::write.xlsx(..., asTable = TRUE)`, which raises
+"subscript out of bounds" on a **0-column** data frame. A run where every call fails or
+every task abstains legitimately yields empty `values`/`evidence`/review tibbles
+(`tibble::tibble()` is 0x0), so the runner **crashed instead of emitting its coverage
+census** -- directly against the fail-closed + coverage discipline. Reproduced on a real
+saved `run.rds` (an all-`model_error` run): the only sheets that failed the write were
+the three empty ones; `coverage`/`attempts`/`candidates` wrote fine.
+
+Fix: a `safe_sheet()` guard maps any 0-row-or-0-col sheet to a one-row marker
+(`tibble(note = "(no rows in this run)")`) before the write; `asTable = TRUE` is kept for
+the rest. Validated against the degenerate run (now writes a full workbook carrying the
+219-error census) and against the live full run above (non-empty path unaffected).
+Relaying to Codex to review and integrate into `master` rather than merging it myself.
+
+**Operational note (not code).** The first launch produced an all-`model_error` run
+because the local Ollama server was not running ("Can't find locally running ollama");
+the engine correctly did not retry (non-transient error) and failed closed. Restarting
+Ollama + a single structured probe fixed it. Lesson: pre-flight the provider before a
+long run.
+
+**Files changed.** `scripts/run_synthesis.R` (safe_sheet guard), `HANDOFF.md` (this note).
+
+**Open questions for Codex / human.**
+1. Integrate the `safe_sheet` marker as-is, or instead give `values`/`evidence` their
+   column schema in the empty case (preserves headers, but those columns are
+   variable-specific, so the generic marker was simpler)?
+2. The 3 anastomosis `model_error`s -- inspect the error strings (transient vs
+   deterministic), or accept fail-closed-to-review as sufficient at this stage?
