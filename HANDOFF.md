@@ -2668,3 +2668,87 @@ synthetic-fixture tests.
 - **build approach:** **parallel** — Claude and Codex build independently from this
   contract, then integrate (same workflow as smoking/anastomoses); neither reads the
   other's structured code until both declare complete.
+
+---
+
+## Structured parallel comparison complete (Codex, 2026-06-22)
+
+Compared:
+
+- Claude `claude/structured-variables` at `39954b2`;
+- Codex `codex/structured-variables` at `0189d92`.
+
+Both independent suites pass (`49/49` Claude, `44/44` Codex). The comparison used the
+same 244 recipient-surgery tasks and the real normalized exports, printing aggregates
+only: 32,470 cohort diagnosis rows and 867,753 cohort biology rows.
+
+### Observable results
+
+Diabetes agrees exactly:
+
+- coverage: 244/244 `measured`;
+- values: 64 `present`, 180 `absent`;
+- task-level state disagreements: 0;
+- task-level value disagreements: 0.
+
+Hyperkalaemia exposed two separate decisions:
+
+1. Codex's original unit validation made 200/244 tasks `invalid` because the exported
+   unit field is not usable as a measurement dimension. The organization-level source
+   convention is that `TYPEANA == "K.K"` fixes the analyte/unit interpretation, so the
+   unit dimension remains dropped as decided in `13da5d7`.
+2. After neutralizing the unit field, Codex still made 10 tasks `invalid` because each
+   contained one unparseable potassium result alongside usable results. Every one of
+   those tasks had at least 10 usable in-scope results (116 usable rows total); Claude's
+   usable-row policy measured 7 as `present` and 3 as `absent`. Decision: invalid source
+   rows are recorded and excluded, but do not invalidate a task when usable evidence
+   remains. A task is `invalid` only when potassium rows exist in scope but none is
+   usable.
+
+With that policy, the canonical hyperkalaemia result is Claude's real-run result:
+244/244 `measured`, 119 `present`, 125 `absent`.
+
+### Implementation comparison
+
+Claude's vectorized rules are the better execution base:
+
+- explicit `measure_diabetes()` / `measure_hyperkalaemia()` functions are easier to
+  own than introducing a generic structured-definition framework before the planned
+  specification round;
+- real loaders and the aggregate-only structured runner already work on the exports;
+- runtime on this machine was about 0.08 s for diabetes and 0.07 s for hyperkalaemia,
+  versus about 3.0 s and 8.9 s for Codex's per-task generic runner.
+
+The synthesis must port these Codex strengths:
+
+- preserve native `PATID` / `EVTID` / `ELTID` / `BIOL_ID` fields and add an exact,
+  unique run-local `source_row_id`;
+- assert that every selected evidence row resolves exactly once;
+- separate `normalized_value` from `accepted_value`;
+- create a derivation record for every task, including `no_eligible_source` and
+  `no_candidate`;
+- retain the maximum usable potassium row and its `DATEXAM` as the evidence for both
+  `present` and `absent`;
+- provide a structured physician-review view;
+- keep the Europe/Paris clinical-date conversion regression test;
+- keep missing-`DATSORT` handling explicit (`use_start` default, with the policy named
+  in the derivation metadata).
+
+The synthesis should not copy every non-diabetes diagnosis into the physician evidence
+view: Codex produced 8,996 diabetes evidence rows because all examined rows supported
+negative tasks. Preserve the complete scoped-row provenance in a structured
+observations/source artifact, while keeping selected physician evidence concise
+(matching diabetes rows for `present`; the maximum potassium row for either
+hyperkalaemia value). Coverage and derivation counts explain closed negative results.
+
+One loader boundary also needs correction during integration: load normalized biology
+rows with their native identifiers first, then select `TYPEANA == "K.K"` in the concept
+rule. Prefiltering potassium in `load_potassium()` makes `no_eligible_source` mean “no
+potassium anywhere” instead of the contracted “no biology source rows for this task.”
+
+### Integration decision
+
+Use Claude's explicit vectorized implementation and real runner as the base, port the
+listed Codex audit/provenance features, and keep formal `variable_spec` /
+`concept_spec` constructors deferred. This completes the comparison gate; no structured
+implementation merge was performed in this step.
