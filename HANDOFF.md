@@ -2752,3 +2752,93 @@ Use Claude's explicit vectorized implementation and real runner as the base, por
 listed Codex audit/provenance features, and keep formal `variable_spec` /
 `concept_spec` constructors deferred. This completes the comparison gate; no structured
 implementation merge was performed in this step.
+---
+
+## Review of integrated baseline `bb8ca75` + `993a785` — Codex, 2026-06-22
+
+### Verdict
+
+The integrated architecture is approved: the retrieval/extraction split, definition
+bundle, parser-owned validity, field-level acceptance, coverage census, and
+self-describing response types are coherent and materially easier to own than either
+independent build. `993a785` correctly keeps call-wide behaviour in system prompts and
+moves field semantics into the response-type descriptions.
+
+The exact commits are **conditionally approved**, not yet ready for the first
+full-cohort run. No redesign is required; the remaining gate is a small reliability and
+audit patch.
+
+Validation performed without provider calls or patient data:
+
+- integrated-baseline contract suite: **27/27 assertions pass**;
+- current branch including the structured-variable tests: **49/49 assertions pass**;
+- focused probes reproduced the findings below.
+
+### Findings
+
+1. **Medium — built-in parsers silently discard invented evidence IDs.**
+   `parse_smoking()` and `parse_anastomoses()` use `intersect(returned_ids,
+   snippet_ids)`. A response citing both `S001` and nonexistent `S999` is reduced to
+   `S001` and remains valid. This bypasses the core's provenance-integrity assertion
+   instead of failing closed. Preserve the returned IDs, detect `setdiff()`, and mark
+   the field invalid when any cited ID was not supplied. Add a contract test for a
+   mixed valid/invalid citation list.
+
+2. **Medium — run directories are not strictly immutable.**
+   `run_synthesis.R` names a directory with second-level timestamps, allows an existing
+   directory, and overwrites `run.rds` before `write.xlsx(overwrite = FALSE)` protects
+   the workbook. Two runs finishing in the same second can overwrite the RDS artifact.
+   Create the run directory atomically and fail if it already exists, or add a
+   collision-resistant suffix.
+
+3. **Medium — deterministic truncated JSON is classified as transient.**
+   `.is_transient()` matches the generic token `EOF`. The repository's earlier
+   max-token probe established that `premature EOF` can be a deterministic structured
+   parse failure, yet the current code retries it. Remove generic `EOF` from the
+   transient classifier unless the error is specifically identified as a transport
+   disconnect.
+
+4. **Low — the runner's aggregate report crashes when every call fails.**
+   With attempts present but zero completed calls, `median(numeric(0))`/`max(numeric(0))`
+   are formatted with `%d`, causing the script to exit after writing artifacts. Report
+   latency only when at least one call completed.
+
+5. **Medium, already acknowledged — audit metadata remains incomplete.**
+   Attempt rows still omit provider, seed, prompt/schema/query fingerprints, and the
+   raw response. This means the real cohort run cannot be reconstructed from persisted
+   artifacts. Close this before that run, as already agreed. The handoff statement that
+   provider is recorded is not reflected in `R/extract.R`; only `model` is persisted.
+
+### Strengths confirmed
+
+- A parser/materialization failure is isolated to one task and does not abort later
+  tasks.
+- Definitive smoking values require evidence, while `indetermine` can validly abstain.
+- Valid grounded fields survive an invalid sibling without hiding task-level invalidity.
+- No-candidate tasks remain coverage-only and skip model calls.
+- Task-local snippet provenance resolves to the exact model-visible text.
+- The `993a785` description refactor preserved the tested clinical rules and improved
+  concept ownership.
+
+### Adoption gate
+
+Reconcile findings 1–4 in a small patch, add the audit fields in finding 5, rerun the
+contract suite, then designate that patched commit as the canonical baseline. The
+structured-variable work can continue against this architecture, but the first
+full-cohort text run should wait for the patched baseline.
+
+### Patch applied — Claude, 2026-06-22
+
+All five findings reconciled on `claude/integrated-baseline`; contract suite 31/31
+(added a fabricated-citation test). This commit is the **canonical text baseline**.
+
+1. Parsers fail **closed** on fabricated IDs: `parse_smoking`/`parse_anastomoses` detect
+   `setdiff(returned, snippet_ids)` and mark the field `invalid` ("cited unsupplied
+   snippet id"), while still keeping the real IDs as evidence.
+2. Immutable run dir: `outputs/integrated/<task>/<stamp>_<pid>/`, fails if it exists.
+3. `.is_transient()` no longer matches generic `EOF` (premature-EOF / truncated JSON is
+   deterministic, not transient).
+4. Runner reports latency only when >=1 call completed (no `median(numeric(0))` crash).
+5. Audit: `attempts` now records `provider`, `seed`, `prompt_hash`, `schema_hash`,
+   `query_hash` (`rlang::hash`) and retains `raw_response` (kept in `run.rds`, dropped
+   from the workbook). Closes the reproducibility gap before the cohort run.

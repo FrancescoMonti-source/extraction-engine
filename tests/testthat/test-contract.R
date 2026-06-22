@@ -160,3 +160,26 @@ test_that("acceptance is field-level: a valid field survives an invalid sibling"
     expect_true(is.na(ure$accepted_value))                  # invalid field not accepted
     expect_equal(unique(v$task_validity), "invalid")        # task flagged because a field is invalid
 })
+
+test_that("a cited snippet ID that was never supplied fails the field closed", {
+    docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
+                                 RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
+    tasks <- ana_tasks(); elig <- anastomoses_eligibility(tasks, docs_index)
+    corpus <- make_corpus("E1", "Anastomose arterielle termino-laterale. Technique de Gregoir.")
+    r <- retrieve(corpus, tasks, elig, ANASTOMOSES_QUERY)
+    sids <- r$candidates$snippet_id
+    fake <- function(prompt, type, system_prompt) {
+        res <- empty_anastomoses_result()
+        res$transplantation_type_anastomose_arterielle <-
+            list(status = "documented", value = "termino-laterale",
+                 evidence_ids = list(sids[1], "S999"))   # one real + one fabricated ID
+        res
+    }
+    run <- run_extraction(r$coverage, r$candidates, anastomoses_definition(), fake, "fake")
+    v <- run$values[run$values$field == "transplantation_type_anastomose_arterielle", ]
+    expect_equal(v$field_validity, "invalid")              # fail closed, not silently dropped
+    expect_match(v$validity_reason, "unsupplied")
+    ev <- run$evidence[run$evidence$field == "transplantation_type_anastomose_arterielle", ]
+    expect_true(sids[1] %in% ev$snippet_id)                # real ID still resolves
+    expect_false("S999" %in% ev$snippet_id)                # fabricated ID never materializes
+})

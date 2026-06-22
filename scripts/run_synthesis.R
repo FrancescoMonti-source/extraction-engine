@@ -35,13 +35,17 @@ corpus <- readRDS(corpus_path())
 r <- retrieve(corpus, tasks, eligibility, query, neighbours = 1L, as_ascii = TRUE)
 rm(corpus)
 
+SEED <- 20260621L
 run <- run_extraction(r$coverage, r$candidates, definition,
-                      make_ollama_caller(MODEL), MODEL, sample_n = N)
+                      make_ollama_caller(MODEL, SEED), MODEL,
+                      provider = "ollama", seed = SEED, query = query, sample_n = N)
 review <- build_review_view(run$values, run$evidence)
 
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
-out_dir <- file.path("outputs", "integrated", TASK, stamp)  # immutable per run
-dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+run_id <- paste0(stamp, "_", Sys.getpid())                 # pid avoids same-second collision
+out_dir <- file.path("outputs", "integrated", TASK, run_id)
+if (dir.exists(out_dir)) stop("run directory already exists: ", out_dir, call. = FALSE)
+dir.create(out_dir, recursive = TRUE, showWarnings = TRUE) # immutable per run
 saveRDS(run, file.path(out_dir, "run.rds"))
 
 flatten <- function(df) {
@@ -53,7 +57,8 @@ flatten <- function(df) {
 openxlsx::write.xlsx(
     list(physician_review = review, coverage = run$coverage,
          values = flatten(run$values), evidence = run$evidence,
-         attempts = run$attempts, candidates = flatten(run$candidates)),
+         attempts = dplyr::select(run$attempts, -dplyr::any_of("raw_response")),
+         candidates = flatten(run$candidates)),
     file.path(out_dir, "review.xlsx"), asTable = TRUE, overwrite = FALSE)
 
 cat(sprintf("========== INTEGRATED BASELINE: %s (model=%s) ==========\n", TASK, MODEL))
@@ -61,8 +66,9 @@ cat(sprintf("tasks=%d | called=%d | out=%s\n", nrow(tasks), nrow(run$attempts), 
 cat("coverage processing_state:\n"); print(dplyr::count(run$coverage, processing_state))
 if (nrow(run$attempts)) {
     ok <- run$attempts$attempt_status == "completed"
-    cat(sprintf("calls ok=%d error=%d | processing_error=%d | latency ms median/max=%d/%d\n",
-                sum(ok), sum(!ok), sum(run$attempts$processing_status %in% "processing_error"),
+    cat(sprintf("calls ok=%d error=%d | processing_error=%d\n", sum(ok), sum(!ok),
+                sum(run$attempts$processing_status %in% "processing_error")))
+    if (any(ok)) cat(sprintf("latency ms median/max=%d/%d\n",
                 as.integer(median(run$attempts$latency_ms[ok])), max(run$attempts$latency_ms[ok])))
 }
 if (nrow(run$values)) {

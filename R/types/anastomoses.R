@@ -89,7 +89,10 @@ parse_anastomoses <- function(result, snippet_ids) {
     rows <- lapply(names(ANASTOMOSES_FIELDS), function(f) {
         node <- result[[f]]
         status <- if (length(node$status) == 1L) as.character(node$status) else NA_character_
-        ids <- intersect(unique(as.character(unlist(node$evidence_ids))), snippet_ids)
+        returned <- unique(as.character(unlist(node$evidence_ids)))
+        returned <- returned[!is.na(returned) & nzchar(returned)]
+        ids <- intersect(returned, snippet_ids)
+        invented <- setdiff(returned, snippet_ids)   # cited IDs that were never supplied
         is_int <- ANASTOMOSES_FIELDS[[f]] == "integer"
         raw <- node$value
         present <- !is.null(raw) && length(raw) == 1L && !is.na(raw)
@@ -98,9 +101,14 @@ parse_anastomoses <- function(result, snippet_ids) {
             if (is_int) as.character(as.integer(raw)) else trimws(as.character(raw))
         } else NA_character_
         v <- standard_field_validity(status, nv, ids)
+        fv <- v$field_validity; rsn <- v$validity_reason
+        if (length(invented)) {                       # fail closed on hallucinated citations
+            fv <- "invalid"
+            rsn <- paste(c(rsn[nzchar(rsn)], "cited unsupplied snippet id"), collapse = "; ")
+        }
         tibble::tibble(field = f, status = status, normalized_value = nv,
                        evidence_ids = list(ids),
-                       field_validity = v$field_validity, validity_reason = v$validity_reason)
+                       field_validity = fv, validity_reason = rsn)
     })
     summary <- result[[ANASTOMOSES_SUMMARY]]
     summary <- if (is.null(summary) || !length(summary)) NA_character_ else trimws(as.character(summary[[1]]))

@@ -65,8 +65,10 @@ make_ollama_caller <- function(model = "gemma3:4b", seed = 20260621L) {
 
 # Retry only TRANSIENT provider failures (crash/timeout/connection). Permanent
 # errors (schema/parse/config) are deterministic under temp=0+seed -> no retry.
+# NB: a "premature EOF" is a deterministic truncated-JSON / max-token failure, not
+# a transport disconnect, so it is deliberately NOT treated as transient.
 .is_transient <- function(msg) {
-    grepl("HTTP 5|timeout|timed out|connection|terminated|CUDA|reset|EOF|socket",
+    grepl("HTTP 5|timeout|timed out|connection|terminated|CUDA|reset|socket",
           msg, ignore.case = TRUE)
 }
 
@@ -108,18 +110,22 @@ call_with_retry <- function(caller, prompt, type, system_prompt, max_tries = 3L)
 }
 
 run_extraction <- function(coverage, candidates, definition, caller, model_name,
+                           provider = "local", seed = NA_integer_, query = NA_character_,
                            sample_n = 0L, max_tries = 3L) {
     task_ids <- coverage$task_id[coverage$coverage_state == "candidate"]
     if (sample_n > 0L) task_ids <- head(task_ids, sample_n)
 
+    query_hash <- substr(rlang::hash(query), 1L, 12L)   # audit: retrieval-query fingerprint
     values_l <- list(); evidence_l <- list(); attempts_l <- list()
 
     for (tid in task_ids) {
         ts <- candidates[candidates$task_id == tid, , drop = FALSE]
         task_row <- coverage[coverage$task_id == tid, , drop = FALSE]
-        call <- call_with_retry(caller, definition$prompt_builder(task_row, ts),
-                                definition$type_builder(ts$snippet_id),
-                                definition$system_prompt, max_tries)
+        prompt <- definition$prompt_builder(task_row, ts)
+        type   <- definition$type_builder(ts$snippet_id)
+        call <- call_with_retry(caller, prompt, type, definition$system_prompt, max_tries)
+        prompt_hash <- substr(rlang::hash(prompt), 1L, 12L)
+        schema_hash <- substr(rlang::hash(type), 1L, 12L)
         proc <- NA_character_; tvalid <- NA_character_; err <- paste(call$errors, collapse = " || ")
 
         if (identical(call$status, "completed")) {
@@ -153,19 +159,23 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
         }
 
         attempts_l[[length(attempts_l) + 1L]] <- tibble::tibble(
-            task_id = tid, model = model_name, definition = definition$name,
-            attempt_status = call$status, processing_status = proc, n_tries = call$n_tries,
+            task_id = tid, provider = provider, model = model_name, seed = seed,
+            definition = definition$name, attempt_status = call$status,
+            processing_status = proc, n_tries = call$n_tries,
             started_at = call$started_at, latency_ms = round(call$latency_ms),
-            task_validity = tvalid, error = ifelse(nzchar(err), err, NA_character_))
+            prompt_hash = prompt_hash, schema_hash = schema_hash, query_hash = query_hash,
+            task_validity = tvalid, error = ifelse(nzchar(err), err, NA_character_),
+            raw_response = list(if (identical(call$status, "completed")) call$result else NULL))
     }
 
     values   <- if (length(values_l))   bind_rows(values_l)   else tibble::tibble()
     evidence <- if (length(evidence_l)) bind_rows(evidence_l) else tibble::tibble()
     attempts <- if (length(attempts_l)) bind_rows(attempts_l) else tibble::tibble(
-        task_id = character(), model = character(), definition = character(),
-        attempt_status = character(), processing_status = character(), n_tries = integer(),
-        started_at = as.POSIXct(character()), latency_ms = double(),
-        task_validity = character(), error = character())
+        task_id = character(), provider = character(), model = character(), seed = integer(),
+        definition = character(), attempt_status = character(), processing_status = character(),
+        n_tries = integer(), started_at = as.POSIXct(character()), latency_ms = double(),
+        prompt_hash = character(), schema_hash = character(), query_hash = character(),
+        task_validity = character(), error = character(), raw_response = list())
 
     final_coverage <- coverage %>%
         left_join(distinct(attempts, task_id, attempt_status, processing_status, task_validity),

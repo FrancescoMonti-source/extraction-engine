@@ -52,7 +52,10 @@ prompt_smoking <- function(task, candidates) {
 
 parse_smoking <- function(result, snippet_ids) {
     status <- if (length(result$smoking_status) == 1L) as.character(result$smoking_status) else NA_character_
-    ids <- intersect(unique(as.character(unlist(result$evidence_ids))), snippet_ids)
+    returned <- unique(as.character(unlist(result$evidence_ids)))
+    returned <- returned[!is.na(returned) & nzchar(returned)]
+    ids <- intersect(returned, snippet_ids)
+    invented <- setdiff(returned, snippet_ids)   # cited IDs that were never supplied
     note <- if (is.null(result$decision_note) || !length(result$decision_note)) NA_character_
             else trimws(as.character(result$decision_note[[1]]))
     reason <- character()
@@ -61,6 +64,7 @@ parse_smoking <- function(result, snippet_ids) {
     } else if (status != "indetermine" && !length(ids)) {
         reason <- c(reason, "definitive status without evidence")
     }
+    if (length(invented)) reason <- c(reason, "cited unsupplied snippet id")  # fail closed
     fields <- tibble::tibble(
         field = "smoking_status", status = status, normalized_value = status,
         evidence_ids = list(ids),
