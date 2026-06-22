@@ -2924,3 +2924,40 @@ but unrelated result values are not persisted.
 
 Formal `variable_spec` / `concept_spec` constructors remain deferred. The code still
 uses two explicit owner-readable measurement functions.
+
+---
+
+## Canonical live text validation complete (Codex, 2026-06-22)
+
+Validated `integration/canonical` at `35d5ff0` with the approved local
+`gemma3:4b` model. This was a smoke validation, not a full-cohort model run:
+retrieval and coverage used all 244 tasks, while three candidate-bearing tasks per
+text variable were sent to the model.
+
+Smoking:
+
+- 244 tasks: 25 `no_candidate`, 216 `not_called`, 3 `valid`;
+- 3/3 provider calls completed; no model or processing errors;
+- 3/3 smoking fields mechanically valid;
+- 3 evidence rows and 3 physician-review rows.
+
+Anastomoses:
+
+- 244 tasks: 241 `not_called`, 3 `valid`;
+- 3/3 provider calls completed; no model or processing errors;
+- all five clinical fields valid for all three sampled tasks;
+- 57 field/source evidence rows and 15 physician-review rows.
+
+Persisted artifact checks passed for both runs:
+
+- immutable per-run directories contained `run.rds` and `review.xlsx`;
+- coverage retained all 244 tasks;
+- attempts included provider, model, seed, prompt/schema/query hashes, and raw
+  structured responses;
+- raw responses were retained in RDS and intentionally omitted from workbooks;
+- review workbooks contained physician review, coverage, values, evidence, attempts,
+  and candidates sheets.
+
+The combined synthetic suite was rerun after the live calls: 76/76 assertions pass.
+No source changes were required. This completes the canonical validation gate before
+documentation realignment and branch promotion.
