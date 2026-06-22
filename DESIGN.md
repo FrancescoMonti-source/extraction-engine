@@ -1,7 +1,8 @@
 # extraction-engine — Design
 
-> Status: active development on D0840. Smoking spikes are complete; anastomoses and
-> biology are next. The name is temporary.
+> Status: validated canonical D0840 baseline for smoking, transplant anastomoses,
+> diabetes, and hyperkalaemia. Full-cohort text execution and the next multi-source
+> variable remain ahead. The name is temporary.
 
 ## What we are building
 
@@ -146,10 +147,11 @@ R stores the returned status directly, resolves each evidence reference to the o
 sentence and document, and prepares the review view. The physician—not R—judges whether the evidence
 and decision are appropriate.
 
-## The four operational tables
+## Operational records
 
-The current working contract keeps four concepts separate. These are operational views,
-not a claim that every source must share one universal internal row shape.
+The canonical baseline keeps coverage, execution, values, evidence, and source
+observations separate. These are operational views, not a claim that every source must
+share one universal internal row shape.
 
 ### Coverage
 
@@ -163,27 +165,30 @@ processing state
 Coverage includes tasks with no candidates. This distinguishes “nothing retrieved”
 from “not processed” without turning absence into a clinical value.
 
-### Attempt
+### Attempt or derivation
 
-What happened when a model was called:
+What happened when a model was called, or when a deterministic rule was applied:
 
 ```text
-model, prompt/schema version, status or error, latency
+text: provider, model, seed, prompt/schema/query fingerprints, status or error,
+      latency, raw response
+structured: rule, source/scope/usable counts, status or error
 ```
 
-A failed call still creates an attempt row.
+A failed call still creates an attempt row. Structured measurement creates exactly one
+derivation row per task, including skipped and failed tasks.
 
 ### Value
 
-What the extractor returned for a modelled task:
+What the extractor or deterministic policy returned:
 
 ```text
-task id, variable, value, validity/review state, evidence references,
-decision note
+task id, variable, normalized value, accepted value, validity/review state,
+evidence references, decision note or selected measurement
 ```
 
-Invalid or review-required responses are retained for diagnosis but cannot silently
-become cohort values.
+Normalization and acceptance are separate. Invalid or review-required responses are
+retained for diagnosis but cannot silently become cohort values.
 
 ### Evidence
 
@@ -193,8 +198,12 @@ One row per cited source reference:
 task id, evidence reference, source record, source date, hit text, surrounding context
 ```
 
-Structured sources may later expose additional observation tables where that helps their
-construction policies. They do not need to imitate text retrieval artificially.
+### Source observations
+
+Structured measurement also preserves the scoped source rows used by the policy,
+including non-target and malformed rows. Selected evidence is the concise physician
+view; observations and derivation counts explain closed negative results without
+forcing structured sources to imitate text retrieval.
 
 ## Variable definitions
 
@@ -358,9 +367,10 @@ The representative sequence is:
 
 1. smoking — longitudinal text, contradictions, evidence references, and a decision note;
 2. transplant anastomoses — several related outputs with partial missingness;
-3. biology timepoints — deterministic anchor-relative ranking without an LLM;
-4. dialysis — explicit reconciliation of text, CCAM, and pre-emptive status in R;
-5. delayed graft function and surgical antecedents — conflict routing and whole-history
+3. diabetes — deterministic ICD-10 code presence over diagnosis intervals;
+4. hyperkalaemia — deterministic potassium selection and thresholding from biology;
+5. dialysis — explicit reconciliation of text, CCAM, and pre-emptive status in R;
+6. delayed graft function and surgical antecedents — conflict routing and whole-history
    multi-category extraction.
 
 Cases are split by patient or transplant pair—not by snippet—into development,
@@ -368,7 +378,7 @@ validation, and held-out sets. Development cases may be inspected while prompts 
 change. Validation cases choose among competing approaches. The held-out set is opened
 only after the approach is fixed, so it remains a credible estimate of performance.
 
-### Completed smoking rounds
+### Completed canonical baseline
 
 Independent smoking implementations established the task contract, native evidence by
 reference, bundled structured extraction, and the difference between clinical values
@@ -383,17 +393,28 @@ Independent retrieval implementations then established:
 - hit-sentence evidence with configurable neighbouring-sentence context;
 - deterministic copy-forward deduplication.
 
-### Next independent rounds
+The transplant-anastomosis round then proved multi-field extraction, field-level
+validity, and shared operative evidence. The structured round proved the same operational
+boundary without a model:
 
-Claude and Codex continue implementing the same real variables independently before
-reviewing each other's code:
+- diabetes measures ICD-10 `E10`–`E14` presence over scoped PMSI diagnosis intervals;
+- hyperkalaemia measures the maximum parseable `TYPEANA == "K.K"` result in a ±7-day
+  window, using the warehouse analyte convention rather than validating a separate unit;
+- every task receives coverage and derivation records;
+- all scoped rows remain in observations while selected evidence stays concise;
+- normalized values are gated separately into accepted cohort values.
 
-1. transplant anastomoses — several related outputs, shared operative evidence, and
-   partial missingness;
-2. biology timepoints — deterministic structured-source selection around anchors.
+The canonical implementation passes the full contract suite. On the real 244-task
+structured cohort it produced diabetes 64 present / 180 absent and hyperkalaemia
+119 present / 125 absent. A live text smoke run completed three smoking and three
+anastomosis tasks with valid, grounded outputs.
 
-Dialysis remains the later multi-source stress test. Only repetition demonstrated across
-these implementations should become shared configuration or a reusable package core.
+### Next validation and variable
+
+Run the text variables over the intended full cohort, produce review-ready artifacts,
+and begin physician adjudication. Dialysis remains the next multi-source reconciliation
+stress test. Generic `variable_spec` / `concept_spec` constructors remain deferred until
+the four implemented variables and the full-cohort run show which repetition is stable.
 
 ### Later
 
@@ -428,6 +449,7 @@ the abstractions. An xlsx review round-trip is sufficient initially.
 
 ## Open questions
 
-- After several independent variable rounds, which repeated parts should become
-  configuration?
+- After the full-cohort text run, which repeated parts of the four implemented variables
+  should become bounded configuration?
+- What contract is needed for dialysis without turning source reconciliation into a DSL?
 - What should the project be called?

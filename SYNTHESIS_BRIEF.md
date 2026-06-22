@@ -1,5 +1,10 @@
 # Clean synthesis round
 
+> Historical status: completed. This brief governed the independent clean-synthesis
+> implementations and their integration into the canonical baseline. Use `DESIGN.md`
+> and `TECHNICAL_NOTES.md` for current contracts; use `HANDOFF.md` for the chronological
+> decision and validation record.
+
 This is the shared implementation brief for Claude and Codex after the independent
 smoking, retrieval, and transplant-anastomosis rounds.
 

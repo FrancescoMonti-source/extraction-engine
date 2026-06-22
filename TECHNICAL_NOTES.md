@@ -91,9 +91,10 @@ task gets one explicit, readable contract.
 
 ## 2. Operational data contracts
 
-The current text workflow uses four linked tables rather than one overloaded result
-table. They are operational views; future structured-source adapters may expose
-additional observation tables when their construction policies need them.
+The canonical baseline uses linked operational artifacts rather than one overloaded
+result table. Text extraction persists coverage, attempts, values, evidence, and
+candidates. Structured measurement persists coverage, derivations, values, evidence,
+and observations. A flat review table is a view over those records.
 
 ### Coverage
 
@@ -119,19 +120,43 @@ failed,” or “task forgotten.”
 One row per model execution, including failures:
 
 ```text
-attempt_id
 task_id
 provider
 model
-schema_version
-prompt_version
+seed
+definition
+attempt_status
+processing_status
+n_tries
 started_at
 latency_ms
+prompt_hash
+schema_hash
+query_hash
+task_validity
+error
+raw_response
+```
+
+The fingerprints and raw response make a completed or failed call auditable without
+depending on mutable runtime objects. Token counts and retry chains can be added when
+useful.
+
+### Derivations
+
+One row per deterministic structured task, including skipped and failed tasks:
+
+```text
+task_id
+field
+rule
+source/scope/usable counts
 status
 error
 ```
 
-Token counts, retry chains, and complete input lineage can be added when useful.
+This is the structured equivalent of an execution census, not a simulated model
+attempt.
 
 ### Values
 
@@ -139,19 +164,20 @@ One row per captured extractor response:
 
 ```text
 task_id
-variable_id
-value
-unit
-evidence_refs
-decision_note
-validity_state
-review_status
-attempt_id
+field
+status
+normalized_value
+accepted_value
+field_validity
+validity_reason
+task_validity
+task_summary or selected measurement
 ```
 
-`evidence_refs` is a list-column. Capture and validity classification are separate:
-raw responses remain diagnosable, while invalid or review-required rows cannot silently
-become cohort values.
+Text values retain their evidence identifiers as list-columns before materialization.
+Both paths separate
+`normalized_value` from `accepted_value`: capture and validity classification remain
+diagnosable, while invalid or review-required rows cannot silently become cohort values.
 
 ### Evidence
 
@@ -176,6 +202,13 @@ clinically supports the value; R checks only mechanical provenance and validity.
 
 A flat review table is a view produced by joining values to evidence and coverage. It is
 not the canonical storage contract.
+
+### Structured observations
+
+One row per scoped source record considered by a deterministic policy. Observations keep
+target, usability, invalidity, and selection flags plus native source identifiers.
+Selected evidence remains concise; non-target and malformed observations remain
+available to explain coverage, negatives, and exclusions.
 
 ## 3. Evidence by reference
 
@@ -484,6 +517,15 @@ Examples from the existing projects:
 - D0840 dialysis combines 90-day and 365-day scopes, count-distinct thresholds,
   source precedence, and conflict review.
 
+Implemented canonical examples:
+
+- diabetes uses PMSI diagnosis intervals and ICD-10 `E10`–`E14` code presence;
+- hyperkalaemia selects the maximum parseable biology value in a ±7-day window for
+  `TYPEANA == "K.K"` and applies the strict `> 5.0` threshold. In this warehouse the
+  analyte code fixes the potassium interpretation, so unit is not a validation
+  dimension. Mixed parseable and unparseable rows remain measurable; malformed rows
+  stay visible in observations.
+
 ## 6. Derived columns
 
 Derived variables remain ordinary project-level R:
@@ -666,7 +708,7 @@ difference measurements, not recall, precision, or accuracy.
 
 ## 10. Established findings and next variables
 
-The smoking rounds and retrieval experiments established:
+The four-variable canonical baseline established:
 
 - ellmer's **type builders** are the default schema path: they validate by construction
   and drive typed JSON→R conversion (tibbles), whereas `type_from_schema()` neither
@@ -684,17 +726,21 @@ The smoking rounds and retrieval experiments established:
 - reconstructing only hit sentences and requested neighbours avoids enormous sentence
   tables;
 - exact source whitespace is not required for the default review/model context;
-- coverage (`no_candidate`) and clinical values are separate concepts.
+- coverage (`no_candidate`) and clinical values are separate concepts;
+- multi-field text extraction needs field-level validity and acceptance rather than
+  invalidating valid siblings;
+- deterministic structured measurement uses the same provenance boundary without
+  inventing model attempts;
+- a complete derivation census, full scoped observations, and concise selected evidence
+  make closed negatives reviewable;
+- clinical dates derived from timestamps must preserve the `Europe/Paris` calendar day;
+- `TYPEANA == "K.K"` is the potassium concept boundary for the current warehouse, and
+  mixed valid/unparseable rows remain measurable from their valid rows.
 
-The next independent implementation rounds are:
-
-1. transplant anastomoses — one operative context producing several related fields,
-   field-specific evidence, and partial missingness;
-2. biology timepoints — deterministic selection from structured results around anchors.
-
-Claude and Codex implement each independently before mutual review. Dialysis follows as
-the multi-source reconciliation stress test. Shared abstractions are extracted only
-after repetition appears across these real tasks.
+Next, run smoking and anastomoses over the intended full cohort and create physician
+review artifacts. Dialysis then provides the multi-source reconciliation stress test.
+Generic spec constructors remain deferred until operational evidence from the four real
+variables and the full-cohort run identifies stable repetition.
 
 ## 11. D0840 development corpus
 
@@ -726,16 +772,18 @@ combine several tasks or sources.
 |---|---|
 | Smoking status around surgery (`[anchor − 365d, +7d]`) | Persisted-corpus retrieval, window-bounded source selection, target-role filtering, explicit status categories, contradictions, `evidence_refs`, and a useful `decision_note`. |
 | Transplant anastomoses | One context producing several related durations, techniques, and locations; partial missingness; cross-field coupling. |
+| Diabetes from PMSI diagnoses | Interval scoping, ICD-10 family matching, auditable closed negatives, malformed-code handling, and deterministic derivation records. |
+| Hyperkalaemia from biology | Point-window scoping, warehouse analyte concepts, mixed parseable/unparseable rows, maximum-row evidence, and strict thresholding. |
 | Dialysis before transplant | Multi-source construction: pre-emptive status, CCAM counts and thresholds, text observations, source precedence, and disagreement review. |
 | Biology timepoints | Deterministic anchor-relative selection with tolerances and ordered tie-breakers; proves the engine is not an LLM-only system. |
 | Delayed graft function | Explicit positive and negative text rules, risk-only mentions, conflicting values, and routing to review. |
 | Surgical antecedents | Whole-history scope, several clinical categories in one task, repeated mentions, exclusions, and multi-item evidence. |
 
-The duplicate-implementation order is smoking → anastomoses → biology. Dialysis then
-tests multi-source reconciliation. Delayed graft function and surgical antecedents test
-whether the emerging abstractions survive different conflict and scope patterns. Only
-repetition demonstrated across working tasks should become shared configuration or
-package code.
+The completed duplicate-implementation order was smoking → anastomoses → diabetes and
+hyperkalaemia. Dialysis next tests multi-source reconciliation. Delayed graft function,
+biology timepoints, and surgical antecedents test whether the emerging abstractions
+survive different conflict and scope patterns. Only repetition demonstrated across
+working tasks should become shared configuration or package code.
 
 ### Development, validation, and held-out discipline
 
