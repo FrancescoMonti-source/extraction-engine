@@ -2548,3 +2548,123 @@ task); the task is still flagged `invalid` for review. Contract-tested.
 
 Requesting Codex's review of `bb8ca75` before this becomes the canonical baseline that
 gets the next full-cohort run.
+
+---
+
+## Parallel structured-variable contract: diabetes (pmsi$diag) + hyperkalaemia (biol) (Claude draft, 2026-06-22)
+
+The next round adds **two STRUCTURED variables** on top of the canonical baseline, to
+validate the evidence/measurement orthogonality and the **deterministic (non-LLM) path**
+that the two text variables could not exercise. As before, this pins observable behaviour
+and leaves implementation free. They are chosen to span the structured spectrum:
+
+- **diabetes** — categorical **code presence** (ICD-10, `pmsi$diag`, interval time);
+- **hyperkalaemia** — numeric **value threshold** (analyte, `biol`, point time, units).
+
+### New for this round: the structured/deterministic path
+
+No corpus, no Lucene search, no LLM, no `type_object`. The cells exercised are
+`code_evidence × deterministic` and `analyte_evidence × deterministic`:
+
+```text
+select source rows (by code / analyte)
+→ apply composable scope (relational + temporal, point/interval)
+→ deterministic measurement rule
+→ values + evidence (cited source rows) + coverage
+```
+
+Reused unchanged from the baseline: origin-agnostic **task table**; composable scope;
+the **observation + provenance** interface; field-level validity/acceptance; the four
+views + review view; aggregates-only console, PHI to gitignored `outputs/`.
+
+`attempts` is LLM-specific; for structured variables it becomes a **derivation record**
+(deterministic): per task, the rule applied, number of eligible/ matching source rows,
+status, and any error. No model, seed, or latency-to-provider.
+
+### Data sources (via `redsan`)
+
+- diabetes: `redsan::process_pmsi()$diag` — ICD-10 parsed from `DALL` (`diag`/`type_diag`),
+  **interval time** inherited from the parent stay (`DATENT`/`DATSORT`).
+- hyperkalaemia: `redsan::process_biol()` — result rows (analyte/value/unit, `DATEXAM`
+  **point**).
+
+We do **not** yet have these for the cohort on disk (only `docs` + `chirurgie` actes).
+Until exported or pulled, build/test the structured path on **synthetic fixtures** +
+contract tests; the real full run waits for the data. Path/architecture validation does
+not need real data.
+
+### Task unit and identity
+
+One task per recipient surgery (reuse the existing cohort for comparability):
+`task_id = PATID::DATEACTE::EVTID`, anchor = surgery date.
+
+### Variable 1 — diabetes (categorical code presence)
+
+- **evidence:** ICD-10 codes in the diabetes family (default `E10`–`E14`, incl. subcodes)
+  over `pmsi$diag`.
+- **scope:** `all_of(same_subject(PATID), stays overlapping [surgery - 1825d, surgery + 7d])`.
+  *(lookback window is the study knob.)*
+- **measurement (deterministic):** >=1 matching diabetic code in scope -> `present`;
+  diagnosis rows in scope but none diabetic -> `absent`; **no diagnosis rows in scope ->
+  `no_candidate`** (unknown, open-world — NOT a negative).
+- **value:** `present` / `absent` (type-1/type-2 split deferred).
+- **provenance:** the cited `diag` rows (PATID, EVTID, ICD code, stay dates).
+
+### Variable 2 — hyperkalaemia (numeric threshold)
+
+- **evidence:** potassium analyte(s), `accepted_units = "mmol/L"`, over `biol`.
+- **scope:** `all_of(same_subject(PATID), relative_window(anchor = surgery_date, -7d, +7d))`
+  on `DATEXAM` (point). *(window is the study knob.)*
+- **measurement (deterministic):** any result `> 5.0 mmol/L` -> `present`; results in scope
+  but none above -> `absent`; **no potassium results in scope -> `no_candidate`**.
+  *(threshold is the study knob.)*
+- **unit handling:** accept `mmol/L` (and numerically-equal `mEq/L`); a result whose unit
+  is unrecognised is **`invalid`** (recorded, excluded from accepted value), never silently
+  coerced.
+- **value:** `present` / `absent`; retain the max value + its `DATEXAM` as evidence.
+- **provenance:** the triggering `biol` result row(s) (BIOL_ID, value, unit, DATEXAM).
+
+### Validity (structured — pure R, no grammar)
+
+Binary `valid`/`invalid` + reason, on the structured data itself:
+
+- cited rows resolve to real source rows (provenance integrity);
+- value parseable; unit accepted (hyperkalaemia); code in the declared vocabulary (diabetes);
+- `present` requires >=1 supporting row; `absent` requires >=1 eligible row examined
+  (otherwise it is `no_candidate`, not `absent`).
+
+There is no grammar gate here (no model); validity is entirely deterministic R rules.
+
+### Coverage / processing states
+
+`no_eligible_source` (no diag/biol rows for the task at all) / `no_candidate` (eligible
+rows exist but none in the target code-family / analyte+scope) / `measured` (present or
+absent) / `invalid` (e.g. bad unit). Same census-over-all-tasks discipline.
+
+### Free implementation choices (comparison targets)
+
+Code-list and analyte-code source; unit conversion; row-id / provenance format; how
+`redsan` frames are loaded and normalized; module-frame caching; deterministic and
+synthetic-fixture tests.
+
+### Comparison after both build
+
+1. coverage census and present/absent/no_candidate counts;
+2. provenance correctness (cited rows resolve, no loss);
+3. interval-overlap (diabetes) vs point-window (hyperkalaemia) scope handling;
+4. unit handling and threshold edge cases;
+5. the deterministic-rule edges (boundary value exactly 5.0; multiple results; missing
+   `DATSORT`);
+6. how cleanly the structured path reuses the engine vs needs new seams.
+
+### Process decisions (resolved with the human, 2026-06-22)
+
+- **data path:** the human will **export `pmsi` + `biol`** for the cohort (as with
+  `docs`/`chirurgie`). Until they land, build and test the structured path on **synthetic
+  fixtures** + contract tests; the real full run follows when the exports arrive.
+- **study knobs:** **defaults accepted** (diabetes `E10`–`E14`, 5-year lookback;
+  hyperkalaemia K+ > 5.0 mmol/L, +/-7d). Clinical accuracy is explicitly **not** a concern
+  at this stage — these variables exist to test the structured path, not the science.
+- **build approach:** **parallel** — Claude and Codex build independently from this
+  contract, then integrate (same workflow as smoking/anastomoses); neither reads the
+  other's structured code until both declare complete.
