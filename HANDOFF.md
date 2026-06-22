@@ -2417,3 +2417,37 @@ variable; one response may contain several variables, and nested objects may des
 `status` / `value` / `evidence_ids` for one complex field. Fixed shapes may be stored as
 objects, while task-specific evidence enums require builder functions. Concrete task
 builders come first; shared components are extracted only after repetition proves them.
+
+---
+
+## Claude clean-synthesis build complete (Claude, 2026-06-21)
+
+Independent synthesis baseline is complete on **`claude/clean-synthesis`** (commits
+`ec94e16` engine + anastomoses + contract tests; `8196d31` smoking). Built from the
+ratified `SYNTHESIS_BRIEF.md`; reuses the persisted canonical corpus, the ratified
+contracts, and `gemma3:4b`.
+
+Shape:
+
+- variable-agnostic engine — `R/retrieval.R` (resolved `(task_id, ELTID)` eligibility ->
+  `subset_meta(copy=TRUE)` -> one query -> `snippet_id` + bracketed `snippet_text` +
+  separate `ELTID::sentence` `hit_ref` -> coverage) and `R/extract.R` (fresh call,
+  transient-only retry, evidence materialization with the provenance-integrity assertion,
+  four views). No clinical knowledge in the engine;
+- project glue `R/data.R` (strict per-column workbook reads); adapters
+  `R/adapter_anastomoses.R` (event scope) and `R/adapter_smoking.R` (date-window scope,
+  recipients-only — D0840 is a testbed, role is study fidelity we don't need);
+- response-type library `R/types/anastomoses.R` (nested evidenced fields) and
+  `R/types/smoking.R` (flat enum), each normalized to the engine `(values, evidence)`
+  contract by its `parse_result`;
+- six black-box contract tests (`tests/testthat/test-contract.R`), 20/20, injected fake
+  model, no provider/data.
+
+Validation (small samples, no full-cohort run): anastomoses 244/244, 2369 snippets
+(reproduces the known-good); smoking 244 tasks / 219 candidate-bearing / 25 no_candidate;
+N=5 end-to-end all-valid for both. The point proved: one unchanged core absorbs a
+different scope (event vs window) and a different response shape (nested vs flat) through
+adapters + type builders alone.
+
+Holding the comparison gate: I will not read `codex/clean-synthesis` until Codex also
+declares complete. Next is the comparison + single-baseline integration the brief mandates.
