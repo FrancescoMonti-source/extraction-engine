@@ -10,28 +10,32 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
 SMOKING_STATUSES <- c("actif", "sevre", "non_fumeur", "indetermine")
 
+# Call-wide behaviour only. Field meanings live in the type descriptions below;
+# the target period lives in the task prompt. This keeps the type reusable.
 SMOKING_SYSTEM_PROMPT <- paste(
-    "Tu es un assistant d'extraction clinique. Determine le statut tabagique du",
-    "patient au moment de la chirurgie, en te basant UNIQUEMENT sur les extraits.",
-    "- actif: fume encore au moment de la chirurgie.",
-    "- sevre: ancien fumeur / sevre / arret avant la chirurgie.",
-    "- non_fumeur: non-fumeur, jamais fume, ou absence de tabagisme.",
-    "- indetermine: extraits contradictoires ou insuffisants.",
-    "Ignore les mentions concernant la famille ou l'entourage.",
-    "evidence_ids: cite le plus petit ensemble suffisant d'extraits (prefere un",
-    "seul S..) justifiant la reponse ; n'invente jamais d'identifiant ; mets []",
-    "uniquement si indetermine sans extrait pertinent.",
-    "decision_note: explication clinique tres courte, surtout en cas de conflit.",
+    "Tu es un assistant d'extraction clinique.",
+    "Base-toi UNIQUEMENT sur les extraits fournis.",
+    "Evalue le patient cible, jamais sa famille ni son entourage.",
     sep = "\n"
 )
 
 type_smoking <- function(snippet_ids) {
     ellmer::type_object(
         smoking_status = ellmer::type_enum(
-            SMOKING_STATUSES, "Statut tabagique au moment de la chirurgie."),
+            SMOKING_STATUSES,
+            paste(
+                "Statut tabagique du patient pour la periode cible definie dans la tache.",
+                "actif = tabagisme actuel explicitement documente;",
+                "sevre = ancien fumeur, sevrage ou arret documente;",
+                "non_fumeur = statut non-fumeur ou absence de tabagisme explicitement documente;",
+                "indetermine = preuves contradictoires ou insuffisantes.",
+                "Ne jamais deduire non_fumeur du silence.")),
         evidence_ids = ellmer::type_array(
             ellmer::type_enum(snippet_ids),
-            "Identifiants S.. justifiant la reponse ; [] seulement si indetermine."),
+            paste(
+                "Plus petit ensemble suffisant d'extraits (S..) soutenant directement le statut;",
+                "prefere un seul. Vide uniquement pour indetermine sans extrait pertinent.",
+                "N'invente jamais d'identifiant.")),
         decision_note = ellmer::type_string(
             "Explication clinique tres courte, surtout en cas de conflit ou d'ambiguite."))
 }
@@ -39,6 +43,7 @@ type_smoking <- function(snippet_ids) {
 prompt_smoking <- function(task, candidates) {
     paste(
         sprintf("Date de chirurgie: %s", format(task$anchor_date[[1]], "%Y-%m-%d")),
+        "Periode cible: statut tabagique documente autour de cette date.",
         "Chaque extrait = contexte avant [phrase declenchante] contexte apres.",
         "Tout l'extrait est citable par son identifiant S...",
         "", "Extraits numerotes:", format_snippet_block(candidates),

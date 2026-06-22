@@ -15,44 +15,61 @@ ANASTOMOSES_FIELDS <- c(
 )
 ANASTOMOSES_SUMMARY <- "transplantation_resume_anastomoses"
 
+# Call-wide behaviour only. Per-field clinical rules live in the value
+# descriptions inside type_anastomoses(); the status/evidence contract lives in
+# the shared nested-field descriptions.
 ANASTOMOSES_SYSTEM_PROMPT <- paste(
     "Tu es un assistant d'extraction clinique sur des comptes rendus operatoires",
-    "de transplantation renale chez le RECEVEUR. Base-toi UNIQUEMENT sur les",
-    "extraits fournis ; ignore le donneur et la duree operatoire totale.",
-    "Pour chaque champ choisis d'abord le statut, puis la valeur, puis les preuves.",
-    "Statuts: documented = valeur explicite utilisable ; not_documented = absent ;",
-    "unusable = information presente mais inexploitable selon les regles.",
-    "Regles:",
-    "- Durees arterielle/veineuse: minutes entieres explicites uniquement.",
-    "- Une seule duree combinee arterio-veineuse non separable => 'unusable' pour",
-    "  LES DEUX durees.",
-    "- Jamais l'ischemie tiede/froide comme duree d'anastomose.",
-    "- Plusieurs anastomoses arterielles: type/localisation seulement si une",
-    "  anastomose principale est identifiable ; sinon 'unusable'.",
-    "- Technique ureterale: seulement si explicitement nommee.",
-    "- evidence_ids: cite le plus petit ensemble suffisant (prefere un seul S..).",
-    "  Pour 'unusable' cite OBLIGATOIREMENT l'extrait qui cause le null ; pour",
-    "  'not_documented' mets []. N'invente jamais d'identifiant.",
+    "de transplantation renale chez le RECEVEUR.",
+    "Base-toi UNIQUEMENT sur les extraits fournis ; ignore le donneur et la duree",
+    "operatoire totale de la greffe.",
+    "Pour chaque champ: choisis d'abord le statut, puis la valeur, puis les preuves.",
     sep = "\n"
 )
 
+# Per-field value semantics (the rules that used to sit in the system prompt).
+ANASTOMOSES_VALUE_DESCRIPTIONS <- c(
+    transplantation_duree_anastomose_arterielle = paste(
+        "Duree de l'anastomose ARTERIELLE en minutes entieres explicites.",
+        "'unusable' si seule une duree combinee arterio-veineuse non separable est donnee.",
+        "Ne jamais utiliser une duree d'ischemie tiede ou froide."),
+    transplantation_type_anastomose_arterielle = paste(
+        "Type d'anastomose arterielle, libelle court normalise (ex: termino-laterale,",
+        "latero-laterale). 'unusable' si plusieurs anastomoses arterielles sans",
+        "anastomose principale identifiable."),
+    transplantation_localisation_anastomose_arterielle = paste(
+        "Site de l'anastomose arterielle, court normalise (ex: artere iliaque externe,",
+        "aorte). Meme regle d'anastomose principale que le type."),
+    transplantation_duree_anastomose_veineuse = paste(
+        "Duree de l'anastomose VEINEUSE en minutes entieres explicites.",
+        "'unusable' si seule une duree combinee non separable est donnee."),
+    transplantation_type_anastomose_ureterale = paste(
+        "Technique d'anastomose ureterale, court normalise (ex: Gregoir,",
+        "Politano-Leadbetter), seulement si explicitement nommee.")
+)
+
 type_anastomoses <- function(snippet_ids) {
-    evidenced <- function(kind) {
+    evidenced <- function(kind, value_desc) {
         vt <- if (kind == "integer") {
-            ellmer::type_integer("Minutes entieres si documented, sinon null.", required = FALSE)
+            ellmer::type_integer(value_desc, required = FALSE)
         } else {
-            ellmer::type_string("Libelle court normalise si documented, sinon null.", required = FALSE)
+            ellmer::type_string(value_desc, required = FALSE)
         }
         ellmer::type_object(
             status = ellmer::type_enum(
                 c("documented", "not_documented", "unusable"),
-                "documented=utilisable; not_documented=absent; unusable=present mais inexploitable"),
+                "documented = valeur explicite utilisable; not_documented = absente; unusable = presente mais inexploitable selon la regle du champ."),
             value = vt,
             evidence_ids = ellmer::type_array(
                 ellmer::type_enum(snippet_ids),
-                "Identifiants S.. justifiant la decision; [] seulement si not_documented."))
+                paste("Plus petit ensemble suffisant d'extraits (S..) justifiant la decision;",
+                      "pour 'unusable' cite OBLIGATOIREMENT l'extrait qui cause le null;",
+                      "[] seulement pour 'not_documented'. N'invente jamais d'identifiant.")))
     }
-    args <- setNames(lapply(unname(ANASTOMOSES_FIELDS), evidenced), names(ANASTOMOSES_FIELDS))
+    args <- setNames(
+        lapply(names(ANASTOMOSES_FIELDS),
+               function(f) evidenced(ANASTOMOSES_FIELDS[[f]], ANASTOMOSES_VALUE_DESCRIPTIONS[[f]])),
+        names(ANASTOMOSES_FIELDS))
     args[[ANASTOMOSES_SUMMARY]] <- ellmer::type_string(
         "Resume clinique tres court des preuves retenues et des nulls consequents.")
     do.call(ellmer::type_object, args)
