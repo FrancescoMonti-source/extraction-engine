@@ -6,5 +6,7 @@ source("R/retrieval.R")
 source("R/extract.R")
 source("R/adapter_anastomoses.R")
 source("R/types/anastomoses.R")
+source("R/adapter_smoking.R")
+source("R/types/smoking.R")
 
 testthat::test_dir("tests/testthat", stop_on_failure = TRUE)

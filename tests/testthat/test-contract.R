@@ -114,3 +114,30 @@ test_that("each field's evidence contains only that field's cited snippets", {
     expect_setequal(ure$snippet_id, sids[length(sids)])
     expect_equal(nrow(ven), 0L)                # not_documented field carries no evidence
 })
+
+test_that("smoking scope is the date window (patient-based), not the event", {
+    docs_index <- tibble::tibble(
+        ELTID = c("E1", "E2", "E3"), PATID = "P1",
+        EVTID = c("EV1", "EV1", "EVother"),
+        RECDATE = as.Date(c("2025-03-09", "2020-01-01", "2025-03-08")),
+        RECTYPE = "note"
+    )
+    tasks <- tibble::tibble(task_id = "P1::2025-03-10::EV1", PATID = "P1",
+                            EVTID = "EV1", anchor_date = as.Date("2025-03-10"))
+    elig <- smoking_eligibility(tasks, docs_index)
+    # E1 in window; E2 far out of window; E3 in window despite a different event.
+    expect_setequal(elig$ELTID, c("E1", "E3"))
+})
+
+test_that("smoking needs evidence for a definitive status but not for indetermine", {
+    v1 <- parse_smoking(list(smoking_status = "sevre", evidence_ids = list(),
+                             decision_note = "x"), "S01")
+    expect_false(v1$values$task_valid)            # definitive without evidence -> invalid
+    v2 <- parse_smoking(list(smoking_status = "indetermine", evidence_ids = list(),
+                             decision_note = "x"), "S01")
+    expect_true(v2$values$task_valid)             # indetermine may cite nothing
+    v3 <- parse_smoking(list(smoking_status = "actif", evidence_ids = list("S01"),
+                             decision_note = "x"), "S01")
+    expect_true(v3$values$task_valid)
+    expect_equal(nrow(v3$evidence), 1L)
+})
