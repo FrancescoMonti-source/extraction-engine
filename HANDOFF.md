@@ -3056,3 +3056,57 @@ long run.
    variable-specific, so the generic marker was simpler)?
 2. The 3 anastomosis `model_error`s -- inspect the error strings (transient vs
    deterministic), or accept fail-closed-to-review as sufficient at this stage?
+
+---
+
+## Full-cohort run: investigation findings + Codex parallel review — Claude → Codex / human (2026-06-22)
+
+Two independent architecture-only reads of the saved runs -- Claude's investigation and
+Codex's review, produced **in parallel** (Codex had not seen Claude's) -- converged on
+the failure mechanism, which is itself a useful validity signal. Combined record below.
+No clinical-content inspection or rerun was done, and none is needed.
+
+**Where the guardrails fired (Claude).**
+- Parser-owned validity is load-bearing: 115 anastomosis field-instances rejected as
+  ungrounded (91 "documented without value or evidence", 24 "unusable without
+  evidence"). The engine actively refuses ungrounded claims; not theoretical.
+- Fabricated-snippet-id catch fired 0x across 460 calls -- because the grammar's dynamic
+  `evidence_id` enum already makes an out-of-set id unemittable. Enforcement lives in the
+  grammar; the parser `setdiff` is a correct-but-dormant backstop (kept for ungated paths).
+- Smoking abstention path fired 0x: all 219 valid tasks were definitive with evidence
+  (actif 82 / non_fumeur 108 / sevre 29). That contract is exercised by the synthetic
+  fixtures, not the candidate-bearing cohort -- validating the keep-both-test-sets decision.
+
+**The failure path (Codex, independently; Claude agrees).**
+- The 3 anastomosis failures had ordinary input sizes -- not a retrieval/context-volume
+  problem.
+- All three were long-running `premature EOF` **output-side** truncations (`n_tries = 1`,
+  correctly not retried -- the deterministic-truncation contract held).
+- **Root cause: unbounded outputs.** The response schemas still use unbounded
+  `type_string()` and `type_array(type_enum())` (no `maxLength` / `maxItems`). The grammar
+  bounds shape + id membership, NOT length, so a weak model can run away mid-object and
+  truncate despite a valid grammar. This is the open Handoff #3 thread ("bound the quote").
+- **Observability gap.** A failed call retains neither the partial response nor the
+  provider finish reason (`raw_response` is `NULL` for non-completed attempts), so a
+  truncation cannot be diagnosed from artifacts.
+
+**Correction to the prior note (Codex caught it; correct).** `model_error` tasks do NOT
+appear in the physician-review view -- `build_review_view()` is built from `values`
+(completed+parsed tasks only). They are recorded in `coverage` (state `model_error`) and
+`attempts` (status `error`). So the prior note's "fail closed and route to review"
+**overstated it**: they fail closed and are recorded in the census, but are not surfaced as
+review rows. That wording is withdrawn.
+
+**Agreed plan.**
+1. Merge `safe_sheet()` to `master` **separately** -- a self-contained `run_synthesis.R`
+   hunk in `f690d63`, orthogonal to the items below.
+2. (this note) wording corrected.
+3. Focused architectural patch to follow: **bounded outputs** (`maxItems` on evidence-id
+   arrays, `maxLength` on free-text strings), **failure observability** (retain partial
+   response + finish reason on failed attempts), and **explicit failed-task review rows**
+   (so `model_error` / `processing_error` tasks surface in the review view -- making
+   "route to review" actually true).
+
+Open: ownership/timing of the #3 patch (Claude / Codex / parallel round) -- for the human.
+
+**Files changed.** `HANDOFF.md` (this note).
