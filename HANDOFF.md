@@ -2842,3 +2842,23 @@ All five findings reconciled on `claude/integrated-baseline`; contract suite 31/
 5. Audit: `attempts` now records `provider`, `seed`, `prompt_hash`, `schema_hash`,
    `query_hash` (`rlang::hash`) and retains `raw_response` (kept in `run.rds`, dropped
    from the workbook). Closes the reproducibility gap before the cohort run.
+
+---
+
+## Canonical integration branch assembled (Codex, 2026-06-22)
+
+`integration/canonical` combines:
+
+- the real structured implementation and comparison decision through `37dede2`;
+- the reviewed text reliability/audit patch from `d711650`, applied as `40e6804`.
+
+Validation on the unified branch:
+
+- combined contract suite: 53/53 assertions pass;
+- real deterministic run: all 244 tasks measured for both variables;
+- diabetes: 64 `present`, 180 `absent`;
+- hyperkalaemia: 119 `present`, 125 `absent`.
+
+This completes branch unification only. The selected structured provenance/audit
+features identified in the parallel comparison still need their dedicated synthesis
+commit before this branch is promoted as the final canonical baseline.
