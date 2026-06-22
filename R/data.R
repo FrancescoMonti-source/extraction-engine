@@ -75,3 +75,36 @@ read_workbook_columns <- function(path, columns) {
     }
     openxlsx::read.xlsx(path, cols = idx, colNames = TRUE)
 }
+
+# --- structured sources (already process_*()-ed RDS) -------------------------
+# redsan parses these dates to POSIXct in the warehouse tz; take the LOCAL
+# calendar date (tz = Europe/Paris) so an evening timestamp is not pushed to the
+# previous UTC day -- the timezone regression to avoid.
+WAREHOUSE_TZ <- "Europe/Paris"
+
+# pmsi$diag: one row per ICD-10 diagnosis, attached to the parent stay interval.
+load_pmsi_diag <- function(pmsi_path) {
+    x <- readRDS(pmsi_path)
+    d <- if (is.data.frame(x)) x else x$diag
+    tibble::tibble(
+        PATID   = as.character(d$PATID),
+        EVTID   = as.character(d$EVTID),
+        diag    = as.character(d$diag),
+        DATENT  = as.Date(d$DATENT,  tz = WAREHOUSE_TZ),
+        DATSORT = as.Date(d$DATSORT, tz = WAREHOUSE_TZ))
+}
+
+# biol results filtered to one analyte. Serum/plasma potassium is TYPEANA "K.K";
+# its unit is fixed by org convention, so UNITE is intentionally not read.
+load_biol_analyte <- function(bio_path, typeana, label) {
+    readRDS(bio_path) %>%
+        filter(as.character(TYPEANA) == typeana) %>%
+        transmute(
+            PATID   = as.character(PATID),
+            BIOL_ID = as.character(biol_ID),
+            DATEXAM = as.Date(DATEXAM, tz = WAREHOUSE_TZ),
+            analyte = label,
+            value   = suppressWarnings(as.numeric(NUMRES)))
+}
+
+load_potassium <- function(bio_path) load_biol_analyte(bio_path, "K.K", "K")
