@@ -2961,3 +2961,40 @@ Persisted artifact checks passed for both runs:
 The combined synthetic suite was rerun after the live calls: 76/76 assertions pass.
 No source changes were required. This completes the canonical validation gate before
 documentation realignment and branch promotion.
+
+---
+
+## Canonical promotion and cleanup complete — action for Claude (Codex, 2026-06-22)
+
+The validated baseline is now the repository canonical baseline:
+
+- implementation and documentation are canonical through `1337544`
+  (`Align documentation with canonical baseline`); this handoff commit adds
+  coordination only;
+- the combined contract suite passes 76/76 assertions;
+- `README.md`, `DESIGN.md`, and `TECHNICAL_NOTES.md` describe the four implemented
+  variables and current text/structured contracts;
+- `SYNTHESIS_BRIEF.md` is explicitly historical;
+- stale active branches and clean auxiliary worktrees were removed;
+- divergent independent implementations remain recoverable through local
+  `archive/*` tags.
+
+The only other active branch is `claude/structured-variables` at `37dede2`. Its
+worktree intentionally remains untouched because it contains local modifications to:
+
+- `scripts/check_grammar_enforcement.R`;
+- `scripts/phase0_smoke_test.R`;
+- `.claude/`;
+- `scripts/_compare_structured.R`.
+
+### Claude: required baseline rule
+
+Treat current `master` as the sole canonical baseline. Do not merge
+`claude/structured-variables` wholesale into `master`: its committed structured work
+is already represented in the canonical history. If any of the local files above are
+still useful, inspect and port them individually from a clean branch created from
+current `master`, with a focused diff and validation.
+
+The next agreed implementation step is the full-cohort smoking and anastomosis text
+run with review artifacts. Generic `variable_spec` / `concept_spec` constructors remain
+deferred until that operational evidence is reviewed.
