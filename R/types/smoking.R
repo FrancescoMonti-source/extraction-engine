@@ -9,6 +9,11 @@
 suppressWarnings(suppressMessages(library(dplyr)))
 
 SMOKING_STATUSES <- c("actif", "sevre", "non_fumeur", "indetermine")
+# Output bounds (study knobs). ellmer's type_*() builders cannot express maxItems/
+# maxLength, and unbounded array/string outputs are the truncation root cause, so the
+# type below is assembled as JSON Schema and constrained via type_from_schema().
+SMOKING_EVIDENCE_MAX_ITEMS <- 5L
+SMOKING_NOTE_MAX_LEN <- 300L
 
 # Call-wide behaviour only. Field meanings live in the type descriptions below;
 # the target period lives in the task prompt. This keeps the type reusable.
@@ -20,24 +25,32 @@ SMOKING_SYSTEM_PROMPT <- paste(
 )
 
 type_smoking <- function(snippet_ids) {
-    ellmer::type_object(
-        smoking_status = ellmer::type_enum(
-            SMOKING_STATUSES,
-            paste(
-                "Statut tabagique du patient pour la periode cible definie dans la tache.",
-                "actif = tabagisme actuel explicitement documente;",
-                "sevre = ancien fumeur, sevrage ou arret documente;",
-                "non_fumeur = statut non-fumeur ou absence de tabagisme explicitement documente;",
-                "indetermine = preuves contradictoires ou insuffisantes.",
-                "Ne jamais deduire non_fumeur du silence.")),
-        evidence_ids = ellmer::type_array(
-            ellmer::type_enum(snippet_ids),
-            paste(
-                "Plus petit ensemble suffisant d'extraits (S..) soutenant directement le statut;",
-                "prefere un seul. Vide uniquement pour indetermine sans extrait pertinent.",
-                "N'invente jamais d'identifiant.")),
-        decision_note = ellmer::type_string(
-            "Explication clinique tres courte, surtout en cas de conflit ou d'ambiguite."))
+    # Bounded JSON Schema (see SMOKING_*_MAX above). Per-task dynamic snippet enum
+    # stays (one call per task). Descriptions are unchanged from the builder version.
+    schema <- list(
+        type = "object", additionalProperties = FALSE,
+        required = as.list(c("smoking_status", "evidence_ids", "decision_note")),
+        properties = list(
+            smoking_status = list(
+                type = "string", enum = as.list(SMOKING_STATUSES),
+                description = paste(
+                    "Statut tabagique du patient pour la periode cible definie dans la tache.",
+                    "actif = tabagisme actuel explicitement documente;",
+                    "sevre = ancien fumeur, sevrage ou arret documente;",
+                    "non_fumeur = statut non-fumeur ou absence de tabagisme explicitement documente;",
+                    "indetermine = preuves contradictoires ou insuffisantes.",
+                    "Ne jamais deduire non_fumeur du silence.")),
+            evidence_ids = list(
+                type = "array", maxItems = SMOKING_EVIDENCE_MAX_ITEMS,
+                items = list(type = "string", enum = as.list(snippet_ids)),
+                description = paste(
+                    "Plus petit ensemble suffisant d'extraits (S..) soutenant directement le statut;",
+                    "prefere un seul. Vide uniquement pour indetermine sans extrait pertinent.",
+                    "N'invente jamais d'identifiant.")),
+            decision_note = list(
+                type = "string", maxLength = SMOKING_NOTE_MAX_LEN,
+                description = "Explication clinique tres courte, surtout en cas de conflit ou d'ambiguite.")))
+    ellmer::type_from_schema(text = jsonlite::toJSON(schema, auto_unbox = TRUE))
 }
 
 prompt_smoking <- function(task, candidates) {

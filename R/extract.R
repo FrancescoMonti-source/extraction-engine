@@ -53,13 +53,34 @@ standard_field_validity <- function(status, normalized_value, evidence_ids) {
          validity_reason = paste(reason, collapse = "; "))
 }
 
-make_ollama_caller <- function(model = "gemma3:4b", seed = 20260621L) {
-    force(model); force(seed)
+make_ollama_caller <- function(model = "gemma3:4b", seed = 20260621L, max_tokens = 1024L) {
+    force(model); force(seed); force(max_tokens)
     function(prompt, type, system_prompt) {
         chat <- ellmer::chat_ollama(
             model = model, system_prompt = system_prompt,
-            params = ellmer::params(temperature = 0, seed = seed), echo = "none")
-        chat$chat_structured(prompt, type = type)
+            params = ellmer::params(temperature = 0, seed = seed, max_tokens = max_tokens),
+            echo = "none")
+        tryCatch(
+            chat$chat_structured(prompt, type = type),
+            error = function(e) {
+                # The error itself carries no body, but the chat retains the partial
+                # output; capture it here (chat is local) so a truncation is
+                # diagnosable from artifacts. output >= max_tokens => length-truncation.
+                partial <- tryCatch(
+                    paste(vapply(chat$last_turn()@contents,
+                                 function(co) tryCatch(co@string, error = function(...) ""),
+                                 character(1)), collapse = ""),
+                    error = function(...) NA_character_)
+                out_tok <- tryCatch({
+                    tk <- utils::tail(chat$get_tokens(), 1L)
+                    if (nrow(tk)) as.numeric(tk$output[[1]]) else NA_real_
+                }, error = function(...) NA_real_)
+                rlang::abort(
+                    conditionMessage(e), class = "engine_call_error", parent = e,
+                    partial_response = partial, output_tokens = out_tok,
+                    inferred_finish_reason =
+                        if (!is.na(out_tok) && out_tok >= max_tokens) "length" else NA_character_)
+            })
     }
 }
 
@@ -79,7 +100,10 @@ call_with_retry <- function(caller, prompt, type, system_prompt, max_tries = 3L)
             list(status = "completed", result = caller(prompt, type, system_prompt),
                  error = NA_character_, n_tries = k),
             error = function(e) list(status = "error", result = NULL,
-                                     error = conditionMessage(e), n_tries = k))
+                                     error = conditionMessage(e), n_tries = k,
+                                     partial_response = e$partial_response,
+                                     output_tokens = e$output_tokens,
+                                     inferred_finish_reason = e$inferred_finish_reason))
         if (identical(out$status, "completed")) break
         errors <- c(errors, out$error)
         if (k < max_tries && .is_transient(out$error)) Sys.sleep(min(5L * k, 15L)) else break
@@ -87,6 +111,12 @@ call_with_retry <- function(caller, prompt, type, system_prompt, max_tries = 3L)
     out$errors <- errors
     out$started_at <- started
     out$latency_ms <- as.numeric(difftime(Sys.time(), started, units = "secs")) * 1000
+    # observability fields are absent on completed calls and plain-stop fakes
+    if (is.null(out$partial_response)) out$partial_response <- NA_character_
+    if (is.null(out$output_tokens))   out$output_tokens   <- NA_real_
+    if (is.null(out$inferred_finish_reason)) {
+        out$inferred_finish_reason <- NA_character_
+    }
     out
 }
 
@@ -165,6 +195,9 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
             started_at = call$started_at, latency_ms = round(call$latency_ms),
             prompt_hash = prompt_hash, schema_hash = schema_hash, query_hash = query_hash,
             task_validity = tvalid, error = ifelse(nzchar(err), err, NA_character_),
+            output_tokens = call$output_tokens,
+            inferred_finish_reason = call$inferred_finish_reason,
+            partial_response = call$partial_response,   # PHI-ish: run.rds only, not the workbook
             raw_response = list(if (identical(call$status, "completed")) call$result else NULL))
     }
 
@@ -175,7 +208,9 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
         definition = character(), attempt_status = character(), processing_status = character(),
         n_tries = integer(), started_at = as.POSIXct(character()), latency_ms = double(),
         prompt_hash = character(), schema_hash = character(), query_hash = character(),
-        task_validity = character(), error = character(), raw_response = list())
+        task_validity = character(), error = character(), output_tokens = double(),
+        inferred_finish_reason = character(), partial_response = character(),
+        raw_response = list())
 
     final_coverage <- coverage %>%
         left_join(distinct(attempts, task_id, attempt_status, processing_status, task_validity),
@@ -194,21 +229,41 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
          attempts = attempts, candidates = candidates)
 }
 
-# Generic physician review view: one row per task x clinical field.
-build_review_view <- function(values, evidence) {
-    if (!nrow(values)) return(tibble::tibble())
-    ev <- evidence %>%
-        semi_join(distinct(values, task_id, field), by = c("task_id", "field")) %>%
-        group_by(task_id, field) %>%
-        summarise(cited_snippet_ids = paste(unique(snippet_id), collapse = ";"),
-                  hit_refs = paste(unique(hit_ref), collapse = ";"),
-                  ELTIDs = paste(unique(ELTID), collapse = ";"),
-                  model_visible_snippets = paste(unique(sprintf("[%s] %s", snippet_id, snippet_text)),
-                                                 collapse = "\n\n"),
-                  .groups = "drop")
-    values %>%
-        select(task_id, field, status, normalized_value, accepted_value, field_validity,
-               validity_reason, task_validity, task_validity_reason, task_summary) %>%
-        left_join(ev, by = c("task_id", "field")) %>%
-        mutate(review_decision = "", review_note = "")
+# Generic physician review view: one row per task x clinical field, PLUS one row
+# per failed task. A model_error/processing_error task has no `values` row, so
+# without an explicit row it would be invisible here -- making "route to review"
+# untrue. Pass `coverage` (+ `attempts`) to surface failures as review rows.
+build_review_view <- function(values, evidence, coverage = NULL, attempts = NULL) {
+    base <- if (!nrow(values)) tibble::tibble() else {
+        ev <- evidence %>%
+            semi_join(distinct(values, task_id, field), by = c("task_id", "field")) %>%
+            group_by(task_id, field) %>%
+            summarise(cited_snippet_ids = paste(unique(snippet_id), collapse = ";"),
+                      hit_refs = paste(unique(hit_ref), collapse = ";"),
+                      ELTIDs = paste(unique(ELTID), collapse = ";"),
+                      model_visible_snippets = paste(unique(sprintf("[%s] %s", snippet_id, snippet_text)),
+                                                     collapse = "\n\n"),
+                      .groups = "drop")
+        values %>%
+            select(task_id, field, status, normalized_value, accepted_value, field_validity,
+                   validity_reason, task_validity, task_validity_reason, task_summary) %>%
+            left_join(ev, by = c("task_id", "field")) %>%
+            mutate(review_decision = "", review_note = "")
+    }
+    failed <- tibble::tibble()
+    if (!is.null(coverage) && "processing_state" %in% names(coverage)) {
+        fc <- coverage %>% filter(processing_state %in% c("model_error", "processing_error"))
+        if (nrow(fc)) {
+            errs <- if (!is.null(attempts) && nrow(attempts)) {
+                distinct(attempts, task_id, error)
+            } else tibble::tibble(task_id = character(), error = character())
+            failed <- fc %>%
+                select(task_id, processing_state) %>%
+                left_join(errs, by = "task_id") %>%
+                transmute(task_id, field = NA_character_, status = processing_state,
+                          field_validity = processing_state, validity_reason = error,
+                          task_validity = "invalid", review_decision = "", review_note = "")
+        }
+    }
+    bind_rows(base, failed)
 }

@@ -14,6 +14,11 @@ ANASTOMOSES_FIELDS <- c(
     transplantation_type_anastomose_ureterale          = "string"
 )
 ANASTOMOSES_SUMMARY <- "transplantation_resume_anastomoses"
+# Output bounds (study knobs). ellmer's builders cannot express maxItems/maxLength, so
+# the nested type below is assembled as JSON Schema and constrained via type_from_schema().
+ANASTOMOSES_EVIDENCE_MAX_ITEMS <- 5L
+ANASTOMOSES_LABEL_MAX_LEN <- 100L
+ANASTOMOSES_SUMMARY_MAX_LEN <- 400L
 
 # Call-wide behaviour only. Per-field clinical rules live in the value
 # descriptions inside type_anastomoses(); the status/evidence contract lives in
@@ -49,30 +54,44 @@ ANASTOMOSES_VALUE_DESCRIPTIONS <- c(
 )
 
 type_anastomoses <- function(snippet_ids) {
+    # Bounded JSON Schema (see ANASTOMOSES_*_MAX above). `value` stays OPTIONAL (it is
+    # excluded from `required`, mirroring the builder's required = FALSE); descriptions
+    # are unchanged. Per-task dynamic snippet enum is reused across all fields.
+    id_enum <- as.list(snippet_ids)
     evidenced <- function(kind, value_desc) {
-        vt <- if (kind == "integer") {
-            ellmer::type_integer(value_desc, required = FALSE)
+        value <- if (kind == "integer") {
+            list(type = "integer", description = value_desc)
         } else {
-            ellmer::type_string(value_desc, required = FALSE)
+            list(type = "string", maxLength = ANASTOMOSES_LABEL_MAX_LEN, description = value_desc)
         }
-        ellmer::type_object(
-            status = ellmer::type_enum(
-                c("documented", "not_documented", "unusable"),
-                "documented = valeur explicite utilisable; not_documented = absente; unusable = presente mais inexploitable selon la regle du champ."),
-            value = vt,
-            evidence_ids = ellmer::type_array(
-                ellmer::type_enum(snippet_ids),
-                paste("Plus petit ensemble suffisant d'extraits (S..) justifiant la decision;",
-                      "pour 'unusable' cite OBLIGATOIREMENT l'extrait qui cause le null;",
-                      "[] seulement pour 'not_documented'. N'invente jamais d'identifiant.")))
+        list(
+            type = "object", additionalProperties = FALSE,
+            required = as.list(c("status", "evidence_ids")),
+            properties = list(
+                status = list(
+                    type = "string",
+                    enum = as.list(c("documented", "not_documented", "unusable")),
+                    description = "documented = valeur explicite utilisable; not_documented = absente; unusable = presente mais inexploitable selon la regle du champ."),
+                value = value,
+                evidence_ids = list(
+                    type = "array", maxItems = ANASTOMOSES_EVIDENCE_MAX_ITEMS,
+                    items = list(type = "string", enum = id_enum),
+                    description = paste("Plus petit ensemble suffisant d'extraits (S..) justifiant la decision;",
+                                        "pour 'unusable' cite OBLIGATOIREMENT l'extrait qui cause le null;",
+                                        "[] seulement pour 'not_documented'. N'invente jamais d'identifiant."))))
     }
-    args <- setNames(
+    props <- setNames(
         lapply(names(ANASTOMOSES_FIELDS),
                function(f) evidenced(ANASTOMOSES_FIELDS[[f]], ANASTOMOSES_VALUE_DESCRIPTIONS[[f]])),
         names(ANASTOMOSES_FIELDS))
-    args[[ANASTOMOSES_SUMMARY]] <- ellmer::type_string(
-        "Resume clinique tres court des preuves retenues et des nulls consequents.")
-    do.call(ellmer::type_object, args)
+    props[[ANASTOMOSES_SUMMARY]] <- list(
+        type = "string", maxLength = ANASTOMOSES_SUMMARY_MAX_LEN,
+        description = "Resume clinique tres court des preuves retenues et des nulls consequents.")
+    schema <- list(
+        type = "object", additionalProperties = FALSE,
+        required = as.list(c(names(ANASTOMOSES_FIELDS), ANASTOMOSES_SUMMARY)),
+        properties = props)
+    ellmer::type_from_schema(text = jsonlite::toJSON(schema, auto_unbox = TRUE))
 }
 
 prompt_anastomoses <- function(task, candidates) {

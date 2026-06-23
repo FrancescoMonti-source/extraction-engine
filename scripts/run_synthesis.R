@@ -39,7 +39,7 @@ SEED <- 20260621L
 run <- run_extraction(r$coverage, r$candidates, definition,
                       make_ollama_caller(MODEL, SEED), MODEL,
                       provider = "ollama", seed = SEED, query = query, sample_n = N)
-review <- build_review_view(run$values, run$evidence)
+review <- build_review_view(run$values, run$evidence, run$coverage, run$attempts)
 
 stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 run_id <- paste0(stamp, "_", Sys.getpid())                 # pid avoids same-second collision
@@ -66,7 +66,7 @@ safe_sheet <- function(df) {
 openxlsx::write.xlsx(
     lapply(list(physician_review = review, coverage = run$coverage,
                 values = flatten(run$values), evidence = run$evidence,
-                attempts = dplyr::select(run$attempts, -dplyr::any_of("raw_response")),
+                attempts = dplyr::select(run$attempts, -dplyr::any_of(c("raw_response", "partial_response"))),
                 candidates = flatten(run$candidates)),
            safe_sheet),
     file.path(out_dir, "review.xlsx"), asTable = TRUE, overwrite = FALSE)

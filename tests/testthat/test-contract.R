@@ -183,3 +183,66 @@ test_that("a cited snippet ID that was never supplied fails the field closed", {
     expect_true(sids[1] %in% ev$snippet_id)                # real ID still resolves
     expect_false("S999" %in% ev$snippet_id)                # fabricated ID never materializes
 })
+
+test_that("bounded response schemas preserve dynamic evidence enums", {
+    smoking <- type_smoking("S001")
+    anastomoses <- type_anastomoses(c("S001", "S002"))
+
+    expect_s3_class(smoking, "ellmer::TypeJsonSchema")
+    expect_equal(smoking@json$properties$evidence_ids$maxItems,
+                 SMOKING_EVIDENCE_MAX_ITEMS)
+    expect_equal(unlist(smoking@json$properties$evidence_ids$items$enum), "S001")
+    expect_equal(smoking@json$properties$decision_note$maxLength,
+                 SMOKING_NOTE_MAX_LEN)
+
+    arterial <- anastomoses@json$properties$transplantation_type_anastomose_arterielle
+    expect_s3_class(anastomoses, "ellmer::TypeJsonSchema")
+    expect_equal(arterial$properties$evidence_ids$maxItems,
+                 ANASTOMOSES_EVIDENCE_MAX_ITEMS)
+    expect_equal(unlist(arterial$properties$evidence_ids$items$enum),
+                 c("S001", "S002"))
+    expect_equal(arterial$properties$value$maxLength, ANASTOMOSES_LABEL_MAX_LEN)
+})
+
+test_that("a failed call records partial output and inferred stop reason", {
+    coverage <- tibble::tibble(
+        task_id = "T1", coverage_state = "candidate",
+        anchor_date = as.Date("2025-01-01"))
+    candidates <- tibble::tibble(
+        task_id = "T1", snippet_id = "S001", hit_ref = "E::1", ELTID = "E",
+        sentence = 1L, hit_text = "t", snippet_text = "t",
+        RECDATE = as.Date("2025-01-01"), RECTYPE = "n")
+    # caller fails the way make_ollama_caller re-raises a truncation
+    fake <- function(prompt, type, system_prompt) {
+        rlang::abort("parse error: premature EOF", class = "engine_call_error",
+                     partial_response = '{ "x":', output_tokens = 1024,
+                     inferred_finish_reason = "length")
+    }
+    run <- run_extraction(coverage, candidates, anastomoses_definition(), fake, "fake")
+    a <- run$attempts
+    expect_equal(a$attempt_status, "error")
+    expect_equal(a$n_tries, 1L)                            # EOF is deterministic, not retried
+    expect_equal(a$inferred_finish_reason, "length")
+    expect_equal(a$output_tokens, 1024)
+    expect_match(a$partial_response, "\\{")                # partial output captured
+    expect_equal(run$coverage$processing_state, "model_error")
+})
+
+test_that("build_review_view surfaces failed tasks as explicit review rows", {
+    values <- tibble::tibble(
+        task_id = "T2", field = "x", status = "documented", normalized_value = "v",
+        accepted_value = "v", field_validity = "valid", validity_reason = "",
+        task_validity = "valid", task_validity_reason = "", task_summary = NA_character_)
+    evidence <- tibble::tibble(
+        task_id = "T2", field = "x", snippet_id = "S001", hit_ref = "E::1",
+        ELTID = "E", snippet_text = "t")
+    coverage <- tibble::tibble(task_id = c("T1", "T2"),
+                               processing_state = c("model_error", "valid"))
+    attempts <- tibble::tibble(task_id = "T1", error = "premature EOF")
+    review <- build_review_view(values, evidence, coverage, attempts)
+    t1 <- review[review$task_id == "T1", ]
+    expect_equal(nrow(t1), 1L)                             # failed task is visible
+    expect_equal(t1$status, "model_error")
+    expect_equal(t1$validity_reason, "premature EOF")
+    expect_true("T2" %in% review$task_id)                  # the valid task is still present
+})

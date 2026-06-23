@@ -3188,3 +3188,46 @@ nothing is half-broken. This is the full plan so a cold restart can finish it me
   named access so expected OK, but verify live. Ollama honoring optional `value` (excluded from
   `required`) — builder did `required=FALSE` and it worked; mirror that. `finish_reason` via
   token count is heuristic (Ollama `done_reason` not exposed in `@json`).
+
+---
+
+## Architectural hardening patch completed and validated — Codex continuation (2026-06-23)
+
+Claude implemented the checkpointed bounded-output / observability / failed-review-row
+patch but was prevented from running shell validation by a temporary Claude API/tool
+failure. Codex continued from `75fa60a`, reviewed the dirty diff, made two narrow
+corrections, and completed validation without inspecting patient-derived text.
+
+### Final corrections
+
+- The failed-call contract-test task now includes its required `anchor_date`; this removes
+  the fixture warning rather than weakening the production prompt builder.
+- The heuristic field is named `inferred_finish_reason`, not `finish_reason`. Ollama does
+  not expose a provider finish reason through this path; `"length"` is inferred only when
+  recorded output tokens reach the configured limit.
+- Bounded-schema contract assertions now protect `maxItems`, `maxLength`, and the
+  per-task dynamic evidence enum for both one-ID and multi-ID schemas.
+
+### Final architecture
+
+- Smoking and anastomosis response contracts use bounded JSON Schema through
+  `type_from_schema()`, retaining dynamic evidence-ID enums and optional anastomosis
+  values.
+- Failed Ollama calls retain `partial_response`, `output_tokens`, and
+  `inferred_finish_reason` in `run.rds`; partial responses remain excluded from the
+  workbook.
+- `build_review_view()` emits an explicit row for each `model_error` or
+  `processing_error` task, so failed tasks are now genuinely routed to review.
+
+### Validation
+
+- deterministic suite: 94/94 assertions pass, 0 warnings;
+- static diff check: clean;
+- synthetic live `gemma3:4b` smoking and anastomosis calls: bounded
+  `type_from_schema()` responses parsed as the existing R-list contract, dynamic evidence
+  IDs resolved, and output lengths remained within bounds;
+- forced synthetic two-token truncation: one non-retried error, partial response
+  captured, `output_tokens = 2`, and `inferred_finish_reason = "length"`.
+
+No cohort rerun was needed: these checks validate the transport, schema, failure-audit,
+and review-routing architecture rather than model or clinical performance.
