@@ -3110,3 +3110,81 @@ review rows. That wording is withdrawn.
 Open: ownership/timing of the #3 patch (Claude / Codex / parallel round) -- for the human.
 
 **Files changed.** `HANDOFF.md` (this note).
+
+---
+
+## CHECKPOINT — architectural patch design, not yet implemented (Claude, 2026-06-23)
+
+Re-entry note (written under a usage-limit risk). Decision: Claude builds the #3 patch,
+Codex reviews. Branch `claude/full-cohort-text-run` @ `a2ff6d4`. Committed and durable:
+`f690d63` (safe_sheet) + `a2ff6d4` (findings/correction). **No patch code written yet** —
+nothing is half-broken. This is the full plan so a cold restart can finish it mechanically.
+
+### Confirmed before coding
+- **Bounded outputs must use `type_from_schema`.** ellmer 0.4.1 builders lack
+  `maxItems`/`maxLength` (verified `formals`); this is the sanctioned escape hatch (HANDOFF
+  2026-06-20 "keep type_from_schema as a constraint escape hatch"). Per-task dynamic enum
+  stays (engine makes per-task calls). Contract tests inject **fake callers** -> they bypass
+  the real type, so they stay green as long as `type_builder()` does not error.
+- **Failure-capture spike result.** On a truncated structured call the error is a bare
+  `simpleError` (no data fields), BUT `chat$last_turn()@contents[[i]]@string` holds the
+  partial text and `tail(chat$get_tokens(),1)$output == max_tokens` flags length-truncation.
+  Must be captured INSIDE `make_ollama_caller` (the `chat` is local there) and re-raised.
+
+### Part 3 — failure observability (`R/extract.R`)
+- `make_ollama_caller(model, seed, max_tokens = 1024L)`: wrap `chat$chat_structured` in
+  `tryCatch`; on error capture `partial` (paste `chat$last_turn()@contents` `@string`s) and
+  `out_tok` (`tail(chat$get_tokens(),1)$output`); `rlang::abort(conditionMessage(e),
+  class="engine_call_error", partial_response=partial, output_tokens=out_tok,
+  finish_reason=if(out_tok>=max_tokens) "length" else NA, parent=e)`.
+- `call_with_retry` error handler: also read `e$partial_response / e$output_tokens /
+  e$finish_reason` (NULL -> NA for fake callers/plain stops). Normalise `out$` defaults after
+  the retry loop.
+- `run_extraction` attempts tibble (and the empty-attempts template): add
+  `partial_response` (list-col), `output_tokens`, `finish_reason`.
+- `scripts/run_synthesis.R` workbook write: drop `partial_response` too (PHI; keep in
+  `run.rds`, like `raw_response`).
+
+### Part 2 — explicit failed-task review rows (`R/extract.R` + `run_synthesis.R`)
+- `build_review_view(values, evidence, coverage = NULL, attempts = NULL)`: after the existing
+  base, append one row per `coverage` task whose `processing_state %in% c("model_error",
+  "processing_error")`: `task_id`, `field = NA`, `status = processing_state`,
+  `field_validity = processing_state`, `validity_reason = error` (from `attempts`),
+  `review_decision = ""`, `review_note = ""`; `bind_rows(base, failed)` fills missing cols NA.
+- Only caller is `run_synthesis.R` (no test calls it) -> update to
+  `build_review_view(run$values, run$evidence, run$coverage, run$attempts)`.
+
+### Part 1 — bounded outputs (`R/types/smoking.R`, `R/types/anastomoses.R`)
+- Constants: `EVIDENCE_MAX_ITEMS = 5`; smoking `NOTE_MAX_LEN = 300`; anastomoses
+  `LABEL_MAX_LEN = 100`, `SUMMARY_MAX_LEN = 400` (study knobs; descriptions UNCHANGED).
+- Rebuild `type_smoking`/`type_anastomoses` to assemble a schema list and return
+  `ellmer::type_from_schema(text = jsonlite::toJSON(schema, auto_unbox = TRUE))`. Use
+  `as.list()` for EVERY enum and the `required` array (so a length-1 snippet set stays a JSON
+  array, not a scalar).
+- smoking: props `smoking_status`(enum), `evidence_ids`(array items enum=as.list(snippet_ids),
+  `maxItems`), `decision_note`(string `maxLength`); `required` = all 3; `additionalProperties=FALSE`.
+- anastomoses: per field object {`status` enum3, `value` integer|string(`maxLength=LABEL_MAX_LEN`)
+  **NOT in required** (mirrors builder `required=FALSE`), `evidence_ids` array enum `maxItems`};
+  field `required` = status+evidence_ids; `summary` string(`maxLength=SUMMARY_MAX_LEN`); top
+  `required` = all fields + summary; `additionalProperties=FALSE`.
+- **Parsers stay UNCHANGED** (named `$`/`[[ ]]` + `unlist` handle the raw-list, non-tibble
+  output of `type_from_schema`). MUST verify with a live call that `result[[f]]$status` /
+  `node$value` / `evidence_ids` resolve under jsonlite simplification; adjust parser minimally
+  only if needed.
+
+### Validation
+- `testthat`: 31 contract assertions must still pass (fakes bypass the real type). Add: bounded
+  builder returns a non-erroring type for length-1 and length-n snippet_ids; `build_review_view`
+  emits a row for a `model_error`/`processing_error` task.
+- Live: `SYNTHESIS_N=5` smoking + anastomoses on `gemma3:4b` (Ollama must be running) -> calls
+  complete, parser handles output, no truncation; optionally one forced-truncation task to
+  confirm `partial_response` lands in attempts.
+- Pre-flight + run reminders: `Rscript` is NOT on PATH -> use
+  `C:\Program Files\R\R-4.5.3\bin\Rscript.exe`; start Ollama first; never trust background
+  exit 0 — read the output. Throwaway `scripts/_spike_capture.R` removed at checkpoint.
+
+### Risks
+- `type_from_schema` returns raw parsed structure (no typed tibble conversion) — parsers use
+  named access so expected OK, but verify live. Ollama honoring optional `value` (excluded from
+  `required`) — builder did `required=FALSE` and it worked; mirror that. `finish_reason` via
+  token count is heuristic (Ollama `done_reason` not exposed in `@json`).
