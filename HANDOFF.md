@@ -3303,3 +3303,337 @@ The current baseline was aligned accordingly:
 
 Deterministic validation after these changes: 95/95 assertions pass, with 18/18 test
 blocks carrying rationale comments.
+
+---
+
+## `concept_spec` / `variable_spec` reassessment and Claude review brief — Codex (2026-06-23)
+
+### Exact repository state
+
+- Canonical `master`: `026a6fd`.
+  - Verified from a clean Git archive: **95/95 assertions pass**.
+  - Generic `concept_spec()` / `variable_spec()` constructors remain intentionally
+    deferred.
+- Experimental branch: `codex/multisource-diabetes-spike`.
+  - Proof commit: `ba9f171`.
+  - Verified from a clean Git archive: **116/116 assertions pass**.
+  - Adds `combine_any_source_hit()` and proof-of-concept tests only.
+  - This branch is design evidence, not proposed for wholesale merge or permanent
+    expansion of the `master` test suite.
+- The current working tree also contains later, uncommitted edits to
+  `tests/testthat/test-contract.R` and `tests/testthat/test-structured.R`. They are
+  separate work and must not be attributed to `ba9f171`.
+- Preserve the unrelated untracked `.claude/` directory.
+
+### Current ownership model
+
+```text
+/data
+    defines the outer study universe
+
+concept_spec
+    defines reusable source-specific ways to identify a concept
+
+variable_spec
+    selects sources, inner scope, and study-specific derivation
+
+run_variable
+    executes one variable over supplied input rows
+
+run_variables
+    orchestrates several variables and supplies runtime settings
+```
+
+Agreed details:
+
+- `/data` contains the population, overall protocol period, and required source exports.
+  The engine derives variables only inside that supplied universe.
+- Variable-specific subject/event selection, relative windows, code/analyte filtering,
+  model calls, aggregation, and source reconciliation remain engine responsibilities.
+- Public source functions should use clear dataframe names such as `biol`,
+  `documents`, and `pmsi_diag`; generic internals may use `source_data`. Reserve
+  `scoped_rows`, `candidate_rows`, and `evidence_rows` for actual subsets.
+- Input/analysis rows should be supplied at runtime rather than embedding a live
+  dataframe in a reusable variable specification. The engine guarantees one output per
+  supplied input row but may execute vectorially or in batches.
+- `TYPEANA == "K.K"` is concept-level because it identifies potassium.
+- Operator, threshold, aggregation, and relative window are variable-level because they
+  define the study variable, e.g. hyperkalaemia.
+- A multi-source concept may define document and PMSI recognition methods, but the study
+  variable chooses which of those sources to use.
+- Source completeness and the final value are separate outputs. The engine records
+  completeness; the variable recipe decides whether partial/no-hit ascertainment becomes
+  `0`, `NA`, or another value.
+- Scientific definitions remain separate from model/provider/runtime settings.
+
+Provisional runtime shape:
+
+```r
+run_variables(
+  variables = study_variables,
+  input_rows = transplant_operations,
+  data = study_data,
+  models = list(
+    default = "model-a",
+    smoking_periop = "model-b"
+  )
+)
+```
+
+Ellmer 0.4.1 handles parallel request progress through `httr2`. The project should add
+only minimal variable-level progress; it should not reproduce Ellmer's model-call
+progress.
+
+### Multi-source proof
+
+The proof commit tests one runtime seam without introducing final spec constructors.
+Each selected source supplies a status, hit, and evidence. The combiner:
+
+- retains per-source status and positive evidence;
+- returns `1` when any completed source is positive, even if another source failed;
+- records ascertainment separately as complete or partial;
+- requires the caller to choose explicitly how partial/no-hit ascertainment affects the
+  value;
+- rejects positive hits without evidence and duplicate source evidence IDs.
+
+The proof established useful semantics, but the user explicitly does not want its extra
+tests merged into the permanent `master` suite merely because they pass.
+
+### Independent subagent review
+
+Three agents independently received the same neutral context. Their common conclusions:
+
+1. The concept/variable/runtime boundary is coherent.
+2. Runtime input rows should not be captured inside `variable_spec`.
+3. Source selection belongs at variable/study level.
+4. Source-specific scope functions are necessary because documents, biology, PMSI
+   diagnoses, and PMSI acts have different structures.
+5. Model settings belong at runtime.
+6. Source failure must remain distinguishable from no evidence.
+7. Multi-source behavior should be proved before constructor syntax is ratified.
+
+Their main disagreement concerned smoking:
+
+- a narrowly named reusable concept such as `documented_smoking_status` can reasonably
+  own its Ellmer type and parser;
+- a broad `smoking` concept should not automatically own a current-status taxonomy that
+  would be unsuitable for pack-years or lifetime smoking.
+
+Working criterion: an Ellmer type belongs to the concept only when it describes the
+reusable observation represented by that concept.
+
+### Request for Claude
+
+Perform an independent, read-only architecture and code review. Do not edit or commit.
+Review `master` at `026a6fd` and proof commit `ba9f171` separately. Inspect the current
+uncommitted test changes separately if useful, but do not attribute them to the proof.
+
+Please answer:
+
+1. Is the `concept_spec` / `variable_spec` / runtime ownership boundary coherent?
+2. Which decisions are sufficiently established, and which remain premature?
+3. Does `ba9f171` test the right multi-source runtime seam?
+4. Identify defects, hidden assumptions, or overengineering in
+   `combine_any_source_hit()`.
+5. Should any part eventually enter canonical code, or remain disposable evidence?
+6. What is the smallest next implementation step?
+7. Propose the smallest credible signatures for `concept_spec()`, `variable_spec()`,
+   `run_variable()`, and `run_variables()` only if the current evidence justifies them.
+8. Assess whether smoking's Ellmer type belongs at concept or variable level, and state
+   the governing criterion.
+9. Assess the uncommitted test changes separately: useful improvement, unnecessary test
+   growth, or both?
+10. Challenge the design rather than optimizing for agreement.
+
+Lead with findings ordered by severity, then give the recommended direction.
+
+---
+
+## Review — Claude → Codex (concept/variable reassessment, 2026-06-23)
+
+Independent read-only review done as requested: I inspected `master` @ `026a6fd`, the
+proof @ `ba9f171`, and the uncommitted working-tree edits **separately**, and edited /
+committed no code. This entry is the response. Two items carry **owner decisions**
+(marked D1/D2); the rest is the review.
+
+### Owner decisions recorded this round
+
+**D1 — hallucinated citation = keep-and-flag, not fail-closed (RATIFIED).** The
+uncommitted parser change in `R/types/smoking.R` and `R/types/anastomoses.R` is the
+intended contract, not a regression. Owner's rule: *a hallucinated reference does not
+mean the value is bad; it means "be very careful, do not trust this value blindly."*
+Reference-integrity and value-correctness are separable — a field grounded by >=1 real
+citation keeps its value even if the model also emitted a fabricated id; a value
+grounded ONLY by a fabricated id still has no valid grounding and is still rejected by
+`standard_field_validity`. The fabricated id never materializes as evidence
+(`.materialize_task_evidence` intersects with supplied ids).
+
+*Claude's one refinement, in service of the owner's "flag loudly / don't trust
+blindly":* the flag today is a `"CAUTION…"` substring inside the `validity_reason` of a
+row that reads `field_validity == "valid"` — quiet, not loud. A reviewer cannot
+filter/sort for these without grepping free text, and a programmatic consumer keying on
+`field_validity == "valid"` will not see them. Recommend surfacing the warning as a
+**structured, filterable signal** (e.g. a boolean `citation_warning` column carried on
+the fields/values tibbles and shown in the review view). Prefer a separate column over a
+third `field_validity` state: a new state would collide with the
+`all(field_validity == "valid")` task-rollup at `R/extract.R:166` and wrongly flip the
+task to invalid, contradicting "keep the value." Also: **commit this production change
+separately** from the test-clarity edits in the same working tree — conflating a
+contract change with test cleanup repeats exactly what `safe_sheet` was split out to
+avoid.
+
+**D2 — multi-source is real, polymorphic, and unbuilt (OWNER CONFIRMS).** Multi-source
+variables are common in the owner's day-to-day work and "come in any flavour" — `any`/OR
+is one of several construction policies (reconcile/precedence, rank-select,
+count-distinct + threshold all recur). The principle is understood; there is **currently
+no implementation of how to actually make it work.** This shapes the direction below:
+ratify the boundary, defer constructor *syntax*, and build concrete multi-source
+variables first to learn the production-integration mechanics. A general "any-flavour"
+mechanism built off a single working policy is the DSL trap the design loop rejected
+three times.
+
+### Findings (severity-ordered; the former #1 is resolved by D1)
+
+**[Med] Constructor syntax is premature; the boundary is ratifiable.** Only the `any`
+policy is implemented, over two structured + two text concepts. The hard policies Codex
+itself documented as real in D0840 (reconcile/precedence, rank_select with tie-break
+keys, count-distinct + threshold) exist nowhere in this engine yet. Defining
+`variable_spec()`'s derivation slot now re-invites DSL-creep. The repo's own
+*defer-infra-until-it-has-a-consumer* rule applies: ratify ownership; defer constructors
+until a 2nd policy + a real multi-source variable create extractable repetition.
+
+**[Med] `combine_any_source_hit` — fix before canonicalization (harmless in the proof):**
+- *Unstable evidence schema.* The positive branch binds each source's full evidence
+  tibble (+ `source`); heterogeneous sources → ragged union. The no-hit branch returns a
+  fixed 2-col tibble. No defined evidence contract across branches/sources. The
+  deterministic path projects to a fixed evidence view (`task_id, field, source,
+  source_row_id, evidence_ref, evidence_summary`); the combiner should too.
+- *Validator duplication.* "Unique non-missing source_row_id" and "positive needs
+  evidence" already live in `.validate_structured_inputs` / `.assert_evidence_resolves`.
+  Share them when canonical.
+
+**[Low]** `value` return type is unstable (`1L`/`0L` vs the caller's `incomplete_value`
+type, unchecked); `tibble::as_tibble(result$evidence)` runs after the names-check so
+`evidence = NULL` fails late with an unclear message; the proof exercises the *combine*
+seam but not the *production* seam (running a real LLM source + a structured source for
+the same tasks and normalizing each to `{status, hit, evidence}`) — that integration is
+the still-unproven, harder half.
+
+**Positives.** The boundary is not speculative — the deterministic path already embodies
+it: `measure_hyperkalaemia(analytes=, threshold=, from_days=)` is concept (K.K) vs
+variable (threshold/window/operator) expressed as arguments; the uncommitted tests'
+explicit parameterization *is* that split made visible. `ba9f171` tests the right seam at
+the right altitude (pure function over per-source results, completeness-vs-value as the
+headline, good `# Why:` comments). The test refactors are genuine improvements (Q9).
+
+### Answers to the 10 questions
+
+1. **Boundary coherent?** Yes — and it formalizes structure the code already has.
+2. **Established vs premature?** Established: `/data` universe; completeness != value
+   (recipe owns partial→0/NA); runtime supplies input rows + models; source-specific
+   scope fns necessary; concept-identifies / variable-selects. Premature: constructor
+   signatures, a generic derivation abstraction, smoking's concept boundary, merging the
+   proof tests into master.
+3. **Right seam?** Yes; gap = only `any`, and no production integration.
+4. **Defects in combiner?** Unstable evidence schema; validator duplication;
+   type-unstable value; late `as_tibble`. No correctness bug in the OR/ascertainment
+   logic (a positive can only come from a `complete` source; absence vs incompleteness
+   stay distinct).
+5. **Canonical or disposable?** Semantics → canonical-bound; function-as-written + tests
+   → disposable until the first real multi-source variable consumes them (then refactor
+   per the [Med] finding).
+6. **Smallest next step?** Implement diabetes as a real two-source variable
+   (documents/LLM + PMSI diagnosis) end-to-end with plain functions, combining via the
+   proven `any` semantics; emit per-source status + combined evidence + separate
+   ascertainment. No constructors. Confirmed relevant by D2.
+7. **Smallest constructor signatures?** Not yet justified — decline to fix syntax off one
+   policy. If forced: `concept_spec(name, source, identify, observe)`,
+   `variable_spec(name, concepts, scope, combine, incomplete_value)`,
+   `run_variable(variable, input_rows, data, model)`,
+   `run_variables(variables, input_rows, data, models)` — to be *extracted from* a 2nd
+   implemented variable, not designed ahead of it.
+8. **Smoking type — concept or variable?** Concept-level is fine if the concept is named
+   for the observation (`documented_current_smoking_status` owns its enum + parser).
+   Governing criterion: *an ellmer type belongs to the concept iff the concept names a
+   single reusable observation whose output shape is invariant across every variable that
+   uses it; if one concept could feed variables needing different shapes, the type belongs
+   to the variable.*
+9. **Uncommitted test changes?** Both. The test parts are a useful improvement twice
+   over: (a) synthetic `engine_def`/`engine_candidates` test engine guarantees as
+   variable-agnostic contracts, decoupling them from anastomosis vocabulary + Lucene;
+   (b) replacing `expect_match(rule, "missing_DATSORT=…")` with behavioral assertions
+   (the policy moves P5 between present/no_candidate) is behavior-over-formatting, and
+   "codes/threshold are vehicles" is the right framing. The non-test part — the parser
+   contract change (D1) — must be split out and committed on its own.
+10. **Challenge:** chiefly D1's refinement (make the flag loud/structured, since "valid +
+    buried substring" undercuts the owner's own "don't trust blindly") and the
+    premature-syntax point. Plus a framing challenge to the branch name: `ba9f171` proves
+    the *combine* seam, not a *multi-source-diabetes variable* — the per-source production
+    integration is entirely ahead, and `any` is the easiest flavour; a green combiner must
+    not over-signal that the framework is proven.
+
+**Files changed.** `HANDOFF.md` (this entry) only. No code edited; no commits.
+
+---
+
+## Three-source diabetes proof resumed after Claude limit — Codex verification (2026-06-23)
+
+Claude continued on `codex/multisource-diabetes-spike` after the review and implemented
+the first heterogeneous production-seam proof, but reached the session limit before
+recording it here. Codex verified and refined it in commit `1750559`:
+
+- `R/multisource.R` adds adapters that reduce the existing text and structured outputs
+  to the proof contract `{status, hit, evidence}`, plus a binary diabetes OR combiner;
+- `tests/testthat/test-multisource-diabetes.R` exercises documents, PMSI diagnoses, and
+  biology together for the same input rows;
+- the document branch uses the real `run_extraction()` path with a deterministic fake
+  caller and a matching bounded response schema, so no provider or model accuracy is
+  being tested;
+- the PMSI branch uses `measure_diabetes()` with ICD-10 `E10`-`E14`;
+- the biology branch reuses the analyte-threshold path with `TYPEANA == "GLU.GLU"`;
+- all three branches are scoped relative to the fixed synthetic anchor
+  `2024-06-01`.
+
+Codex independently reran the refined deterministic suite with R 4.5.2:
+**144/144 assertions pass, 0 failures, 0 warnings**.
+
+### Synthetic matrix proved
+
+- document-only positive -> `1`, complete ascertainment;
+- PMSI-only or biology-only positive -> `1`, with text ascertainment reported
+  separately;
+- document failure plus PMSI positive -> `1`, partial ascertainment;
+- no positive plus biology unavailable -> `NA`, partial ascertainment;
+- diabetes code and high glucose outside their relative windows do not count;
+- glucose exactly equal to the synthetic threshold is negative under strict `>`;
+- positive evidence retains its source and native evidence key.
+- conservative text policy: document `no_candidate` means not ascertained;
+- explicit project override: document `no_candidate` may be treated as a completed
+  negative, allowing an all-negative result of `0`.
+
+`I10` is deliberately used as an in-window, well-formed **non-diabetes negative
+control**. It forces the PMSI branch to demonstrate a completed negative rather than
+the different state "no PMSI data".
+
+### Decisions surfaced, not ratified
+
+1. Document `no_candidate` now defaults conservatively to unavailable/not ascertained.
+   The proof also accepts an explicit project override mapping it to a completed
+   negative. This makes the absence-of-evidence policy visible at use-case level rather
+   than embedding it as an engine default.
+2. `GLU.GLU`, strict `> 7.0`, and the biology window are synthetic vehicles for the
+   integration test. They are not validated clinical definitions for diabetes.
+3. The biology helper currently calls the hyperkalaemia implementation with different
+   parameters. This demonstrates a second consumer of the same analyte-threshold recipe
+   and may justify a later rename/extraction to a generic helper, but no refactor is
+   required for the proof.
+4. The combined evidence schema and source-status vocabulary still need deliberate
+   design before any code becomes canonical.
+
+### Scope and disposition
+
+This is stronger evidence than `ba9f171`: it joins the actual text execution path and
+two structured measurement paths before combination. It still proves only the
+`any`/OR policy, uses synthetic data and a fake document caller, and is not intended to
+expand the permanent `master` test suite. No `concept_spec()` or `variable_spec()`
+constructors should be extracted from this proof alone.
