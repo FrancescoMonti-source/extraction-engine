@@ -20,6 +20,25 @@ empty_anastomoses_result <- function() {
 ana_tasks <- function() tibble::tibble(task_id = "P1::2025-03-10::EV1", PATID = "P1",
                                        EVTID = "EV1", anchor_date = as.Date("2025-03-10"))
 
+# Why: document timestamps arrive from EDSAN as Europe/Paris POSIXct values.
+# A default UTC conversion changes the clinical date near local midnight, which can
+# wrongly include or exclude a document from a variable-level date window.
+test_that("document loading preserves the Europe/Paris clinical date", {
+    docs_path <- tempfile(fileext = ".rds")
+    on.exit(unlink(docs_path), add = TRUE)
+    saveRDS(tibble::tibble(
+        ELTID = "E1", PATID = "P1", EVTID = "EV1",
+        RECDATE = as.POSIXct("2025-06-22 00:30:00", tz = "Europe/Paris"),
+        RECTYPE = "note"), docs_path)
+
+    docs <- load_docs_index(docs_path)
+
+    expect_equal(docs$RECDATE, as.Date("2025-06-22"))
+})
+
+# Why: anastomosis evidence is defined by the exact transplant event, not merely
+# by patient identity. This catches joins that leak documents from another stay or
+# another patient into the model-visible candidate set.
 test_that("retrieval is scoped to the resolved eligibility relation (event scope)", {
     docs_index <- tibble::tibble(
         ELTID = c("E1", "E2", "E3"), PATID = c("P1", "P1", "P2"),
@@ -36,6 +55,9 @@ test_that("retrieval is scoped to the resolved eligibility relation (event scope
     expect_equal(r$coverage$n_eligible_documents, 1L)
 })
 
+# Why: smoking uses an inner, variable-specific date window within the already
+# prepared study data. It intentionally crosses EVTID boundaries for the same patient
+# and must still exclude records outside that window.
 test_that("smoking scope is the date window (patient-based), not the event", {
     docs_index <- tibble::tibble(
         ELTID = c("E1", "E2", "E3"), PATID = "P1", EVTID = c("EV1", "EV1", "EVother"),
@@ -46,6 +68,9 @@ test_that("smoking scope is the date window (patient-based), not the event", {
     expect_setequal(elig$ELTID, c("E1", "E3"))
 })
 
+# Why: model citations are task-local aliases, while review requires the exact
+# snippet shown to the model. This prevents provenance joins from resolving an alias
+# to only the hit sentence, a different snippet, or reconstructed text.
 test_that("a snippet ID maps to the exact model-visible snippet it was given", {
     docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
                                  RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
@@ -68,6 +93,9 @@ test_that("a snippet ID maps to the exact model-visible snippet it was given", {
     expect_equal(art$snippet_text, snip)
 })
 
+# Why: no candidate means there is no evidence to measure, so calling a model would
+# waste computation and could manufacture a value from an empty context. The task
+# must remain represented in coverage without producing values.
 test_that("no_candidate tasks skip the model and stay coverage-only", {
     coverage <- tibble::tibble(task_id = "T", coverage_state = "no_candidate")
     called <- 0L
@@ -78,6 +106,9 @@ test_that("no_candidate tasks skip the model and stay coverage-only", {
     expect_equal(run$coverage$processing_state, "no_candidate")
 })
 
+# Why: a bundled response contains several independently judged fields. Evidence
+# cited for one field must never appear under a sibling field during materialisation
+# or physician review.
 test_that("each field's evidence contains only that field's cited snippets", {
     docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
                                  RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
@@ -102,6 +133,9 @@ test_that("each field's evidence contains only that field's cited snippets", {
     expect_equal(nrow(ven), 0L)
 })
 
+# Why: smoking's abstention semantics differ from the shared documented/unusable
+# contract. Definitive statuses require grounding, while indeterminate may correctly
+# report that the supplied evidence is insufficient without citing a snippet.
 test_that("smoking needs evidence for a definitive status but not for indetermine", {
     v1 <- parse_smoking(list(smoking_status = "sevre", evidence_ids = list(), decision_note = "x"), "S001")
     expect_equal(v1$fields$field_validity, "invalid")
@@ -111,6 +145,9 @@ test_that("smoking needs evidence for a definitive status but not for indetermin
     expect_equal(v3$fields$field_validity, "valid")
 })
 
+# Why: one malformed model result must not abort a cohort run or erase later tasks.
+# This protects the per-task failure-isolation contract and the resulting complete
+# processing census.
 test_that("a parse error isolates one task without aborting the batch", {
     boom_def <- new_task_definition(
         name = "boom", system_prompt = "",
@@ -135,6 +172,9 @@ test_that("a parse error isolates one task without aborting the batch", {
     expect_equal(ps, c("processing_error", "valid"))
 })
 
+# Why: bundled extraction can produce one invalid field beside valid grounded fields.
+# Valid values must remain usable while the overall task is still flagged for review;
+# task-level rejection would unnecessarily discard correct sibling values.
 test_that("acceptance is field-level: a valid field survives an invalid sibling", {
     docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
                                  RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
@@ -161,6 +201,9 @@ test_that("acceptance is field-level: a valid field survives an invalid sibling"
     expect_equal(unique(v$task_validity), "invalid")        # task flagged because a field is invalid
 })
 
+# Why: evidence IDs are an integrity boundary. Even if a backend bypasses or weakens
+# the dynamic schema enum, an invented citation must invalidate the field and must
+# never materialise as source evidence.
 test_that("a cited snippet ID that was never supplied fails the field closed", {
     docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
                                  RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
@@ -184,6 +227,9 @@ test_that("a cited snippet ID that was never supplied fails the field closed", {
     expect_false("S999" %in% ev$snippet_id)                # fabricated ID never materializes
 })
 
+# Why: unbounded strings and arrays caused deterministic output truncation on the
+# real cohort. This protects both the size limits and the per-task evidence vocabulary
+# when the response types are rebuilt through raw JSON Schema.
 test_that("bounded response schemas preserve dynamic evidence enums", {
     smoking <- type_smoking("S001")
     anastomoses <- type_anastomoses(c("S001", "S002"))
@@ -204,6 +250,9 @@ test_that("bounded response schemas preserve dynamic evidence enums", {
     expect_equal(arterial$properties$value$maxLength, ANASTOMOSES_LABEL_MAX_LEN)
 })
 
+# Why: truncated structured output is not safely repairable, but it must remain
+# diagnosable. This protects partial-response capture, the inferred length signal,
+# and the rule that deterministic EOF failures are not retried.
 test_that("a failed call records partial output and inferred stop reason", {
     coverage <- tibble::tibble(
         task_id = "T1", coverage_state = "candidate",
@@ -228,6 +277,9 @@ test_that("a failed call records partial output and inferred stop reason", {
     expect_equal(run$coverage$processing_state, "model_error")
 })
 
+# Why: failed tasks have no values row and would otherwise disappear from the flat
+# physician view. This ensures review contains both successful results and explicit
+# rows for model or processing failures.
 test_that("build_review_view surfaces failed tasks as explicit review rows", {
     values <- tibble::tibble(
         task_id = "T2", field = "x", status = "documented", normalized_value = "v",

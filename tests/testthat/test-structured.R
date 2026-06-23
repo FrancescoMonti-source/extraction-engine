@@ -30,6 +30,10 @@ biol_rows <- function(PATID, analyte, value_raw, DATEXAM,
         value = suppressWarnings(as.numeric(value_raw)))
 }
 
+# Why: loaders are the boundary between prepared study files and deterministic
+# measurement. They must preserve the hospital calendar date, native identifiers,
+# and all source rows so concept filtering happens in the variable logic rather
+# than silently changing source coverage during loading.
 test_that("structured loaders preserve local dates and native provenance", {
     pmsi_path <- tempfile(fileext = ".rds")
     bio_path <- tempfile(fileext = ".rds")
@@ -61,6 +65,9 @@ test_that("structured loaders preserve local dates and native provenance", {
     expect_equal(anyDuplicated(biol$source_row_id), 0L)
 })
 
+# Why: diabetes exercises interval-dated PMSI evidence and closed-negative logic.
+# This protects boundary overlap, malformed-code handling, absence states, and the
+# explicit policy for a missing discharge date.
 test_that("diabetes covers scope, malformed rows, and missing-end policy", {
     lower <- as.Date("2025-03-10") - 1825L
     diag <- diag_rows(
@@ -107,6 +114,9 @@ test_that("diabetes covers scope, malformed rows, and missing-end policy", {
         excluded$derivation$rule[1], "missing_DATSORT=exclude", fixed = TRUE)
 })
 
+# Why: hyperkalaemia must distinguish source availability, potassium selection,
+# parseability, and threshold outcome. This prevents malformed sibling results or
+# unrelated analytes from silently changing a valid deterministic measurement.
 test_that("hyperkalaemia separates source, concept, usability, and value states", {
     biol <- biol_rows(
         PATID = c("P1", "P1", "P2", "P3", "P5", "P6", "P6", "P7", "P7", "P8"),
@@ -145,6 +155,9 @@ test_that("hyperkalaemia separates source, concept, usability, and value states"
     expect_equal(nrow(run$derivation), nrow(tasks))
 })
 
+# Why: deterministic values still require auditable source linkage. The review view
+# should show the one selected maximum potassium row, while duplicate source-row keys
+# must fail before ambiguous evidence can be persisted.
 test_that("structured provenance resolves once and review uses concise evidence", {
     biol <- biol_rows(
         PATID = c("P1", "P1"), analyte = "K.K",
@@ -166,6 +179,9 @@ test_that("structured provenance resolves once and review uses concise evidence"
         "source_row_id must be non-missing and unique")
 })
 
+# Why: a programming or input-shape failure can occur before per-row measurement.
+# The production wrapper must preserve one failure record per requested output row
+# instead of aborting without a derivation census.
 test_that("production wrapper audits execution failures for every task", {
     tasks <- structured_tasks(c("P1", "P2"))
     broken <- function(source_rows, tasks) stop("synthetic execution failure")

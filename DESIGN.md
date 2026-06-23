@@ -23,6 +23,18 @@ The project is local-first because sensitive text may need to stay inside the
 hospital. Local models are weaker than hosted models, so auditability and evaluation
 are core requirements rather than optional extras.
 
+### Input boundary
+
+The project supplies the engine with prepared files in `/data`. Those files already
+define the study population and the outer temporal boundary required by the study
+protocol. Constructing that cohort, querying the warehouse for the protocol period, and
+deciding which source exports belong to the study are upstream responsibilities.
+
+The engine operates only inside this supplied **study universe**. Within it, an individual
+variable may still select the same patient, a hospital event, a relative date window, a
+code family, an analyte, or any other records needed to compute that variable. These are
+variable-level selections, not a second definition of the study period.
+
 ## What we are not building
 
 We are not rebuilding an LLM client.
@@ -41,9 +53,9 @@ calls:
 
 For each observed variable:
 
-1. A project adapter creates a task table: who the task concerns, its optional anchor,
-   and any project-specific context. The engine does not know how a transplant,
-   consultation, or study visit was identified.
+1. A project adapter creates a task table from the supplied study data: who the task
+   concerns, its optional anchor, and any project-specific context. The engine does not
+   know how a transplant, consultation, or study visit was identified.
 2. Resolve the eligible records for all tasks — the previous year, the same hospital
    stay, ±30 days, or **the entire history** when the variable is "ever".
 3. Retrieve source-backed observations from codes, labs, procedures, or text.

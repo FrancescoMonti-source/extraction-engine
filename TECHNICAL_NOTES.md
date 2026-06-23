@@ -6,6 +6,17 @@ or debugging the engine; it is not required to understand the product.
 
 For the chronological discussion and raw experiment log, see [`HANDOFF.md`](HANDOFF.md).
 
+## 0. Boundary with study data preparation
+
+The engine consumes project-prepared files under `/data`. Their population and outer
+date range are fixed upstream according to the study protocol; the engine does not query
+EDSAN to reconstruct that cohort or decide the protocol-level period.
+
+Date, event, subject, code, analyte, and text filters inside a variable remain engine
+work. They select evidence from the supplied study universe for one variable; they do not
+expand that universe or redefine its outer boundary. `R/data.R` is project loading and
+normalisation glue for these prepared inputs, not a warehouse-extraction layer.
+
 ## 1. Boundary with ellmer
 
 ellmer owns:

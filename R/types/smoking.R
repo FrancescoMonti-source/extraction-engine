@@ -15,8 +15,8 @@ SMOKING_STATUSES <- c("actif", "sevre", "non_fumeur", "indetermine")
 SMOKING_EVIDENCE_MAX_ITEMS <- 5L
 SMOKING_NOTE_MAX_LEN <- 300L
 
-# Call-wide behaviour only. Field meanings live in the type descriptions below;
-# the target period lives in the task prompt. This keeps the type reusable.
+# Call-wide behaviour only. Field meanings live in the type descriptions below.
+# Project scope is applied before the call and is not repeated to the model.
 SMOKING_SYSTEM_PROMPT <- paste(
     "Tu es un assistant d'extraction clinique.",
     "Base-toi UNIQUEMENT sur les extraits fournis.",
@@ -34,7 +34,7 @@ type_smoking <- function(snippet_ids) {
             smoking_status = list(
                 type = "string", enum = as.list(SMOKING_STATUSES),
                 description = paste(
-                    "Statut tabagique du patient pour la periode cible definie dans la tache.",
+                    "Statut tabagique explicitement documente pour le patient cible.",
                     "actif = tabagisme actuel explicitement documente;",
                     "sevre = ancien fumeur, sevrage ou arret documente;",
                     "non_fumeur = statut non-fumeur ou absence de tabagisme explicitement documente;",
@@ -55,8 +55,6 @@ type_smoking <- function(snippet_ids) {
 
 prompt_smoking <- function(task, candidates) {
     paste(
-        sprintf("Date de chirurgie: %s", format(task$anchor_date[[1]], "%Y-%m-%d")),
-        "Periode cible: statut tabagique documente autour de cette date.",
         "Chaque extrait = contexte avant [phrase declenchante] contexte apres.",
         "Tout l'extrait est citable par son identifiant S...",
         "", "Extraits numerotes:", format_snippet_block(candidates),

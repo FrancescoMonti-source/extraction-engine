@@ -3278,3 +3278,28 @@ and `archive/codex-clean-synthesis`.)
 **Open for Codex/human.** None blocking. Next agreed step remains physician adjudication
 of the full-cohort review artifacts, then dialysis as the multi-source reconciliation
 stress test.
+
+---
+
+## Study-universe boundary and test-rationale alignment — Codex (2026-06-23)
+
+The owner clarified the data boundary: project-prepared files under `/data` already
+define the study population and outer protocol period. The engine may perform any
+subject, event, date, code, analyte, or text selection needed to construct a variable,
+but only inside that supplied study universe. It does not reconstruct the cohort or
+choose the protocol-level temporal boundary.
+
+The current baseline was aligned accordingly:
+
+- `README.md`, `DESIGN.md`, and `TECHNICAL_NOTES.md` state the `/data` boundary;
+- the reusable smoking response type no longer mentions a project-defined target
+  period, and the model prompt no longer receives the surgery date merely because R
+  used it for deterministic snippet eligibility;
+- document `POSIXct` dates now preserve the `Europe/Paris` clinical calendar day,
+  matching the structured-source loaders;
+- every current `test_that()` block now carries a `# Why:` explanation recording the
+  contract and regression it protects;
+- a document-loader regression covers the local-midnight timezone failure mode.
+
+Deterministic validation after these changes: 95/95 assertions pass, with 18/18 test
+blocks carrying rationale comments.

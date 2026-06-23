@@ -10,9 +10,13 @@ suppressWarnings(suppressMessages({
     stopifnot(requireNamespace("openxlsx", quietly = TRUE))
 }))
 
+# EDSAN timestamps use the hospital's local timezone. Date conversion must retain
+# that clinical calendar day rather than derive a UTC date near local midnight.
+WAREHOUSE_TZ <- "Europe/Paris"
+
 clean_mixed_date <- function(x) {
     if (inherits(x, "Date")) return(x)
-    if (inherits(x, "POSIXt")) return(as.Date(x))
+    if (inherits(x, "POSIXt")) return(as.Date(x, tz = WAREHOUSE_TZ))
     x <- trimws(as.character(x))
     out <- rep(as.Date(NA), length(x))
     is_num <- grepl("^\\d+(\\.\\d+)?$", x)
@@ -77,11 +81,6 @@ read_workbook_columns <- function(path, columns) {
 }
 
 # --- structured sources (already process_*()-ed RDS) -------------------------
-# redsan parses these dates to POSIXct in the warehouse tz; take the LOCAL
-# calendar date (tz = Europe/Paris) so an evening timestamp is not pushed to the
-# previous UTC day -- the timezone regression to avoid.
-WAREHOUSE_TZ <- "Europe/Paris"
-
 local_clinical_date <- function(x) {
     if (inherits(x, "Date")) return(x)
     if (inherits(x, "POSIXt")) return(as.Date(x, tz = WAREHOUSE_TZ))

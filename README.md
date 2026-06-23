@@ -11,6 +11,10 @@ text → LLM extraction, and diabetes and hyperkalaemia through deterministic st
 measurement. All four paths have been exercised against real normalized data over the
 full 244-task cohort, with review-ready artifacts produced for physician adjudication.
 
+Project data preparation remains upstream: the files supplied in `/data` already define
+the study population and outer protocol period. The engine only constructs variables
+within that supplied study universe.
+
 Start with:
 
 - **[DESIGN.md](DESIGN.md)** — the current owner-facing product and architecture.
