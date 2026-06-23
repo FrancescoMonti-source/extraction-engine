@@ -3231,3 +3231,50 @@ corrections, and completed validation without inspecting patient-derived text.
 
 No cohort rerun was needed: these checks validate the transport, schema, failure-audit,
 and review-routing architecture rather than model or clinical performance.
+
+---
+
+## Merge, repo cleanup, and documentation alignment — Claude (2026-06-23)
+
+The hardening patch is now canonical and the repo/docs are realigned to it. No code
+behaviour changed in this pass; it is integration + documentation only.
+
+**Reviewed + merged.** Line-level review of `claude/full-cohort-text-run` (the four
+commits over `master`): correctness clean, PHI discipline intact (`partial_response`
+in `run.rds` only), no stale callers, and Codex's three corrections sound. The one
+flagged risk — the failed-task `error` join in `build_review_view` fanning out — is
+resolved: `run_extraction` writes exactly one attempt row per task, so the join is 1:1.
+Re-ran the deterministic suite independently: 94/94, 0 warnings. Fast-forwarded
+`master` to `eece5ee` (merge-base was the master tip, so a clean ff).
+
+**Cleanup.** Removed the temp integration worktree; moved the main worktree onto
+`master`; deleted the two spent feature branches (`claude/full-cohort-text-run` ==
+`master`; `claude/structured-variables` an ancestor of `master`, also preserved as
+`archive/codex-structured-variables`). The `archive/*` recovery tags are kept. The
+throwaway `_`-prefixed scripts were already gone. Single clean worktree on `master`.
+
+**Documentation alignment** (`README.md`, `DESIGN.md`, `TECHNICAL_NOTES.md`):
+1. Full-cohort text run is recorded as **complete** with real numbers (smoking 219
+   valid / 25 no_candidate; anastomoses 187 valid / 54 invalid / 3 model_error), and
+   physician adjudication is now the active next step. The "smoke run, 3+3 tasks" and
+   "full-cohort run remains ahead" phrasings are gone.
+2. Bounded outputs documented as **adopted**: smoking + anastomoses now go through the
+   `type_from_schema()` escape hatch for `maxItems`/`maxLength` (no longer described as
+   hypothetical).
+3. Attempt contract gains `output_tokens`, `inferred_finish_reason`, `partial_response`
+   (run.rds-only); §7 covers partial-capture + the truncation-not-retried rule.
+4. Failed tasks are documented as explicit review rows ("route to review" is literally
+   true).
+5. Evidence contract corrected to match the code: the model cites per-task `S…` snippet
+   aliases (`evidence_ids`); `ELTID::sentence` (`hit_ref`) is the durable coordinate R
+   materializes for review. The prior docs had this backwards (native refs as the enum,
+   aliases as a "later optimization"). `evidence_refs` → `evidence_ids` throughout.
+
+**Retired `SYNTHESIS_BRIEF.md`** (human decision). It was a fully-executed historical
+build brief; its contracts are folded into the code + DESIGN/TECHNICAL_NOTES, and the
+chronological record lives here. Deleted; README reference dropped. (Recoverable via git
+and `archive/codex-clean-synthesis`.)
+
+**Open for Codex/human.** None blocking. Next agreed step remains physician adjudication
+of the full-cohort review artifacts, then dialysis as the multi-source reconciliation
+stress test.

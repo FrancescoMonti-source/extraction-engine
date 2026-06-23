@@ -62,11 +62,11 @@ ellmer 0.4.1:
    back as a list of named lists, *not* a tibble). The builder path
    (`type_array(type_object(...))`) is what drives typed columns and the tibble.
 
-Builders are also favoured by the contract itself: `evidence_refs =
-type_array(type_enum(candidate_refs))` carries a **dynamic enum** whose legal references
-depend on the evidence presented for that task, so the type is rebuilt per call —
-natural with builders, clumsy as templated JSON.
-Builders also fail loudly on a typo at construction time. (A per-task dynamic enum
+Builders also suit the contract itself: `evidence_ids` carries a **dynamic enum** whose
+legal snippet ids depend on the evidence presented for that task, so the type is rebuilt
+per call. Builders express this naturally and fail loudly on a typo at construction time;
+when the same type also needs size bounds (below), that per-task enum is instead assembled
+as JSON Schema. (A per-task dynamic enum
 means the type is task-specific, so it cannot be shared across prompts in one
 `parallel_chat_structured()` call — see §4 on batching; the trade-off is separate
 task-specific calls vs. a fixed short-alias vocabulary with unused aliases rejected in R.)
@@ -76,11 +76,24 @@ expose only `description` / `required` (`type_string`) and `items` / `descriptio
 `required` (`type_array`) — there is **no `maxLength`, no `maxItems`** (passing them
 errors), and the emitted JSON carries no size keyword. We have **measured** that a raw
 `maxLength` *is* enforced through the Ollama schema→GBNF path (Handoff #3), so a bounded
-`decision_note` or a small-`maxItems` `evidence_refs` is expressible **only** via
-`type_from_schema()`. So the rule is: **builders by default** (readable, valid by
-construction, typed conversion); **`type_from_schema()` as a narrow escape hatch** when a
-required, tested JSON-Schema constraint is unavailable through the builders. Schemas as
-external/portable data remains a separate, deferred question.
+`decision_note` or a small-`maxItems` `evidence_ids` is expressible **only** via
+`type_from_schema()`.
+
+**The two text tasks now use this escape hatch.** Both `type_smoking()` and
+`type_anastomoses()` assemble their schema as a JSON Schema list and return
+`type_from_schema(toJSON(schema))`, adding `maxItems` to each evidence-id array and
+`maxLength` to free-text fields, while still carrying the per-task dynamic snippet-id
+enum (every enum and `required` array is built with `as.list()` so a length-1 snippet set
+stays a JSON array, not a scalar). This was forced by truncation: unbounded `type_array` /
+`type_string` outputs let a weak model run away mid-object (§7). The parsers use named
+list access, so they are unaffected by `type_from_schema()` returning a raw parsed
+structure rather than a typed tibble.
+
+So the rule is: **builders by default** (readable, valid by construction, typed
+conversion); **`type_from_schema()` as a narrow escape hatch** when a required, tested
+JSON-Schema constraint is unavailable through the builders — currently the two text tasks,
+for output bounds. Schemas as external/portable data remains a separate, deferred
+question.
 
 An output type belongs to an **extraction task**, not necessarily to one final cohort
 column. Smoking may return a peri-operative status, several evidence references, and a
@@ -135,12 +148,19 @@ schema_hash
 query_hash
 task_validity
 error
+output_tokens
+inferred_finish_reason
+partial_response
 raw_response
 ```
 
 The fingerprints and raw response make a completed or failed call auditable without
-depending on mutable runtime objects. Token counts and retry chains can be added when
-useful.
+depending on mutable runtime objects. A failed call additionally retains `partial_response`
+(whatever text the model emitted before the error), `output_tokens`, and
+`inferred_finish_reason` (`"length"` when output tokens reached the configured cap — Ollama
+does not expose a provider finish reason on this path, so it is inferred, not reported).
+`partial_response` may contain clinical text, so it is kept in `run.rds` only and dropped
+from the exported workbook, like `raw_response`. Retry chains can be added when useful.
 
 ### Derivations
 
@@ -201,7 +221,10 @@ remote historical event. The physician judges whether the materialized evidence
 clinically supports the value; R checks only mechanical provenance and validity.
 
 A flat review table is a view produced by joining values to evidence and coverage. It is
-not the canonical storage contract.
+not the canonical storage contract. The view also appends one explicit row per failed task
+(`model_error` / `processing_error`) carrying the failure reason, since such a task has no
+`values` row and would otherwise be invisible to the reviewer — "route to review" must be
+literally true, not just a census entry in coverage.
 
 ### Structured observations
 
@@ -212,40 +235,48 @@ available to explain coverage, negatives, and exclusions.
 
 ## 3. Evidence by reference
 
-The model does not generate an evidence quote. Where a source already has stable
-coordinates, use them directly. For corpustools sentence retrieval the reference is:
+The model does not generate an evidence quote. It cites supplied snippets by a short,
+per-task identifier, and R resolves each citation back to durable native coordinates.
+
+Each candidate snippet shown to the model is assembled as the hit sentence plus its
+configured neighbours and given a task-local alias `S001`, `S002`, … (`snippet_id`). The
+model is shown `S001: <snippet text>` and may cite only those ids. Durable provenance is
+kept separately on each candidate:
+
+- `snippet_id`: the task-local model-facing alias (`S001`);
+- `hit_ref`: the native `ELTID::sentence` coordinate of the corpustools hit;
+- `hit_text`, `context_before`, `context_after`, `snippet_text`: reconstructed text;
+- document metadata (`ELTID`, date, type).
+
+Example candidates for one task:
 
 ```text
-ELTID::sentence
+S001 | 104::42 | 2025-02-20 | Ancien fumeur, sevré depuis 2010.
+S002 | 287::7  | 2025-03-04 | Tabac : sevré.
 ```
 
-Example:
+The hit sentence is citable; neighbouring sentences are shown as context but are not
+independently citable unless they are themselves hits. Aliasing is the **adopted** contract,
+not a deferred optimization: a per-task `S…` enum is the bounded, dynamic evidence
+vocabulary the grammar enforces (§1), while `ELTID::sentence` (`hit_ref`) remains the
+durable identity materialized for review.
 
-```text
-104::42 | 2025-02-20 | Ancien fumeur, sevré depuis 2010.
-287::7  | 2025-03-04 | Tabac : sevré.
-```
-
-The hit sentence is citable. Configurable neighbouring sentences may be shown as
-context, but they are not independently citable unless they are themselves hits.
-Synthetic short aliases remain an optional model-compatibility optimization, not the
-durable source identity.
-
-For `smoking_status_periop`, these sentences were selected from documents recorded in
+For smoking, these snippets were selected from documents recorded in
 `[anchor − 365 days, anchor + 7 days]` around surgery. The output type contains a dynamic
-evidence enum and a task-specific status enum:
+`evidence_ids` enum (the supplied `S…` ids) and a task-specific `smoking_status` enum:
 
 ```json
 {
-  "smoking_status_periop": "sevre",
-  "evidence_refs": ["104::42", "287::7"],
+  "smoking_status": "sevre",
+  "evidence_ids": ["S001", "S002"],
   "decision_note": "Both peri-operative notes describe smoking cessation."
 }
 ```
 
-The allowed evidence values are the supplied references. Client code resolves each
-reference to the stored source sentence and document. The decision note is a concise explanation of how
-the model handled the supplied evidence; it is not itself evidence.
+The allowed `evidence_ids` values are exactly the supplied snippet aliases. Client code
+resolves each alias to the stored snippet, its `ELTID::sentence` coordinate, and document.
+The decision note is a concise explanation of how the model handled the supplied evidence;
+it is not itself evidence.
 
 The status enum for this task is `actif` / `sevre` / `non_fumeur` / `indetermine`,
 matching D0840's `tabac_statut` so outputs use the same vocabulary as the legacy task.
@@ -291,17 +322,18 @@ The current default is one bundled call per extraction task, subject, and timepo
    conflict. R remains the gatekeeper for scope and eligibility — the model never
    recomputes the window.
 6. The model returns its task-specific fields, including the value,
-   `evidence_refs`, and (when useful) a `decision_note`.
+   `evidence_ids`, and (when useful) a `decision_note`.
 7. R resolves the references and materializes the original evidence for physician
    review.
 
-**Dynamic enums and batching.** Because the legal evidence references come from one
-task's supplied candidates, the output type is task-specific. The initial
-implementation therefore makes separate structured calls with separately built types.
-`parallel_chat_structured()` cannot apply different types to different prompts in one
-batch. A fixed short-alias vocabulary plus an R check for unused references remains a later
-optimization only if measured throughput justifies weakening the grammar-level
-constraint.
+**Dynamic enums and batching.** The legal evidence ids come from one task's supplied
+candidates, so the evidence enum — the `S…` snippet aliases — is **per-task and dynamic**,
+and the output type is rebuilt for each task. The implementation therefore makes separate
+structured calls with separately built types; `parallel_chat_structured()` cannot apply
+different types to different prompts in one batch. A *fixed* shared alias vocabulary plus
+an R check for unused ids would enable batching, but remains a later optimization only if
+measured throughput justifies weakening the grammar-level constraint (it would let the
+model emit an alias not present in a given task).
 
 **Copy-forward handling.** Clinical notes frequently paste a prior statement
 forward unchanged, so the same sentence reappears under many later dates. Dedup here is
@@ -319,7 +351,7 @@ deterministic collapse is an escalation path if evaluation shows that bundled ca
 mishandle contradictions, copy-forward, or target roles.
 
 **Cross-field coupling (a measured question, not a settled fact).** A bundled call places
-every field (`value`, `evidence_refs`, `decision_note`) into **one schema
+every field (`value`, `evidence_ids`, `decision_note`) into **one schema
 generated left-to-right in one pass**, so the fields are statistically coupled — through
 the shared schema and through the model priming on its own emitted tokens. This much is
 established and demonstrable: a "space out the letters" directive in one field's
@@ -330,7 +362,7 @@ What is *not* established, and must stay hypothesis until measured:
 
 - that reordering fields cleanly separates "global-instruction interpretation" from
   autoregressive momentum — both can act at once, and a single stochastic run shows little;
-- that declaring `evidence_refs` first makes the model "choose evidence before deciding" —
+- that declaring `evidence_ids` first makes the model "choose evidence before deciding" —
   this is **conceptually backwards**, not merely unproven: the *supporting* ids are defined
   relative to the value, so you cannot select what justifies an answer you have not yet
   formed. Evidence selection is posterior to, or co-determined with, the decision, never
@@ -353,11 +385,11 @@ parameters; test **both field orders**; test **with and without** the planted in
 control**.
 
 **Design posture given all this.** Keep bundled
-`value + evidence_refs + decision_note` as the default when the task benefits from all
+`value + evidence_ids + decision_note` as the default when the task benefits from all
 three — a coupled answer, citation set, and explanation are operationally useful — but
 treat the coupling honestly:
 
-- every separately judged claim carries **its own** `evidence_refs`, never one shared
+- every separately judged claim carries **its own** `evidence_ids`, never one shared
   evidence field for unrelated claims;
 - evidence is **provenance, not verification**; internal value↔evidence agreement proves
   nothing on its own;
@@ -548,8 +580,16 @@ meaningful inputs.
 ## 7. Structured decoding and failure handling
 
 A JSON Schema constrains legal output tokens. It guarantees structure, not clinical
-truth. Unbounded string fields can still grow, and a model can still choose the wrong
-legal enum.
+truth, and on its own it does not bound *length* — an unbounded string or array field can
+grow until the model exhausts its token budget and truncates a still-open object, and a
+model can still choose the wrong legal enum. The shape is enforced; size and meaning are
+not.
+
+Output length is therefore bounded structurally, not only by prompt discipline. Evidence-id
+arrays carry `maxItems` and free-text fields carry `maxLength` (§1), so a runaway generation
+is closed by the grammar instead of truncating. This was the observed truncation cause on
+real data: three full-cohort anastomosis calls failed with `premature EOF` mid-object under
+unbounded arrays/strings (§10).
 
 Every candidate model must pass a grammar-enforcement gate using a bare structured
 call without a strong JSON-following prompt. Reject any model that escapes the
@@ -561,17 +601,23 @@ The runtime path is:
 1. call structured extraction;
 2. validate the returned object;
 3. record success or failure in the attempt table;
-4. retry under a small explicit policy when appropriate;
+4. retry under a small explicit policy when appropriate — only for transient transport
+   failures; a `premature EOF` truncation is deterministic under fixed temperature/seed and
+   is **not** retried;
 5. fail closed when retries are exhausted.
 
-Partial clinical JSON is never repaired automatically because repair can invent the
-field being audited. Capture and consumption are separate: preserve the raw response
-and its validity state, but prevent invalid rows from becoming cohort values.
+A failed call is not opaque: the caller captures whatever partial text the model emitted,
+the output-token count, and an inferred stop reason (§2), so a truncation versus a schema or
+server failure can be told apart from the saved artifacts. Partial clinical JSON is never
+repaired automatically because repair can invent the field being audited. Capture and
+consumption are separate: preserve the raw and partial responses and their validity state,
+but prevent invalid rows from becoming cohort values, and surface the failed task as an
+explicit review row (§2) rather than letting it vanish.
 
 Evidence requirements may depend on the returned value. For the smoking task,
-`actif`, `sevre`, and `non_fumeur` require at least one valid evidence reference;
+`actif`, `sevre`, and `non_fumeur` require at least one valid evidence id;
 `indetermine` may legitimately return an empty array. An empty `decision_note` is valid
-when there is nothing useful to explain. Unknown references remain structurally invalid.
+when there is nothing useful to explain. Unknown ids remain structurally invalid.
 
 ## 8. Provider-parameter verification
 
@@ -716,10 +762,15 @@ The four-variable canonical baseline established:
   escape hatch for tested constraints the builders cannot express (`maxLength`,
   `maxItems`) (§1);
 - structured calls can be made deterministic when parameters reach the provider;
-- the attempt log captures real parse and server failures without aborting the run;
+- the attempt log captures real parse and server failures without aborting the run, and
+  retains the partial response plus an inferred stop reason so a truncation is diagnosable;
+- model output must be bounded in length, not only in shape: unbounded arrays/strings let a
+  weak model run away and truncate, so evidence-id arrays and free-text fields carry
+  `maxItems`/`maxLength` (the observed full-cohort truncation cause);
+- a failed task is surfaced as an explicit review row, so "route to review" is literally true;
 - model grammar enforcement must be tested rather than assumed;
-- generated evidence text is the wrong contract;
-- native corpus coordinates are preferable to synthetic evidence aliases when available;
+- generated evidence text is the wrong contract; the model cites supplied snippets by a
+  per-task `S…` alias that R resolves to native `ELTID::sentence` corpus coordinates;
 - one canonical corpus can be persisted and reused across variables;
 - metadata subsetting before search is substantially faster than full-corpus search on
   the current corpus;
@@ -737,10 +788,12 @@ The four-variable canonical baseline established:
 - `TYPEANA == "K.K"` is the potassium concept boundary for the current warehouse, and
   mixed valid/unparseable rows remain measurable from their valid rows.
 
-Next, run smoking and anastomoses over the intended full cohort and create physician
-review artifacts. Dialysis then provides the multi-source reconciliation stress test.
-Generic spec constructors remain deferred until operational evidence from the four real
-variables and the full-cohort run identifies stable repetition.
+Smoking and anastomoses have now run over the full 244-task cohort with physician review
+artifacts produced (smoking 219 valid / 25 no_candidate; anastomoses 187 valid / 54 invalid
+/ 3 model_error). Physician adjudication of those artifacts is the next step. Dialysis then
+provides the multi-source reconciliation stress test. Generic spec constructors remain
+deferred until operational evidence from the four real variables and the full-cohort run
+identifies stable repetition.
 
 ## 11. D0840 development corpus
 
@@ -770,7 +823,7 @@ combine several tasks or sources.
 
 | D0840 task | What it teaches |
 |---|---|
-| Smoking status around surgery (`[anchor − 365d, +7d]`) | Persisted-corpus retrieval, window-bounded source selection, target-role filtering, explicit status categories, contradictions, `evidence_refs`, and a useful `decision_note`. |
+| Smoking status around surgery (`[anchor − 365d, +7d]`) | Persisted-corpus retrieval, window-bounded source selection, target-role filtering, explicit status categories, contradictions, `evidence_ids`, and a useful `decision_note`. |
 | Transplant anastomoses | One context producing several related durations, techniques, and locations; partial missingness; cross-field coupling. |
 | Diabetes from PMSI diagnoses | Interval scoping, ICD-10 family matching, auditable closed negatives, malformed-code handling, and deterministic derivation records. |
 | Hyperkalaemia from biology | Point-window scoping, warehouse analyte concepts, mixed parseable/unparseable rows, maximum-row evidence, and strict thresholding. |

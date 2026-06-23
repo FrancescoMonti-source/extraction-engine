@@ -8,8 +8,8 @@ longitudinal cohort studies.
 Development is grounded in real D0840 tasks. The canonical baseline now supports four
 variables across both engine paths: smoking and transplant anastomoses through
 text → LLM extraction, and diabetes and hyperkalaemia through deterministic structured
-measurement. All four paths have been exercised against real normalized data; the text
-path has completed a live smoke validation and the structured path a full 244-task run.
+measurement. All four paths have been exercised against real normalized data over the
+full 244-task cohort, with review-ready artifacts produced for physician adjudication.
 
 Start with:
 
@@ -17,8 +17,6 @@ Start with:
 - **[TECHNICAL_NOTES.md](TECHNICAL_NOTES.md)** — contracts, decoding, evidence,
   provider details, and implementation rationale.
 - **[HANDOFF.md](HANDOFF.md)** — chronological collaboration and experiment log.
-- **[SYNTHESIS_BRIEF.md](SYNTHESIS_BRIEF.md)** — the completed clean-rebuild contract,
-  retained as historical context for the text baseline.
 
 In one sentence: ellmer handles LLM transport; this project gathers dated clinical
 evidence, constructs auditable cohort variables, and evaluates them.

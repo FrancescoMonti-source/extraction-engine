@@ -1,8 +1,9 @@
 # extraction-engine — Design
 
 > Status: validated canonical D0840 baseline for smoking, transplant anastomoses,
-> diabetes, and hyperkalaemia. Full-cohort text execution and the next multi-source
-> variable remain ahead. The name is temporary.
+> diabetes, and hyperkalaemia, now exercised over the full 244-task cohort on both
+> engine paths. Physician adjudication of the review artifacts and the next
+> multi-source variable (dialysis) remain ahead. The name is temporary.
 
 ## What we are building
 
@@ -114,8 +115,9 @@ tie-break, while duplicate source references and dates remain available for audi
 
 ### 2. One task-specific call
 
-The bundled call returns the requested status, evidence references restricted to the
-supplied native references, and an optional decision note:
+The bundled call returns the requested status, citations restricted to the supplied
+evidence snippets (R resolves each to its native source coordinate), and an optional
+decision note:
 
 ```text
 smoking_status_periop → value: sevre, evidence: [104::42, 287::7],
@@ -171,12 +173,14 @@ What happened when a model was called, or when a deterministic rule was applied:
 
 ```text
 text: provider, model, seed, prompt/schema/query fingerprints, status or error,
-      latency, raw response
+      latency, raw response; on a failed call also the partial response, output-token
+      count, and an inferred stop reason
 structured: rule, source/scope/usable counts, status or error
 ```
 
-A failed call still creates an attempt row. Structured measurement creates exactly one
-derivation row per task, including skipped and failed tasks.
+A failed call still creates an attempt row, retaining whatever partial output the
+provider produced so a truncation is diagnosable after the fact. Structured measurement
+creates exactly one derivation row per task, including skipped and failed tasks.
 
 ### Value
 
@@ -301,7 +305,11 @@ There is no derived-variable spec or interpreted expression language.
 - Every candidate model must pass a grammar-enforcement test
   ([`scripts/check_grammar_enforcement.R`](scripts/check_grammar_enforcement.R)).
 - Provider parameters must be verified to have taken effect.
-- Model and prompt failures are recorded.
+- Output length is bounded, not only output shape. Free-text fields and evidence-id
+  arrays carry explicit size limits so a weak model cannot run away mid-object and
+  truncate a syntactically valid response.
+- Model and prompt failures are recorded, including any partial output, so a truncation
+  can be diagnosed after the fact rather than disappearing with the failed call.
 - Partial clinical output is never silently repaired. Raw responses remain available
   for diagnosis, but invalid or review-required responses cannot silently become cohort
   values.
@@ -340,6 +348,10 @@ The engine must remain useful when no gold labels exist:
 3. let the reviewer agree or correct the value;
 4. preserve reviewed rows as gold;
 5. evaluate models and retrieval as gold accumulates.
+
+The review export also carries an explicit row for every failed task (a model or
+processing error), so a failed call is routed to a human rather than silently absent
+from the view. Such a task has no accepted value; the row records its failure reason.
 
 D0840 currently has no adjudicated smoking gold. Initial labels will be created by the
 physician reviewing the model value, decision note, and materialized source evidence.
@@ -406,15 +418,19 @@ boundary without a model:
 
 The canonical implementation passes the full contract suite. On the real 244-task
 structured cohort it produced diabetes 64 present / 180 absent and hyperkalaemia
-119 present / 125 absent. A live text smoke run completed three smoking and three
-anastomosis tasks with valid, grounded outputs.
+119 present / 125 absent. The text variables then completed a full 244-task run on the
+same cohort: smoking 219 valid / 25 no_candidate, and anastomoses 187 valid / 54 invalid
+(at least one field rejected) / 3 model_error fail-closed. Field-level acceptance held on
+real data — invalid sibling fields did not invalidate valid ones — and review-ready
+artifacts were produced for both variables.
 
 ### Next validation and variable
 
-Run the text variables over the intended full cohort, produce review-ready artifacts,
-and begin physician adjudication. Dialysis remains the next multi-source reconciliation
-stress test. Generic `variable_spec` / `concept_spec` constructors remain deferred until
-the four implemented variables and the full-cohort run show which repetition is stable.
+The full-cohort text run is complete and its review artifacts exist; physician
+adjudication of those artifacts is the active next step and the path to the first
+gold labels. Dialysis remains the next multi-source reconciliation stress test. Generic
+`variable_spec` / `concept_spec` constructors remain deferred until the four implemented
+variables and the full-cohort run show which repetition is stable.
 
 ### Later
 
@@ -449,7 +465,7 @@ the abstractions. An xlsx review round-trip is sufficient initially.
 
 ## Open questions
 
-- After the full-cohort text run, which repeated parts of the four implemented variables
-  should become bounded configuration?
+- The full-cohort text run is complete; which repeated parts of the four implemented
+  variables should now become bounded configuration?
 - What contract is needed for dialysis without turning source reconciliation into a DSL?
 - What should the project be called?
