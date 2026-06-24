@@ -1,8 +1,16 @@
 # =============================================================================
 # data.R — D0840 project data loaders (glue, not engine)
-# Privacy: workbooks with direct identifiers are read column-by-column so the
-# identifier columns are never loaded. The docs RDS carries no direct identifiers
-# (ELTID/PATID/EVTID/RECDATE/RECTYPE/text), so it is read then projected.
+# -----------------------------------------------------------------------------
+# This is the SOURCE LAYER: the only place raw warehouse column names appear.
+# Each source is a DECLARATION (`source_spec`) mapping raw columns -> canonical
+# ROLES (subject / event / date / interval / value / analyte / code / text / …);
+# one generic `normalize_source()` applies the shared normalization (Europe/Paris
+# clinical dates, numeric coercion, source-row ids, presence/uniqueness checks).
+# A new warehouse re-declares only these specs; nothing else should mention a raw
+# column name. (Output column names are still the historical ones for now; the
+# rename of downstream code to *speak* roles is a separate step.)
+# Privacy: identifier-bearing workbooks are read column-by-column (see
+# read_workbook_columns); the docs RDS carries no direct identifiers.
 # =============================================================================
 
 suppressWarnings(suppressMessages({
@@ -47,27 +55,6 @@ corpus_path <- function() {
     if (file.exists(shared)) shared else localc
 }
 
-# Document index used by adapters to resolve task<->document eligibility.
-# All documents (incl. empty ones); the corpus membership flag in retrieval()
-# separates eligible from searchable. No direct identifiers here.
-load_docs_index <- function(docs_path) {
-    d <- readRDS(docs_path)
-    idx <- tibble::tibble(
-        ELTID   = as.character(d$ELTID),
-        PATID   = as.character(d$PATID),
-        EVTID   = as.character(d$EVTID),
-        RECDATE = clean_mixed_date(d$RECDATE),
-        RECTYPE = as.character(d$RECTYPE)
-    )
-    if (anyNA(idx$ELTID) || any(idx$ELTID == "")) {
-        stop("docs index: ELTID must be non-missing.", call. = FALSE)
-    }
-    if (anyDuplicated(idx$ELTID)) {
-        stop("docs index: ELTID must be unique.", call. = FALSE)
-    }
-    idx
-}
-
 # Read only the named columns from an identifier-bearing workbook, by locating
 # them in the header first (never loads other columns into memory).
 read_workbook_columns <- function(path, columns) {
@@ -80,70 +67,116 @@ read_workbook_columns <- function(path, columns) {
     openxlsx::read.xlsx(path, cols = idx, colNames = TRUE)
 }
 
-# --- structured sources (already process_*()-ed RDS) -------------------------
-local_clinical_date <- function(x) {
-    if (inherits(x, "Date")) return(x)
-    if (inherits(x, "POSIXt")) return(as.Date(x, tz = WAREHOUSE_TZ))
-    as.Date(x)
+# --- declared source layer ---------------------------------------------------
+# `col()` declares one output column: which raw column it comes from (`from`,
+# a fallback vector is allowed), how to normalize it (`kind`), and which canonical
+# engine ROLE it plays (`role`, metadata for later use — not consumed here yet).
+col <- function(from, kind = c("chr", "num", "date"), role = NA_character_) {
+    list(from = from, kind = match.arg(kind), role = role)
+}
+
+# A source spec: the per-source raw->role mapping plus normalization options.
+source_spec <- function(name, cols, source_row_id = NULL, unique_cols = NULL) {
+    list(name = name, cols = cols, source_row_id = source_row_id,
+         unique_cols = unique_cols)
 }
 
 source_row_ids <- function(source, n) {
     sprintf("%s:%08d", source, seq_len(n))
 }
 
-require_source_columns <- function(x, columns, source) {
-    missing <- setdiff(columns, names(x))
-    if (length(missing)) {
-        stop(source, ": missing columns: ", paste(missing, collapse = ", "),
+.source_pick <- function(raw, candidates) {
+    hit <- intersect(candidates, names(raw))      # candidates' order wins (fallback)
+    if (length(hit)) raw[[hit[[1]]]] else NULL
+}
+
+# Generic loader body: project + normalize a raw frame per its source_spec.
+normalize_source <- function(raw, spec) {
+    if (!is.data.frame(raw)) {
+        stop(spec$name, ": expected a data frame.", call. = FALSE)
+    }
+    picked  <- lapply(spec$cols, function(cc) .source_pick(raw, cc$from))
+    missing <- vapply(picked, is.null, logical(1))
+    if (any(missing)) {
+        want <- vapply(spec$cols[missing],
+                       function(cc) paste(cc$from, collapse = "/"), character(1))
+        stop(spec$name, ": missing columns: ", paste(want, collapse = ", "),
              call. = FALSE)
     }
-    invisible(x)
+    out <- Map(function(cc, v) switch(cc$kind,
+                   chr  = as.character(v),
+                   num  = suppressWarnings(as.numeric(as.character(v))),
+                   date = clean_mixed_date(v)),
+               spec$cols, picked)
+    out <- tibble::as_tibble(out)
+    if (!is.null(spec$source_row_id)) {
+        out <- tibble::add_column(out,
+            source_row_id = source_row_ids(spec$source_row_id, nrow(out)), .before = 1L)
+    }
+    for (u in spec$unique_cols) {
+        v <- out[[u]]
+        if (anyNA(v) || any(!nzchar(v))) {
+            stop(spec$name, ": ", u, " must be non-missing.", call. = FALSE)
+        }
+        if (anyDuplicated(v)) {
+            stop(spec$name, ": ", u, " must be unique.", call. = FALSE)
+        }
+    }
+    out
+}
+
+# Document index used by adapters to resolve task<->document eligibility.
+# All documents (incl. empty ones); the corpus membership flag in retrieval()
+# separates eligible from searchable. No direct identifiers here; text lives in
+# the corpus (RECTXT), not the index.
+DOCS_SOURCE <- source_spec("docs index",
+    cols = list(
+        ELTID   = col("ELTID",   "chr",  role = "record"),
+        PATID   = col("PATID",   "chr",  role = "subject"),
+        EVTID   = col("EVTID",   "chr",  role = "event"),
+        RECDATE = col("RECDATE", "date", role = "date"),
+        RECTYPE = col("RECTYPE", "chr",  role = "type")),
+    unique_cols = "ELTID")
+
+load_docs_index <- function(docs_path) {
+    normalize_source(readRDS(docs_path), DOCS_SOURCE)
 }
 
 # pmsi$diag: one row per ICD-10 diagnosis, attached to the parent stay interval.
+DIAG_SOURCE <- source_spec("pmsi diag",
+    cols = list(
+        PATID   = col("PATID",   "chr",  role = "subject"),
+        EVTID   = col("EVTID",   "chr",  role = "event"),
+        ELTID   = col("ELTID",   "chr",  role = "record"),
+        diag    = col("diag",    "chr",  role = "code"),
+        DATENT  = col("DATENT",  "date", role = "interval_start"),
+        DATSORT = col("DATSORT", "date", role = "interval_end")),
+    source_row_id = "pmsi_diag")
+
 load_pmsi_diag <- function(pmsi_path) {
     x <- readRDS(pmsi_path)
-    d <- if (is.data.frame(x)) x else x$diag
-    if (!is.data.frame(d)) {
-        stop("pmsi diag: expected a data frame or an object with $diag.", call. = FALSE)
-    }
-    require_source_columns(
-        d, c("PATID", "EVTID", "ELTID", "diag", "DATENT", "DATSORT"), "pmsi diag")
-    tibble::tibble(
-        source_row_id = source_row_ids("pmsi_diag", nrow(d)),
-        PATID   = d$PATID,
-        EVTID   = d$EVTID,
-        ELTID   = d$ELTID,
-        diag    = d$diag,
-        DATENT  = local_clinical_date(d$DATENT),
-        DATSORT = local_clinical_date(d$DATSORT))
+    normalize_source(if (is.data.frame(x)) x else x$diag, DIAG_SOURCE)
 }
 
-# All biology results. Serum/plasma potassium is TYPEANA "K.K"; its unit is
-# fixed by organisational convention, so UNITE is intentionally not read.
+# All biology results. Serum/plasma potassium is TYPEANA "K.K"; its unit is fixed
+# by organisational convention, so UNITE is intentionally not read. `value` is the
+# numeric result; `value_raw` keeps the original string for audit.
+BIOL_SOURCE <- source_spec("biol results",
+    cols = list(
+        PATID     = col("PATID",                 "chr",  role = "subject"),
+        EVTID     = col("EVTID",                 "chr",  role = "event"),
+        ELTID     = col("ELTID",                 "chr",  role = "record"),
+        BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  role = "record_aux"),
+        DATEXAM   = col("DATEXAM",               "date", role = "date"),
+        analyte   = col("TYPEANA",               "chr",  role = "analyte"),
+        value_raw = col("NUMRES",                "chr",  role = "value_raw"),
+        value     = col("NUMRES",                "num",  role = "value")),
+    source_row_id = "biol")
+
 load_biol_results <- function(bio_path) {
-    d <- readRDS(bio_path)
-    if (!is.data.frame(d)) {
-        stop("biol results: expected a data frame.", call. = FALSE)
-    }
-    require_source_columns(
-        d, c("PATID", "EVTID", "ELTID", "DATEXAM", "TYPEANA", "NUMRES"),
-        "biol results")
-    biol_id <- if ("biol_ID" %in% names(d)) {
-        d$biol_ID
-    } else if ("BIOL_ID" %in% names(d)) {
-        d$BIOL_ID
-    } else {
-        stop("biol results: missing column biol_ID.", call. = FALSE)
-    }
-    tibble::tibble(
-        source_row_id = source_row_ids("biol", nrow(d)),
-        PATID   = d$PATID,
-        EVTID   = d$EVTID,
-        ELTID   = d$ELTID,
-        BIOL_ID = biol_id,
-        DATEXAM = local_clinical_date(d$DATEXAM),
-        analyte = d$TYPEANA,
-        value_raw = d$NUMRES,
-        value = suppressWarnings(as.numeric(as.character(d$NUMRES))))
+    normalize_source(readRDS(bio_path), BIOL_SOURCE)
 }
+
+# NB: pmsi$main and pmsi$actes are real redsan tables but have no loader/consumer
+# yet (the surgery anchor currently comes from the chirurgie workbook via the
+# adapters). Declare their source_spec when a variable actually consumes them.
