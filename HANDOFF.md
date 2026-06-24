@@ -3730,3 +3730,86 @@ dropping `SEJUM/SEJUF`.
 
 **Files changed.** `HANDOFF.md` (this entry); `SPEC_MODEL.md` deleted (folded here). No code
 edited; no commit yet.
+
+---
+
+## Migration proposal: prototype → generic study-spec engine — Claude → Codex/human (2026-06-24)
+
+**Status: PROPOSAL for Codex review.** The owner has approved this direction and the doc
+disposition; it is **not yet executed**. Please pressure-test the keep/prune/new lines and
+the slice order before we cut — challenge anything that risks losing banked correctness.
+
+**Why now.** The D0840-shaped prototype did its job: it taught us the model (see the
+2026-06-24 convergence entry — source/concept/unit/variable/runtime, filter→extract→reduce,
+link-by-role, combine-as-plain-R, completeness≠value). It cannot gracefully *become* the
+generic tool by in-place edits — D0840 is fused into the engine (redsan columns, hardcoded
+paths, per-variable types/adapters, copy-pasted helpers throughout).
+
+**End goal (owner).** A generic engine that ingests a **study spec file** (sources +
+concepts + variables, as data) and runs every variable. D0840 becomes one disposable study
+spec. `source_spec`/`concept_spec`/`variable_spec` are the *vocabulary* that file is written
+in; the engine ships the vocabulary + the runner.
+
+**Three tiers** (sharpened — the warehouse is fixed, so deployment constants are NOT study
+config):
+1. **Engine** — pure mechanism; never names a column, analyte, model, ICD prefix, or timezone.
+2. **EDSAN deployment config (write once, ~never changes)** — the redsan source column→role
+   maps, `Europe/Paris` (a constant — the warehouse won't move), the default model
+   `gemma3:4b` (overridable), dataset paths. Stable across all the institution's studies.
+3. **Study spec (varies per question)** — concepts + variables (+ which sources each uses).
+"Make D0840 disappear" = tier 3 becomes swappable; tier 2 is written once; the engine is clean.
+
+**This is a heavy PRUNE + a thin new runner on a KEPT core — not a rewrite from zero.**
+
+- **Keep (engine core, already ~generic):** evidence materialization + grounding + validity
+  gating; coverage/attempt/values/evidence contracts; failure handling (retry, fail-closed,
+  partial capture, transient classification); retrieval (canonical corpus + subset-before-
+  search + snippet materialization); structured-measurement primitives (interval overlap,
+  point window, max-select, threshold); `normalize_source`; the grammar-enforcement gate.
+- **EDSAN tier (relocate ~as-is):** the three source_specs + Paris constant + default model +
+  paths → one `edsan` config module.
+- **Prune (delete):** `R/types/smoking.R`, `R/types/anastomoses.R`, `R/adapter_smoking.R`,
+  `R/adapter_anastomoses.R`, and the exploratory/per-variable `scripts/*` (KEEPING
+  `check_grammar_enforcement.R` — that's the model gate). The D0840 production runners
+  (`run_synthesis.R`, `run_structured.R`) are superseded by `run_variables()`.
+- **New:** study-spec assembly + `run_variable()`/`run_variables()` (input rows + models
+  supplied at runtime, not embedded); **one generic parser** driven by a concept's
+  answer-schema + validity policy (retires the per-type parsers); a small **reducer registry**;
+  the per-source `handle` (filter→extract→reduce) + link-by-role scope + plain-R combine.
+
+**Durable lessons to harvest before pruning (must not be lost):** ellmer boundary +
+builders-vs-`type_from_schema`; the grammar-enforcement gate; fail-closed / no auto-repair;
+evidence-by-reference + substring grounding; bounded outputs (maxItems/maxLength);
+provider-params silently dropped (verify); candidate-recall as a metric separate from
+extraction accuracy; Europe/Paris clinical date; one canonical corpus + subset-before-search.
+These move into the rewritten `DESIGN.md` (rationale) + code comments.
+
+**Slice order (never a broken limbo — something runs end-to-end at every step):**
+0. Rewrite **DESIGN.md** to the target (the three tiers + the vocabulary) — the north star
+   the rest executes against. Banner the old `DESIGN.md`/`TECHNICAL_NOTES.md` as "superseded
+   prototype — see HANDOFF" until rewritten.
+1. Stand up the engine skeleton + EDSAN config tier; port `normalize_source`, retrieval, and
+   the structured-measurement primitives across unchanged.
+2. Rebuild **diabetes** end-to-end on the new spine (it is the existing multi-source proof:
+   documents/LLM + PMSI + biology, combined via `any`), green on synthetic fixtures.
+3. Port the remaining variables (smoking, anastomoses, hyperkalaemia) onto the spine,
+   deleting each old shell piece (type/adapter/script) as its replacement lands.
+4. Build a **second, non-`any` policy** variable (reconcile/precedence, or count-distinct +
+   threshold). Only now is extracting constructor *syntax* justified — two policies, per the
+   defer-syntax guardrail.
+5. Harvest + retire `TECHNICAL_NOTES.md`; touch up `README.md`.
+
+**Acceptance / what's preserved.** As each variable is rebuilt, its behavioral contracts
+(grounding, fail-closed, completeness≠value, the recipe states, D1's keep-and-flag) must stay
+green on the new spine. The net test count is EXPECTED to drop — pruning D0840-coupled tests
+is the point; the variable-agnostic engine-contract tests (the `engine_def` direction) are
+what persist.
+
+**Risks / open.** (1) Losing correctness in the port — mitigated by the slice order + keeping
+behavioral tests green per variable. (2) The generic parser must reproduce the per-type
+parsers' grounding/abstention/hallucination-flag (D1) behavior — port their tests. (3)
+absence/closed-world + multi-source `NA` still unsettled. (4) constructor *syntax* stays
+deferred until slice 4. (5) donor↔recipient link + `pmsi_diag` `SEJUM/SEJUF` gap remain.
+
+**Files (this entry):** `HANDOFF.md` only; no code. **Requesting Codex review** of the
+keep/prune/new lines and the slice order before slice 0 begins.
