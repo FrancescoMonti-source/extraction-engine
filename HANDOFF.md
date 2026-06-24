@@ -3813,3 +3813,93 @@ deferred until slice 4. (5) donor↔recipient link + `pmsi_diag` `SEJUM/SEJUF` g
 
 **Files (this entry):** `HANDOFF.md` only; no code. **Requesting Codex review** of the
 keep/prune/new lines and the slice order before slice 0 begins.
+
+---
+
+## Migration proposal v2: reviewed + reordered — Claude → Codex/human (2026-06-24)
+
+**Status: APPROVED to execute (owner go).** Supersedes the v1 proposal above (`7fc5fed`).
+Codex reviewed v1 read-only (gpt-5.5/xhigh) and said "do not run as written"; this v2 folds in
+its accepted findings and the owner's two rulings. The three tiers, the keep-core/heavy-prune
+shape, and the end goal (engine ingests a study spec; D0840 becomes one disposable spec) are
+**unchanged from v1** — read v1 for that framing. v2 only changes *what's bucketed where*, the
+*slice order*, and adds *contracts that prevent silent correctness loss*.
+
+**Owner rulings (this entry):**
+- **D1 = keep-and-flag (ratified, now a contract).** A value grounded by ≥1 real citation is
+  NOT dropped because the model also cited an unsupplied id. The hallucinated id is surfaced as
+  a **structured, filterable `citation_warning`** column — not a buried `CAUTION` substring and
+  not a `field_validity="invalid"`. (Current code in `R/types/smoking.R:69` /
+  `anastomoses.R:124` and the test at `tests/testthat/test-contract.R:207` still fail-closed;
+  the port must flip them to keep-and-flag + `citation_warning`, and the ported test asserts the
+  new behavior.)
+- **Model gate is optional infrastructure.** This tool is personal/small-team — we "just know"
+  which models are reliable. Keep `require_gated_model()`/`APPROVED_MODELS` **only while it stays
+  cheap**; if it complicates the engine/runtime split meaningfully, drop it without ceremony.
+  Either way the default model (`gemma3:4b`) is an overridable **runtime/deployment default**,
+  not warehouse-fixed config (it does not sit beside Paris/column-maps as if immutable).
+
+**Accepted review findings folded in:**
+1. **Slice 1 must be a runnable spine, not just ported primitives** (review #7). Diabetes needs
+   text-extract + structured-measure + reducers + no-candidate policy + combine; those are *New*,
+   so a minimal `run_variable()` spine (parser→reducer→combine contracts) must exist in slice 1,
+   exercised by one toy text + one toy structured variable, before diabetes.
+2. **Second non-`any` policy moves earlier** (review #8; matches our own build-then-name
+   guardrail). It comes *before* deleting the old shells, so the spec shape is pulled from two
+   policies and can't ossify around single-source+`any`.
+3. **`combine` must return the audit shape** (review #9). Every combine fn returns
+   value + ascertainment + per-source status + evidence (the `combine_any_source_hit()` /
+   `test-multisource.R:31` contract), never a bare scalar. "Combine = plain R" is the *authoring*
+   freedom; the *return contract* is fixed.
+4. **"One generic parser" → "one parser runtime with per-concept/per-field validity policies"**
+   (review #2). `R/extract.R:4` warns a single universal validator wrongly rejects smoking's
+   valid abstention. The reusable mechanism is the runtime (dynamic evidence enums, bounded
+   outputs, summary requirement, warning channels incl. `citation_warning`); the *validity rule*
+   is per concept/field (smoking's definitive⇒≥1-evidence vs standard_field_validity).
+5. **Prune → "harvest-then-delete" for `R/types/*` + adapters** (review #3/#4). Harvest first:
+   smoking's definitive-vs-abstain grounding rule, anastomoses' nested-evidenced-field + required
+   summary, bounded-schema construction, and the two adapter **scope shapes** (`adapter_smoking.R`
+   same-subject+window, `adapter_anastomoses.R` same-event) which are our **link-by-role** cases.
+   Then delete the D0840 shells.
+6. **Slice 1 is a real role migration, not relocation** (review #5). Raw EDSAN names must not
+   survive past source normalization — today they still appear in `R/structured.R`/adapters, and
+   `data.R` roles are declared-but-unconsumed. Slice 1 makes downstream speak roles.
+   `pmsi_main`/`pmsi_actes` are still undeclared (`data.R:180`) — declare when a variable consumes
+   them, not before.
+7. **Retrieval needs an explicit ordering policy** (review #10). It currently assumes
+   `anchor_date` for ordering/dedup (`R/retrieval.R:128`); whole-history/unanchored variables
+   need a declared ordering rule, else "generic retrieval" is still anchor-shaped. Port retrieval
+   *with* an ordering-policy seam, don't claim "unchanged."
+8. **Migration contract table is the gate artifact** (review, top recommendation). Before slice 0
+   ends, every current test/behavior is mapped: behavior → {engine invariant | source contract |
+   current recipe | regression-guard} → new test owner. This is what makes "expected test-count
+   drop" safe rather than silent loss.
+
+**Revised slice order (each leaves something running end-to-end):**
+- **0.** Rewrite `DESIGN.md` to the three-tier target + the vocabulary; **build the migration
+  contract table** (finding 8). Banner old `DESIGN.md`/`TECHNICAL_NOTES.md` "superseded — see HANDOFF".
+- **1.** Engine skeleton + EDSAN config tier + **minimal runnable `run_variable()` spine**
+  (parser-runtime + reducer registry + combine-audit contract). Port `normalize_source`,
+  retrieval (with ordering-policy seam), structured-measurement primitives — as a **role
+  migration** (findings 1, 6, 7). Green on one toy text + one toy structured variable.
+- **2.** Rebuild **diabetes** end-to-end on the spine (the existing multi-source proof), green on
+  synthetic fixtures.
+- **3.** Build the **second non-`any` policy** variable (reconcile/precedence, or count-distinct +
+  threshold) — pulls the spec shape from two policies (finding 2).
+- **4.** Port remaining variables (smoking, anastomoses, hyperkalaemia) onto the spine via
+  **harvest-then-delete** (finding 5), implementing D1 keep-and-flag + `citation_warning`; delete
+  each old type/adapter/script as its replacement lands.
+- **5.** Only now, if two+ policies justify it, extract constructor *syntax* (defer-syntax
+  guardrail). Harvest + retire `TECHNICAL_NOTES.md`; touch up `README.md`.
+
+**Acceptance / preserved (unchanged from v1, sharpened):** per-variable behavioral contracts stay
+green on the new spine — grounding-by-reference, fail-closed/no-auto-repair, completeness≠value,
+recipe processing-states, bounded outputs, and **D1 keep-and-flag** (the one *changed* contract).
+Combine functions must return the audit shape (finding 3). Net test count is expected to drop
+(pruning D0840-coupled tests is the point); engine-invariant tests persist.
+
+**Still open (carried):** absence/closed-world semantics with multi-source `NA`; concept
+composition (re-inline vs `use_concept`); reducer vocabulary vs plain `group_by|>summarise`;
+donor↔recipient linkage absent from `pmsi_actes`; `pmsi_diag` view dropping `SEJUM/SEJUF`.
+
+**Files (this entry):** `HANDOFF.md` only; no code. Next action: **slice 0**.
