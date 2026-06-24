@@ -3637,3 +3637,96 @@ two structured measurement paths before combination. It still proves only the
 `any`/OR policy, uses synthetic data and a fake document caller, and is not intended to
 expand the permanent `master` test suite. No `concept_spec()` or `variable_spec()`
 constructors should be extracted from this proof alone.
+
+---
+
+## Session convergence: spec-model refinements + owner direction to generalize — Claude → Codex/human (2026-06-24)
+
+**Disposition.** This folds in a standalone draft (`SPEC_MODEL.md`, written in a long
+owner↔Claude design session, now deleted) so the coordination record stays single. Per the
+owner: **where this session conflicts with the 2026-06-23 `concept_spec`/`variable_spec`
+dialogue, this session supersedes it.** Most of the below *extends* rather than contradicts;
+the one real shift is the owner relaxing "defer all constructor syntax" (see Direction).
+
+**Owner direction (decision).** The owner judges the multi-source spike successful and wants
+to **start concretely generalizing the engine** rather than hold everything behind "defer
+constructors." *Engineering guardrail kept on the record (not rubber-stamping):* "start
+generalizing" ≠ "freeze a constructor API off the single `any` policy" — that's the DSL trap
+the loop rejected three times. The safe form of "start now" is to **extract the recurring
+shape from a SECOND real multi-source variable using a non-`any` policy**, so the API is
+pulled from two policies, not one. Build, then name.
+
+**The model, reconciled (extends the 2026-06-23 ownership sketch).** Five layers:
+
+1. **Source — knows the warehouse.** The *only* place raw column names appear; maps columns →
+   canonical **roles** (`subject, event, date, interval, value, analyte, code, text`, plus
+   study-specific like a care unit). Verified against the installed `redsan` package
+   (`process_pmsi()`→`$main/$actes/$diag`, `process_biol()`):
+   ```r
+   sources <- source_specs(
+     pmsi_main  = source(subject=PATID, event=EVTID, interval=c(DATENT,DATSORT), unit_med=SEJUM, unit_func=SEJUF),
+     pmsi_actes = source(subject=PATID, event=EVTID, date=DATEACTE, code=CODEACTE, nomenclature=NOMENCLATURE, unit_med=SEJUM, unit_func=SEJUF),
+     pmsi_diag  = source(subject=PATID, event=EVTID, interval=c(DATENT,DATSORT), code=diag, type=type_diag),  # diag view drops SEJUM/SEJUF
+     biol       = source(subject=PATID, event=EVTID, date=DATEXAM, analyte=TYPEANA, value=NUMRES),
+     documents  = source(subject=PATID, event=EVTID, date=RECDATE, text=RECTXT))
+   ```
+   New warehouse ⇒ rewrite only this layer; concepts/variables untouched. (`R/data.R` is
+   today's hand-written version of this layer.)
+2. **Concept — neutral identity.** "potassium", not "hyperkalemia"; an identity selector per
+   source in roles; for text, a query + a default answer (ellmer builders) + an abstain rule.
+   Carries no time/threshold/unit; reused untouched. The engine owns the bounded evidence-id
+   scaffolding and builds the `type_from_schema` call ⇒ retires per-variable `type_*`/`parse_*`.
+3. **Unit — the grain.** Derived by filtering a source; declares id + roles
+   (subject/event/optional anchor). The link to evidence is **coarse** (shared roles only — a
+   lab carries `PATID/EVTID`, not the surgery's `DATEACTE/CODEACTE`); the **anchor + window do
+   the fine assignment** (one evidence row may legitimately count for two units).
+4. **Variable — what to do with the concept.** Per source: **filter → extract → reduce** (the
+   three verbs; "scope" is not separate — it folds into `filter`, which is one AND-ed bag).
+   Structured and text are the *same* pipeline; only `extract` differs (read a column vs ask a
+   model / presence). Cross-source **`combine` = plain R** over per-source verdicts (`NA` =
+   missing; R's three-valued logic gives missing-honesty for free; flexibility via an R
+   function, not a combinator DSL). Plus `output` (cohort column type) and `absence`.
+5. **Runtime — `run_variable`/`run_variables`** (kept from 2026-06-23): input rows supplied at
+   runtime, **not** embedded in the variable spec; model/provider settings at runtime,
+   separate from the scientific definition.
+
+**Refinements this session adds (were not in HANDOFF):**
+- **Source = the warehouse-knowledge layer** with the verified column→role map above; raw
+  names appear nowhere else (the `NUMRES → value` move, generalized).
+- **Link by role, not `same_*`.** The link references canonical roles (`link="subject"` default
+  = same patient; `c("subject","event")` = same stay). Study-specific link keys become roles in
+  the source layer — no fixed relation enum to predict, which was the flaw in `same_stay`/`same_*`.
+- **filter → extract → reduce**, with scope/perimeter folded into the single filter bag;
+  `within(...)` is a shortcut, not a category.
+- **Perimeter (`SEJUM/SEJUF`) is a normal row filter** wherever the UF column exists
+  (main/actes/raw rows broadly); a stay-join only where it doesn't (diag view, documents).
+
+**Carried principles (agree with 2026-06-23):** `/data` = outer study universe; completeness ≠
+value (recipe owns partial→0/NA); source failure distinct from no-evidence; concept-identifies /
+variable-selects; merge is **non-destructive** (per-source verdicts always retained; the venn is
+a downstream cross-tab); two "types" (model answer @ concept, output column @ variable);
+smoking's ellmer type belongs to the concept iff the concept names one reusable observation with
+an output shape invariant across every variable using it.
+
+**Explicit supersessions of 2026-06-23 (owner-directed):**
+- "Defer all constructor syntax" → relaxed to "**start generalizing now**, by extracting shape
+  from a 2nd real multi-source variable" (the build-then-name guardrail above still holds).
+- `combine_any_source_hit()` as a *named combiner* → **combine is plain R**; `any`/`all` are
+  optional named sugar, not the mechanism.
+
+**Smallest next step (toward generalization).** Two concrete pieces, in parallel:
+(a) a **second real multi-source variable using a non-`any` policy** (reconcile/precedence, or
+count-distinct + threshold — both documented as real in D0840), built with plain functions like
+the diabetes proof, so the API can be *extracted* from two policies; (b) turn `R/data.R`'s
+hand-written mapping into a declared **source layer** (columns → roles), the most clearly-settled
+piece. Constructors get pulled from these, not designed ahead.
+
+**Still open:** absence/closed-world semantics with multi-source `NA` (does `closed_world(0)`
+coerce `FALSE | FALSE | NA`, or only when every source was present?); concept composition
+(diabetes re-inlines glucose vs `use_concept(glucose)`); D1's citation flag as a structured,
+filterable column rather than a buried `CAUTION` substring; reducer vocabulary vs plain
+`group_by |> summarise`; donor↔recipient linkage absent from `pmsi_actes`; the `pmsi_diag` view
+dropping `SEJUM/SEJUF`.
+
+**Files changed.** `HANDOFF.md` (this entry); `SPEC_MODEL.md` deleted (folded here). No code
+edited; no commit yet.
