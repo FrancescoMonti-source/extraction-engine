@@ -3903,3 +3903,57 @@ composition (re-inline vs `use_concept`); reducer vocabulary vs plain `group_by|
 donor↔recipient linkage absent from `pmsi_actes`; `pmsi_diag` view dropping `SEJUM/SEJUF`.
 
 **Files (this entry):** `HANDOFF.md` only; no code. Next action: **slice 0**.
+
+---
+
+## Slice 1 landed (Codex) + Claude review/correction — Claude (2026-06-24)
+
+**Disposition.** The owner directed: proceed with **thin vocabulary over kept core**, additive
+and deterministic, no deletion/clean-reimplementation of the diabetes/retrieval/structured
+paths; thin experimental S3 constructors (not a frozen DSL); reuse the tested executors; new
+permanent **spine files** (not a single spike file). The owner then ran Codex, which implemented
+the slice as one monolithic `R/specs.R` (576 lines) + `tests/testthat/test-specs-diabetes.R`,
+and asked Claude to review and correct.
+
+**Verdict on Codex's slice.** Functionally correct (172/172 assertions green, incl. 28 new
+spec assertions). The vocabulary is genuinely thin (tagged-list/S3 with `api_status =
+"experimental"`), validation is solid (named-channel checks, channel ⊆ concept, template
+override merge), the audit envelope carries final value + selected channels + per-source status
++ evidence refs + ascertainment, and it reuses `measure_diabetes` / `run_extraction` /
+`combine_any_source_hit`. Good call: output ctors named `binary_output()`/`number_output()` to
+avoid masking `base::numeric()`.
+
+**Three corrections applied (deterministic; 172/172 still green):**
+1. **File split (explicit owner instruction).** `R/specs.R` → `R/spec.R` (concept_spec /
+   variable_template / variable_spec / use_channel), `R/channels.R` (channel + selector ctors),
+   `R/operators.R` (windows / reducers / combiners / outputs / absence), `R/run_variable.R`
+   (execution spine + audit envelope), `R/concepts-diabetes.R` (the diabetes concept + baseline
+   template). `tests/testthat.R` sources them in dependency order; `specs.R` deleted.
+2. **Decoupled the generic runner from diabetes.** Codex's `.run_selected_channel` dispatched on
+   literal channel *names* (`pmsi_diag_e10_e14`/`text_diabetes_mentions`/`glucose_measurements`)
+   and leaked `diabetes_text_definition()` into the runner as a fallback, with a generic-looking
+   helper hardcoding the string `"text_diabetes_mentions"`. Now dispatch is by **channel `type`**
+   (code/text/lab); the text answer-definition (`extractor`) lives on the concept's
+   `text_channel` (concept owns its answer schema); channel-use activation
+   (`.activate_channels`) is type-based with no name strings. The generic spine now contains
+   **zero** diabetes vocabulary — only two commented `measure_*` temporary-adapter calls.
+3. **Removed duplication.** Codex's `.measure_lab_max` copy-pasted ~100 lines of
+   `measure_hyperkalaemia`; the max-select is threshold-independent, so the lab channel now
+   **reuses `measure_hyperkalaemia`** and reads `measurement_value`. Dropped dead
+   `.source_status_row`.
+
+**Boundary held:** `measure_*()` are used as **temporary internal adapters** (commented as such),
+not the public architecture. The user-facing path is concept → channel → variable_template →
+variable_spec → run_variable.
+
+**Known limitations / still open (carried into the next slice):** `llm_after_lucene(top_n)` is
+carried for provenance but not yet consumed (the slice's text source is pre-retrieved; retrieval
+ordering is a future seam); `absence_policy` supplies `incomplete_value` but the text-no_candidate
+→ `unavailable` mapping is still a conservative default keyed on channel type, not yet fully driven
+by the policy object; the audit envelope carries evidence **refs** but not a materialized
+evidence_summary; second non-`any` policy still owed before any constructor *syntax* is frozen.
+
+**Files (this entry):** `R/spec.R`, `R/channels.R`, `R/operators.R`, `R/run_variable.R`,
+`R/concepts-diabetes.R` (new), `R/specs.R` (deleted), `tests/testthat.R`,
+`tests/testthat/test-slice-diabetes-spec.R` (Codex's test, renamed from
+`test-specs-diabetes.R`), `HANDOFF.md`. Committed as one slice-1 commit.
