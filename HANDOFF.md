@@ -3957,3 +3957,29 @@ evidence_summary; second non-`any` policy still owed before any constructor *syn
 `R/concepts-diabetes.R` (new), `R/specs.R` (deleted), `tests/testthat.R`,
 `tests/testthat/test-slice-diabetes-spec.R` (Codex's test, renamed from
 `test-specs-diabetes.R`), `HANDOFF.md`. Committed as one slice-1 commit.
+
+---
+
+## Slice 1b + slice-2 direction — Claude / owner (2026-06-25)
+
+**Slice 1b (done).** Closes the `any_positive()` combine gap on the SAME variable
+(`diabete_pre_greffe`, PMSI + text), with no new clinical complexity — proving the combine is
+genuinely wired through `run_variable()`, not just the single-channel paths. Four added gap
+cases on synthetic fixtures: both channels positive (→ 1, complete, **evidence from both
+channels survives**); PMSI positive + text `no_candidate` (→ 1, partial); PMSI negative + text
+`no_candidate` (→ NA, partial — absence-of-text is not absence-of-disease); both complete with
+no positive (→ 0, complete — a documented negative, which the text path *can* represent via a
+candidate the model marks `not_documented`). Full suite **188/188**.
+
+**Owner direction on slice 2 (decision).** Do **not** keep deepening diabetes (no HbA1c, drugs,
+insulin, complications, diabetes type) — that tests diabetes *modelling*, not framework design.
+The framework is stressed by a **different concept SHAPE**, not more complexity in one concept.
+Next playground = **smoking**: text-dominant concept, **categorical** output, a **non-`any`
+collapse** policy, real parser/schema behaviour, evidence-sentence requirements, and
+`invalid` / `citation_warning` / `no_candidate` semantics. (This supersedes Claude's earlier
+dialysis-precedence proposal as the immediate next slice; dialysis/reconcile remains a later
+multi-source stress test.) Smoking is also a genuine **second, non-`any` construction policy**,
+so it satisfies the build-then-name guardrail before any constructor *syntax* is frozen.
+
+**Files (this entry):** `tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`. Committed as
+slice 1b.

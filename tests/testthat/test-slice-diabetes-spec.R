@@ -157,3 +157,95 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
     expect_equal(status$status, "complete")
     expect_true(status$hit)
 })
+
+# ---------------------------------------------------------------------------
+# Slice 1b: close the any_positive() combine gap on the SAME variable
+# (diabete_pre_greffe, PMSI + text, any_positive). Same concept, no new clinical
+# complexity -- this only proves the COMBINE is genuinely wired through
+# run_variable(): both-positive, one-positive-one-absent, and all-complete-negative.
+# ---------------------------------------------------------------------------
+
+cg_tasks <- tibble::tibble(
+    task_id = paste0("Q", 1:4, "::t"),
+    PATID = paste0("Q", 1:4),
+    anchor_date = as.Date("2024-06-01"))
+
+# Q1,Q2 carry a diabetes code (positive); Q3,Q4 carry I10 (in-window, usable ->
+# a COMPLETE negative, not "no PMSI data").
+cg_diag <- tibble::tibble(
+    source_row_id = sprintf("diag:%03d", 1:4),
+    PATID = paste0("Q", 1:4),
+    EVTID = paste0("EV", 1:4),
+    ELTID = paste0("D", 1:4),
+    diag = c("E11.9", "E11.9", "I10", "I10"),
+    DATENT = as.Date("2024-05-20"),
+    DATSORT = as.Date("2024-05-21"))
+
+# Text candidates only for Q1 (-> documented) and Q4 (-> not_documented, a
+# complete negative). Q2/Q3 are no_candidate, so the text channel is unavailable.
+cg_docs <- list(
+    coverage = tibble::tibble(
+        task_id = cg_tasks$task_id,
+        coverage_state = c("candidate", "no_candidate", "no_candidate", "candidate")),
+    candidates = tibble::tibble(
+        task_id = c("Q1::t", "Q4::t"),
+        snippet_id = "S001",
+        hit_ref = c("DOC_Q1::3", "DOC_Q4::3"),
+        ELTID = c("DOC_Q1", "DOC_Q4"),
+        sentence = 3L,
+        hit_text = "Patient diabetique.",
+        snippet_text = "Patient diabetique sous metformine.",
+        RECDATE = as.Date("2024-05-15"),
+        RECTYPE = "note"))
+
+cg_sources <- list(documents = cg_docs, pmsi_diag = cg_diag)
+
+cg_fake <- function(prompt, type, system_prompt) {
+    if (grepl("Q1::t", prompt, fixed = TRUE)) {
+        return(list(diabetes_status = "documented", evidence_ids = list("S001")))
+    }
+    list(diabetes_status = "not_documented", evidence_ids = list())   # Q4
+}
+
+# Why: any_positive() must be genuinely wired through run_variable() across the
+# four combine outcomes, evidence from EVERY positive channel must survive, and
+# ascertainment must stay complete-vs-partial (text no_candidate is not absence).
+test_that("any_positive combine is wired through run_variable across the gap cases", {
+    baseline <- variable_spec(
+        template = diabetes_baseline_status_template(),
+        name = "diabete_pre_greffe", unit = "transplant", anchor = "anchor_date")
+    run <- run_variable(baseline, cg_tasks, cg_sources,
+                        caller = cg_fake, model_name = "fake")
+
+    values <- setNames(run$values$value, run$values$task_id)
+    asc <- setNames(run$values$ascertainment, run$values$task_id)
+
+    expect_equal(values[["Q1::t"]], 1L)        # PMSI + text both positive
+    expect_equal(values[["Q2::t"]], 1L)        # PMSI positive + text no_candidate
+    expect_true(is.na(values[["Q3::t"]]))      # PMSI negative + text no_candidate -> not absence
+    expect_equal(values[["Q4::t"]], 0L)        # both complete, no positive -> documented negative
+
+    expect_equal(asc[["Q1::t"]], "complete")
+    expect_equal(asc[["Q2::t"]], "partial")    # text source not ascertained
+    expect_equal(asc[["Q3::t"]], "partial")
+    expect_equal(asc[["Q4::t"]], "complete")
+
+    # Evidence from BOTH positive channels survives for Q1.
+    q1_ev <- run$evidence[run$evidence$task_id == "Q1::t", ]
+    expect_setequal(q1_ev$channel,
+                    c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
+    ref <- setNames(q1_ev$evidence_ref, q1_ev$channel)
+    expect_equal(ref[["pmsi_diag_e10_e14"]], "diag:001")
+    expect_equal(ref[["text_diabetes_mentions"]], "DOC_Q1::3")
+
+    # A documented negative (Q4) carries no positive evidence.
+    expect_equal(nrow(run$evidence[run$evidence$task_id == "Q4::t", ]), 0L)
+
+    # Per-channel status: Q1 both complete + positive; Q4 both complete + negative.
+    q1_status <- run$source_status[run$source_status$task_id == "Q1::t", ]
+    expect_true(all(q1_status$status == "complete"))
+    expect_true(all(q1_status$hit))
+    q4_status <- run$source_status[run$source_status$task_id == "Q4::t", ]
+    expect_true(all(q4_status$status == "complete"))
+    expect_true(all(!q4_status$hit))
+})
