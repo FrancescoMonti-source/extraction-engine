@@ -541,23 +541,31 @@ rejected  : function calls, arithmetic, comparison operators, literals/constants
 
 Referenced channels must be exactly the variable's activated channels; an unknown symbol or an activated-but-unused channel is a build-time error.
 
-**Three-valued (Kleene) evaluation.** Each channel is a logical vector over the task universe: `TRUE` = hit, `FALSE` = ascertained no-hit, `NA` = unavailable / unevaluable. The expression is evaluated with three-valued logic, so `NA` propagates **only when the final decision depends on an unavailable hit set**:
+**Observed hit-set algebra (the decision).** Each channel produces a per-task hit that is one of `TRUE` = observed hit, `FALSE` = ascertained no-hit, `NA` = unavailable / unevaluable. The **final cohort decision uses observed set algebra, not Kleene truth logic**: a task is a member of a channel's set **iff `hit == TRUE`**, so both `FALSE` and `NA` mean "no observed hit" (non-member). The decision is therefore always determined:
 
 ```text
-TRUE  | NA = TRUE     FALSE & NA = FALSE     !NA = NA
-FALSE | NA = NA       TRUE  & NA = NA
+A & !B   with A = TRUE (hit), B = NA (unavailable)
+  ->  A's observed set contains the task; B's observed set does not.
+  ->  decision = included, value = 1, channel_coverage = partial
+  NOT decision = undetermined.
 ```
 
-The per-task final decision is **`included` / `excluded` / `undetermined`** — it is **not** collapsed to binary in the envelope. `undetermined` (value `NA`, `ascertainment = partial`) is exactly the case where the result hinges on a channel that was unavailable. This is how the engine keeps two things distinct (invariants #13/#14 — never infer clinical absence from silence):
+The reasoning: `A NOT B` is `A` minus the **observed** B hits. If B produced no hit, the task stays in `A`. The uncertainty about B belongs in the audit (`channel_coverage`, membership), **not** in the final set operation. NA must not silently flip the decision. (A strict epistemic mode that *does* propagate NA into the decision is a deliberate future extension, gated behind an explicit flag — it is not the default.)
+
+The envelope therefore carries three separate fields, resolving an earlier conflation where one `ascertainment` field meant both "is the decision determined" and "were the channels evaluable":
 
 ```text
-"no hit observed"            (FALSE: the selected definition was evaluated and not matched)
-"unavailable / unevaluable"  (NA: the source could not be ascertained)
+decision          included / excluded   (observed set-algebra result; binary, determined)
+decision_state    determined            (always, in the default observed mode)
+channel_coverage  complete / partial / failed
+                    complete = every selected channel was evaluable (TRUE/FALSE)
+                    partial  = a selected channel was unavailable / unusable (NA)
+                    failed   = a selected channel errored
 ```
 
-A task kept only because an exclusion channel was *unavailable* comes back `undetermined`/`partial`, never a definitive "A and not B". The closed-world clinical label ("patients with the act and no dialysis") is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for it; otherwise the result is "patients with the act and **no dialysis hit**".
+`value` is therefore always `0` / `1` for a boolean variable; the "some channel was unavailable" caveat lives in `channel_coverage`, not in a missing value. The engine still keeps two things distinct (invariants #13/#14 — never infer clinical absence from silence): an **observed non-hit** (`FALSE`, the selected definition was evaluated and not matched) versus an **unavailable source** (`NA`). The closed-world clinical label ("patients with the act and no dialysis") is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for it; otherwise the result is "patients with the act and **no dialysis hit**, coverage permitting".
 
-**Overlap audit (Venn / UpSet).** The audit is not reduced to in/out. Alongside `values` it emits a **membership long-form** (`task_id`, `channel`, `role` in the expression = asserted/negated/mixed, `hit` = TRUE/FALSE/NA, `processing_state`, `evidence_refs` for hits) and an **overlap summary** that groups tasks by their membership pattern across the expression channels (per-channel state columns + `pattern` + count + the pattern-determined `decision` and `ascertainment`). The overlap summary is directly consumable by ggupset / UpSetR; the scientifically useful part is how the source hit sets overlap or fail to overlap, not just the final flag.
+**Overlap audit (Venn / UpSet).** The audit is not reduced to in/out. Alongside `values` it emits a **membership long-form** (`task_id`, `channel`, `role` in the expression = asserted/negated/mixed, `hit` = TRUE/FALSE/NA preserved, `processing_state`, `evidence_refs` for hits) and an **overlap summary** that groups tasks by their membership pattern across the expression channels (per-channel state columns with NA preserved + `pattern` + count + the pattern-determined `decision`, `decision_state`, and `channel_coverage`). The overlap summary is directly consumable by ggupset / UpSetR; the scientifically useful part is how the source hit sets overlap or fail to overlap, not just the final flag.
 
 `R/hitset.R` is the pure core (parser, grammar check, role derivation, Kleene evaluator, overlap); `R/run_variable.R` attaches per-channel status + evidence provenance.
 
@@ -898,7 +906,7 @@ These are the core principles future agents should not violate.
 
 18. The framework should optimize for explicitness, reuse, source contribution reporting, and reviewability, not for hiding protocol choices.
 
-19. The boolean combine surface is a string hit-set expression (`|` `&` `!` over channel names) evaluated as three-valued set algebra over explicit hit sets, not clinical ontology. `!A` is complement within the task universe, not clinical negation. The final decision is included / excluded / undetermined (NA propagates when it depends on an unavailable hit set); the audit must distinguish an observed non-hit from an unavailable source and never read silence as a closed-world clinical absence. `hit_set_difference()` is sugar that lowers to `a & !b`, not a parallel system.
+19. The boolean combine surface is a string hit-set expression (`|` `&` `!` over channel names) evaluated as **observed** set algebra over explicit hit sets, not clinical ontology and not Kleene truth logic. A task is in a channel's set iff its hit is observed (`TRUE`); `FALSE` and `NA` are both non-members, and `!A` is complement within the task universe, not clinical negation. The final decision is always determined (included / excluded); an unavailable channel lowers `channel_coverage` (complete / partial / failed) and is preserved in the membership/overlap audit, but does **not** propagate into the decision (a strict NA-propagating mode is a future opt-in). Keep three fields separate: `decision` (the combine result), `decision_state` (determined / undetermined), `channel_coverage` (were the selected channels evaluable). Distinguish an observed non-hit from an unavailable source; never read silence as a closed-world clinical absence. `hit_set_difference()` is sugar that lowers to `a & !b`, not a parallel system.
 ```
 
 ---

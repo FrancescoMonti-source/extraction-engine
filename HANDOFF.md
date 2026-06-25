@@ -4655,3 +4655,42 @@ layer)") + invariant #19 generalized from "A NOT B" to the string expression lay
 **Files:** code in commit `428929e` (`R/hitset.R`, `R/operators.R`, `R/run_variable.R`,
 `R/spec.R`, `tests/testthat/test-slice-hitset-{spec,expr-spec}.R`); this doc commit
 covers `extraction_engine_design_formalization.md` (§8 + invariant #19) and `HANDOFF.md`.
+
+---
+
+## Reconcile the envelope: channel_coverage + observed decision — Claude (2026-06-25)
+
+Owner-directed cleanup (slice C of a review). `ascertainment` had drifted into two
+meanings — (1) were the selected channels evaluable, (2) is the final boolean decision
+determined — and the boolean layer had (my error) used Kleene logic that let NA
+propagate into the cohort decision. Both fixed.
+
+**Substantive correction (commit `e323e8c`):** the boolean expression layer now decides
+by OBSERVED hit-set algebra, not Kleene truth logic. A task is a member of a channel's
+set iff `hit == TRUE`; FALSE and NA are both "no observed hit". So `A & !B` with B
+unavailable keeps an A-hit task INCLUDED (B produced no observed hit) — value 1,
+decision included, channel_coverage partial. The uncertainty lives in the audit, NOT in
+the set operation. The decision is always determined; a strict NA-propagating epistemic
+mode is left as an explicit future opt-in.
+
+**Envelope contract (the two meanings are now separate fields):**
+- `decision` — included / excluded (the observed set-algebra result).
+- `decision_state` — determined / undetermined (always "determined" in observed mode).
+- `channel_coverage` — complete / partial / failed (were the selected channels
+  evaluable). Replaces the old `ascertainment` field across the WHOLE public
+  run_variable envelope (any_positive, documented_status, max_value, and the boolean
+  layer). `value` for a boolean variable is now always 0/1.
+- `membership` / `overlap` preserve the raw TRUE/FALSE/NA per channel (audit truth).
+
+The spike combiner `combine_any_source_hit` keeps its internal `ascertainment` field
+name (it is retirement-bound, slice A); the public envelope renames it at the boundary.
+
+**Design note:** §8 rewritten (observed algebra, the three fields, the A & !B example)
+and invariant #19 corrected (observed, not Kleene). **Suite:** 418 tests, 0 warnings.
+
+**Files (this doc commit):** `extraction_engine_design_formalization.md` (§8 +
+invariant #19), `HANDOFF.md`. Code/tests in commit `e323e8c`.
+
+**Still queued from the review:** replace the fragile `deparse(body())` spine test with
+a behavioral one (slice B, next); then move clinical examples out of generic engine
+files (slice D, explicitly deferred until after C/B land).
