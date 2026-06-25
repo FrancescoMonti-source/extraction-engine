@@ -186,15 +186,20 @@ diabetes_text_definition <- function() {
     no_candidate_status = c("complete", "unavailable")) {
     no_candidate_status <- match.arg(no_candidate_status)
     cov <- res$coverage; val <- res$values; ev <- res$evidence
+    # run_extraction returns COLUMN-LESS empty tibbles when no task produced a value
+    # (e.g. every task no_candidate); guard so $task_id access on such a tibble does
+    # not warn ("Unknown or uninitialised column"). Behaviour is unchanged.
+    has_val <- nrow(val) > 0L && all(c("task_id", "accepted_value") %in% names(val))
+    has_ev  <- nrow(ev) > 0L && "task_id" %in% names(ev)
     out <- vector("list", length(task_ids)); names(out) <- task_ids
     for (tid in task_ids) {
         state <- cov$processing_state[cov$task_id == tid]
         state <- if (length(state)) state[[1]] else "no_eligible_source"
-        av <- val$accepted_value[val$task_id == tid]
+        av <- if (has_val) val$accepted_value[val$task_id == tid] else character()
         av <- if (length(av)) av[[1]] else NA_character_
         sh <- .source_status_from_state(
             state, av, no_candidate_status = no_candidate_status)
-        tev <- ev[ev$task_id == tid, , drop = FALSE]
+        tev <- if (has_ev) ev[ev$task_id == tid, , drop = FALSE] else ev[0, ]
         ids <- if (id_col %in% names(tev)) as.character(tev[[id_col]]) else character()
         out[[tid]] <- list(status = sh$status, hit = sh$hit,
                            evidence = tibble::tibble(source_row_id = unique(ids)))

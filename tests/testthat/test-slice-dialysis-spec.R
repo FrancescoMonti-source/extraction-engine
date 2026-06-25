@@ -110,3 +110,25 @@ test_that("source contribution is transparent per channel", {
     expect_equal(get("DG4::t", "pmsi_diag_dialysis", "contribution"), "negative")
     expect_equal(get("DG4::t", "text_dialysis_mentions", "contribution"), "negative")
 })
+
+# Why: when the text channel retrieves NOTHING for any task, run_extraction returns
+# COLUMN-LESS empty values/evidence. The OR reducer must handle that cleanly -- no
+# spurious "Unknown or uninitialised column: task_id" warning (regression surfaced by
+# a real-data multi-source run). The code channel still drives the result and the text
+# channel is transparently silent.
+test_that("multi-source OR is warning-clean when the text channel is entirely silent", {
+    docs_all_silent <- list(
+        coverage = tibble::tibble(task_id = dia_tasks$task_id, coverage_state = "no_candidate"),
+        candidates = tibble::tibble())
+    sources <- list(pmsi_diag = dia_diag, documents = docs_all_silent)
+
+    run <- expect_no_warning(
+        run_variable(dia_var(), dia_tasks, sources, caller = dia_fake, model_name = "fake"))
+
+    value <- setNames(run$values$value, run$values$task_id)
+    expect_equal(value[["DG1::t"]], 1L)        # ICD-10 carries it; text silent
+    expect_true(is.na(value[["DG3::t"]]))      # no code rows + text silent -> NA
+    txt <- run$source_status[run$source_status$channel == "text_dialysis_mentions", ]
+    expect_true(all(txt$contribution == "silent"))
+    expect_true(all(txt$processing_state == "no_candidate"))
+})
