@@ -4166,3 +4166,48 @@ Full suite **268/268** (unchanged), with the diabetes and dialysis text paths ex
 `test-multisource-diabetes` and `test-slice-dialysis`.
 
 **Files (this entry):** `R/extract.R`, `R/multisource.R`, `R/concepts-dialysis.R`, `HANDOFF.md`.
+
+---
+
+## Slice 5: real retrieval/eligibility wiring (tightly scoped) — Claude / owner (2026-06-25)
+
+**Owner direction.** Highest-value thread now is making the spec layer a REAL entry point into
+retrieval, not just pre-retrieved fixtures. Scope it tight: ONE subject-scoped text variable
+(`smoking_status_periop`), synthetic deterministic data, no public-syntax change, no full retrieval
+rewrite; smallest runner seam so a `text_channel` selector + raw `documents` call the existing
+`retrieve()`/eligibility machinery and produce the same coverage/candidates shape fixtures gave;
+keep fixtures working; assert `run_variable()` runs raw docs -> retrieval -> extraction -> values.
+
+**Done.** A text channel's `{coverage, candidates}` are now resolved by `.resolve_text_inputs`:
+- pre-retrieved fixtures `list(coverage=, candidates=)` -> used as-is (tests/debugging, unchanged);
+- raw `list(corpus=, docs_index=)` -> `.retrieve_text_channel` computes subject + date-window
+  eligibility (the subject's documents inside the variable's window) and runs the existing
+  `retrieve()` with the channel's Lucene query, producing the same coverage/candidates shape.
+- anything else -> a loud error.
+Full suite **278/278**, 0 warnings.
+
+Proven by `test-slice-retrieval-wiring.R`: from a synthetic corpus + docs_index, `run_variable()`
+runs smoking end-to-end -> `actif` for an in-window smoking note; `NA`/no_candidate for an in-window
+note with no smoking term; `NA` for a smoking note OUTSIDE the window (eligibility excludes it);
+evidence grounded by a real `E1::<sentence>` corpus reference. Fixtures still execute the same
+variable unchanged. (Also fixed a benign warning: `.documented_status_variable` now guards the
+column-less empty `values` case when every task is no_candidate.)
+
+**Tight by design (NOT done):** only subject-linked, date-windowed text channels retrieve here;
+event-scoped / `window = NULL` channels (anastomoses) still need fixtures -- a parallel eligibility
+case for later. No change to constructor syntax, variable semantics, or source-contribution
+behaviour. Multi-source variables (diabetes/dialysis) keep using fixtures for their text channel
+until needed; the structured channels were always real.
+
+**Owner-set order from here:** (1) retrieval wiring [done]; (2) whole-history "ever" variant;
+(3) generalize D1 `citation_warning` if still useful; (4) constructor-syntax extraction / API
+cleanup (still premature until retrieval wiring is proven, which it now begins to be).
+
+**Also agreed (recorded):** `smoking_status_periop` is the test case for *anchored categorical text
+status* extraction generally (functional status pre-transplant, performance status pre-chemo, ...).
+The reusable pattern stays at the OPERATOR/helper level (`categorical_output()`,
+`documented_status()`, `llm_after_lucene()`, `before_anchor()`); the concept/template layer stays
+concept-specific (no generic `status_around_anchor_template` -- that is the generic-template trap).
+
+**Files (this entry):** `R/run_variable.R`, `tests/testthat/test-slice-retrieval-wiring.R` (new),
+`HANDOFF.md`. Committed as slice 5.

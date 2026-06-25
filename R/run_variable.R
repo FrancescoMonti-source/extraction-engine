@@ -36,6 +36,41 @@ suppressWarnings(suppressMessages(library(dplyr)))
     selector[[field]]
 }
 
+# A text channel's {coverage, candidates} either come PRE-RETRIEVED (fixtures, for
+# tests/debugging) or are produced by REAL retrieval from raw documents
+# (corpus + docs_index). This is the seam that makes run_variable() a real entry
+# point into retrieval instead of always being handed coverage/candidates.
+.resolve_text_inputs <- function(src, channel_def, variable, tasks) {
+    if (is.list(src) && all(c("coverage", "candidates") %in% names(src))) {
+        return(list(coverage = src$coverage, candidates = src$candidates))
+    }
+    if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
+        return(.retrieve_text_channel(channel_def, variable, tasks, src))
+    }
+    stop("A documents source must be pre-retrieved {coverage, candidates} or raw ",
+         "{corpus, docs_index}.", call. = FALSE)
+}
+
+# Real retrieval for a subject-linked, date-windowed text channel: eligibility is
+# the subject's documents inside the variable's window, then the existing
+# retrieve() machinery runs the channel's Lucene query and assembles candidates +
+# coverage. (Event-scoped / window = NULL text channels are not wired here yet --
+# supply fixtures for those; that is a later, parallel eligibility case.)
+.retrieve_text_channel <- function(channel_def, variable, tasks, src) {
+    if (is.null(variable$window) || !inherits(variable$window, "ee_window")) {
+        stop("Real retrieval currently requires a date window (subject-scoped text ",
+             "channel); supply pre-retrieved fixtures otherwise.", call. = FALSE)
+    }
+    w <- .window_days(variable)
+    eligibility <- src$docs_index %>%
+        inner_join(distinct(tasks, task_id, PATID, anchor_date),
+                   by = "PATID", relationship = "many-to-many") %>%
+        filter(RECDATE >= anchor_date + w[["from_days"]],
+               RECDATE <= anchor_date + w[["to_days"]]) %>%
+        transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
+    retrieve(src$corpus, tasks, eligibility, query = channel_def$selector$query)
+}
+
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
                                   caller, model_name) {
@@ -81,8 +116,10 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 stop("Text channel '", channel_name,
                      "' has no extractor (activation or concept).", call. = FALSE)
             }
+            text_inputs <- .resolve_text_inputs(sources[[source]], channel_def,
+                                                variable, tasks)
             run_extraction(
-                sources[[source]]$coverage, sources[[source]]$candidates,
+                text_inputs$coverage, text_inputs$candidates,
                 extractor, caller, model_name,
                 query = channel_def$selector$query)
         },
@@ -227,11 +264,14 @@ suppressWarnings(suppressMessages(library(dplyr)))
     vals <- result$values
     ev <- result$evidence
     task_ids <- as.character(tasks$task_id)
+    # run_extraction returns a column-less empty tibble when no task was processed
+    # (e.g. every task no_candidate); guard the per-task value lookup.
+    has_vals <- nrow(vals) > 0L && "task_id" %in% names(vals)
 
     rows <- bind_rows(lapply(task_ids, function(tid) {
         state <- cov$processing_state[cov$task_id == tid]
         state <- if (length(state)) as.character(state[[1]]) else "no_eligible_source"
-        vrow <- vals[vals$task_id == tid, , drop = FALSE]
+        vrow <- if (has_vals) vals[vals$task_id == tid, , drop = FALSE] else vals[0, ]
         status_val <- if (nrow(vrow)) as.character(vrow$accepted_value[[1]]) else NA_character_
         cw <- isTRUE(nrow(vrow) > 0L && "citation_warning" %in% names(vrow) &&
                      isTRUE(vrow$citation_warning[[1]]))
