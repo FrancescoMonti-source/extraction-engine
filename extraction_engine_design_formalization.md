@@ -696,7 +696,7 @@ only fabricated evidence id
   → invalid / needs_review
 ```
 
-This should be generalized only when the relevant parser/extraction path is ready. It does not need to be forced into every concept at once.
+This keep-and-flag rule is now uniform across the text parsers (smoking, anastomoses, and the shared binary-presence definition), implemented once in a shared `resolve_cited_ids()` helper rather than re-derived per concept. Surfacing the flag into the higher combine/envelope paths stays incremental: the single-channel text paths (`documented_status`, `collect_fields`) carry it; the multi-source OR path (`any_positive`) computes it per channel but does not yet hoist it into the combined source status, because doing so would extend the generic combine contract with no current consumer.
 
 ---
 
