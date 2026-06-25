@@ -98,10 +98,35 @@ suppressWarnings(suppressMessages(library(dplyr)))
                    no_candidate_status = no_candidate_status)
 }
 
+# Raw per-channel state for one task, BEFORE the {complete/unavailable/invalid/
+# error} collapse -- so the source-contribution view can show WHY a channel was
+# silent (no_candidate vs no rows for the subject vs no source), not just "silent".
+.channel_raw_state <- function(channel_results, ch, tid) {
+    cov <- channel_results[[ch]]$coverage
+    s <- cov$processing_state[as.character(cov$task_id) == tid]
+    if (length(s)) as.character(s[[1]]) else NA_character_
+}
+
+# How a channel contributed to the OR result, derived from its collapsed status +
+# hit. The engine does NOT estimate certainty; it just exposes the contribution so
+# the researcher can see e.g. a `1` that came only from the code channel while the
+# text channel was silent.
+.contribution_class <- function(status, hit) {
+    dplyr::case_when(
+        hit %in% TRUE        ~ "signal",     # this channel carried a positive
+        status == "complete" ~ "negative",   # ascertained, no signal
+        status == "unavailable" ~ "silent",  # nothing to ascertain (see processing_state)
+        status == "invalid"  ~ "invalid",
+        status == "error"    ~ "error",
+        TRUE                 ~ "unknown")
+}
+
 # any_positive(): OR across the activated channels, one combine per task. Keyed on
 # channel TYPE, not source name. The text default (no_candidate -> unavailable)
 # keeps "no text retrieved" distinct from a documented negative, honouring the
-# open-world absence policy; the incomplete_value comes from that policy.
+# open-world absence policy; the incomplete_value comes from that policy. The
+# per-channel source_status carries the RAW processing_state and a contribution
+# class so source contribution is fully transparent.
 .combine_any_variable <- function(variable, tasks, channel_results) {
     var_name <- variable$name
     spec_obj <- variable   # alias: `variable` is also a mutate() column name below
@@ -131,6 +156,11 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 variable = var_name,
                 source = unname(vapply(channel, .source_name_for_channel,
                                        character(1), variable = spec_obj)),
+                processing_state = unname(vapply(channel, .channel_raw_state,
+                                          character(1),
+                                          channel_results = channel_results,
+                                          tid = tid)),
+                contribution = .contribution_class(status, hit),
                 .before = 1L)
         if (nrow(combined$evidence)) {
             evidence_l[[length(evidence_l) + 1L]] <- combined$evidence %>%
@@ -371,8 +401,9 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         stop("This experimental runner supports any_positive(), documented_status(), ",
              "collect_fields(), or a single max_value() channel.", call. = FALSE)
     }
+    combine_rule <- if (inherits(combine, "ee_combiner")) combine$kind else NA_character_
     c(list(spec = variable, selected_channels = selected,
-           channel_results = channel_results), out)
+           combine_rule = combine_rule, channel_results = channel_results), out)
 }
 
 run_variables <- function(variables, tasks, sources, caller = NULL,

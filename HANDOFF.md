@@ -4077,3 +4077,49 @@ deferred); generalizing `citation_warning`.
 **Files (this entry):** `R/concepts-anastomoses.R` (new), `R/operators.R`, `R/run_variable.R`,
 `tests/testthat.R`, `tests/testthat/test-slice-anastomoses-spec.R` (new), `HANDOFF.md`. Committed
 as slice 3.
+
+---
+
+## Slice 4: dialysis — multi-source OR with TRANSPARENT source contribution — Claude / owner (2026-06-25)
+
+**Owner adjustment (decision).** Do NOT build reconcile/precedence/corroboration yet. Dialysis
+first tests multi-source **OR (`any_positive`)** with **transparent source contribution**. The
+engine must not estimate clinical certainty; it must expose: selected sources/channels; which
+channel(s) had signal; which were silent and WHY (no_candidate vs no rows vs no source vs
+unavailable); evidence refs for positive channels; and the researcher-selected combine rule. The
+interesting part is preserving source contribution -- so a `1` that came only from ICD-10 while
+documents were silent is visible as such. Reconcile is deferred until a real protocol needs it.
+
+**Done.** A dialysis concept (ICD-10 `pmsi_diag` code channel + documents text channel) combined
+with the existing `any_positive()`, plus a transparency enhancement to the OR envelope. Full suite
+**268/268**.
+
+**The enhancement (the real deliverable):** the per-channel `source_status` of the `any_positive`
+path now carries two new columns:
+- `processing_state` -- the RAW channel state before the {complete/unavailable/invalid/error}
+  collapse, so "silent" is explained (`no_candidate` vs `no_eligible_source` vs
+  `no_eligible_document` vs `measured`/`valid`);
+- `contribution` -- `signal` (carried a positive) / `negative` (ascertained, no signal) / `silent`
+  (nothing to ascertain) / `invalid` / `error`.
+Plus `run$combine_rule` exposes the researcher-selected rule at the envelope level. Evidence rows
+already exist only for positive channels. The headline test: two channels both `silent` for
+DIFFERENT reasons (`no_eligible_source` = no diagnosis rows for the subject, vs `no_candidate` =
+nothing retrieved) are kept distinct, not collapsed to a bare "unavailable".
+
+**Note: NOT a new concept shape.** Multi-source OR is the same shape as diabetes; the novelty is the
+contribution transparency, exactly as the owner framed it. The enhancement is additive (diabetes
+slice-1/1b still green) and lives in the shared `.combine_any_variable`, so every `any_positive`
+variable gets it.
+
+**Minor duplication flagged:** `dialysis_text_definition()` mirrors `diabetes_text_definition()`
+(both binary documented-presence text). With this 2nd consumer the defer-infra bar is met -- a
+later generic binary-presence text definition is now justified (not done here to keep the slice
+focused on transparency).
+
+**Still open:** reconcile/precedence/corroboration (only when a real protocol requires it -- now
+explicitly deferred, not just "later"); real retrieval/eligibility wiring; CCAM/`pmsi_actes`
+point-dated code channel (not needed for this slice); whole-history "ever" variant; D1 for
+anastomoses; constructor-syntax freeze; the binary-presence-text extraction above.
+
+**Files (this entry):** `R/concepts-dialysis.R` (new), `R/run_variable.R`, `tests/testthat.R`,
+`tests/testthat/test-slice-dialysis-spec.R` (new), `HANDOFF.md`. Committed as slice 4.
