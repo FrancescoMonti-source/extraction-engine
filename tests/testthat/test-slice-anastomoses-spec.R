@@ -159,3 +159,48 @@ test_that("collect_fields keeps-and-flags an invented citation (no longer fail-c
                            run$evidence$field == "transplantation_type_anastomose_arterielle", ]
     expect_equal(art_ev$evidence_ref, "OP1::2")
 })
+
+# Why: anastomoses is EVENT-scoped -- eligibility is the subject's documents from the
+# SAME surgical event (PATID + EVTID), NOT a date window. run_variable() must retrieve
+# from RAW operative-report documents end-to-end (the seam, previously fixtures-only):
+# a same-patient document from a DIFFERENT event must be excluded even though it
+# mentions anastomoses.
+test_that("event-scoped anastomoses retrieves from raw docs by PATID+EVTID", {
+    ev_tasks <- tibble::tibble(
+        task_id = "RA::t", PATID = "RA", EVTID = "EVT1", anchor_date = as.Date("2024-03-10"))
+    ev_docs_index <- tibble::tibble(
+        ELTID   = c("CRO_IN", "CRO_OTHER"),
+        PATID   = c("RA", "RA"),
+        EVTID   = c("EVT1", "EVT9"),              # second doc: SAME patient, OTHER event
+        RECDATE = as.Date(c("2024-03-10", "2019-01-01")),
+        RECTYPE = "CRO")
+    ev_corpus <- corpustools::create_tcorpus(
+        data.frame(
+            ELTID = c("CRO_IN", "CRO_OTHER"),
+            RECTXT = c("Anastomose arterielle termino-laterale sur artere iliaque externe.",
+                       "Anastomose arterielle d'une autre greffe anterieure."),
+            stringsAsFactors = FALSE),
+        text_columns = "RECTXT", doc_column = "ELTID",
+        split_sentences = TRUE, remember_spaces = FALSE, verbose = FALSE)
+    ev_sources <- list(documents = list(corpus = ev_corpus, docs_index = ev_docs_index))
+
+    ev_fake <- function(prompt, type, system_prompt) {
+        res <- setNames(
+            lapply(names(ANASTOMOSES_FIELDS),
+                   function(f) list(status = "not_documented", evidence_ids = list())),
+            names(ANASTOMOSES_FIELDS))
+        res$transplantation_type_anastomose_arterielle <-   # ground on the lone in-event snippet
+            list(status = "documented", value = "termino-laterale", evidence_ids = list("S001"))
+        res[[ANASTOMOSES_SUMMARY]] <- "resume"
+        res
+    }
+
+    run <- run_variable(anastomoses_var(), ev_tasks, ev_sources,
+                        caller = ev_fake, model_name = "fake")
+
+    art <- run$values[run$values$field == "transplantation_type_anastomose_arterielle", ]
+    expect_equal(art$value, "termino-laterale")          # extracted from the in-event report
+    # Evidence grounds in the in-event document only; the other event never appears.
+    expect_true(all(grepl("^CRO_IN::", run$evidence$evidence_ref)))
+    expect_false(any(grepl("^CRO_OTHER", run$evidence$evidence_ref)))
+})

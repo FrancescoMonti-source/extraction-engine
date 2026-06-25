@@ -51,15 +51,31 @@ suppressWarnings(suppressMessages(library(dplyr)))
          "{corpus, docs_index}.", call. = FALSE)
 }
 
-# Real retrieval for a subject-linked, date-windowed text channel: eligibility is
-# the subject's documents inside the variable's window, then the existing
-# retrieve() machinery runs the channel's Lucene query and assembles candidates +
-# coverage. (Event-scoped / window = NULL text channels are not wired here yet --
-# supply fixtures for those; that is a later, parallel eligibility case.)
+# Real retrieval from raw documents (corpus + docs_index). Eligibility is resolved
+# by the channel's LINKAGE, so the spine stays concept-agnostic:
+#   - event linkage   -> the subject's documents from the SAME event (PATID + EVTID),
+#                        no date window (e.g. an operative report for one surgery);
+#   - subject linkage -> the subject's documents inside the variable's date window.
+# Then the existing retrieve() runs the channel's Lucene query and assembles
+# candidates + coverage. (Whole-history text -- subject linkage, no window -- is not
+# wired here yet; supply fixtures for that, a later parallel eligibility case.)
 .retrieve_text_channel <- function(channel_def, variable, tasks, src) {
+    linkage <- channel_def$linkage
+    if (!is.null(linkage) && "event" %in% linkage) {
+        if (!all(c("PATID", "EVTID") %in% names(tasks))) {
+            stop("Event-scoped text retrieval requires tasks with PATID + EVTID.",
+                 call. = FALSE)
+        }
+        eligibility <- src$docs_index %>%
+            inner_join(distinct(tasks, task_id, PATID, EVTID, anchor_date),
+                       by = c("PATID", "EVTID"), relationship = "many-to-many") %>%
+            transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
+        return(retrieve(src$corpus, tasks, eligibility,
+                        query = channel_def$selector$query))
+    }
     if (is.null(variable$window) || !inherits(variable$window, "ee_window")) {
-        stop("Real retrieval currently requires a date window (subject-scoped text ",
-             "channel); supply pre-retrieved fixtures otherwise.", call. = FALSE)
+        stop("Real retrieval needs a date window (subject linkage) or an event ",
+             "linkage; supply pre-retrieved fixtures otherwise.", call. = FALSE)
     }
     w <- .window_days(variable)
     eligibility <- src$docs_index %>%
