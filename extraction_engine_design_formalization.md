@@ -2,23 +2,29 @@
 
 ## 1. Project goal
 
-This project is an HDW-aware, protocol-agnostic extraction framework for building study variables from a stable hospital data warehouse structure.
+This project is an HDW-aware, protocol-agnostic extraction framework for building study analytical variables from a stable hospital data warehouse structure.
 
 The goal is not to build a generic chatbot, a generic LLM wrapper, or a one-off D0740/D0840 extractor.
 
 The goal is:
 
-> A framework where researchers define study-specific variables by selecting concepts, signal channels, units, time windows, extraction methods, reducers, transformations, output types, and absence policies. The engine executes those definitions against known HDW sources and returns auditable analytical variables.
+> A framework where researchers define study-specific analytical variables by selecting concepts, signal channels, units, time windows, extraction methods, reducers, transformations, output types, and absence policies. The engine executes those definitions against known HDW sources and returns auditable analytical variables.
 
 The engine should not remove clinical or methodological judgment. It should prevent hidden judgment.
 
 Researchers remain responsible for the scientific validity of the protocol and operational definitions. The engine is responsible for explicit execution, traceability, reproducibility, and mechanical consistency.
 
+A central boundary:
+
+> The engine owns execution and traceability. The researcher owns interpretation.
+
+The engine should avoid introducing new semantic layers unless they are explicitly requested by the protocol. Whenever possible, it should expose source contributions rather than infer confidence levels.
+
 ---
 
 ## 2. Core mental model
 
-The framework separates four major responsibilities:
+The framework separates major responsibilities:
 
 ```text
 source_spec
@@ -27,11 +33,17 @@ source_spec
 concept_spec
   declares available signal channels for a clinical/research concept
 
+channel
+  one source-specific signal route; resurfaces information without clinical interpretation
+
 variable_template
-  concept-specific parametric quickstart for common variable definitions
+  concept-specific parametric quickstart
 
 variable_spec
-  concrete protocol-specific executable variable definition
+  concrete protocol-specific executable analytical variable definition
+
+operators/helpers
+  generic pieces used inside variable_specs/templates
 
 runtime
   supplies actual data, model/provider settings, execution parameters, and environment
@@ -41,10 +53,20 @@ The key distinction is:
 
 ```text
 concept_spec defines possible signals.
-variable_spec defines the requested measurement.
+variable_spec defines the analytical variable requested by the protocol.
 ```
 
-A concept is not a final diagnosis, phenotype, or analytical variable. It is a reusable map of where concept-related information can be resurfaced in the HDW.
+Or more explicitly:
+
+```text
+concept_spec answers:
+  "Where can signals related to this concept be found?"
+
+variable_spec answers:
+  "How should those signals be transformed into the analytical variable required by this protocol?"
+```
+
+A concept is not a final diagnosis, phenotype, or analytical variable. It is a reusable collection of related signal channels inside the HDW.
 
 A variable is where protocol-specific choices are made.
 
@@ -113,7 +135,7 @@ A `concept_spec` is a stable, reusable concept-level signal map.
 
 It answers:
 
-> For this clinical/research concept, what signal channels exist in the HDW, and how can each channel resurface candidate evidence?
+> For this concept, what signal channels exist in the HDW, and how can each channel resurface candidate evidence?
 
 Example:
 
@@ -163,6 +185,8 @@ It says:
 
 The concept layer resurfaces information. It does not interpret scientific meaning.
 
+Concepts can be broad if they remain signal catalogs. For example, `smoking` may later contain text mentions, coded tobacco-related diagnoses, pack-year mentions, or cessation mentions. A concept should not be narrowed into a single variable output shape unless the observation itself is genuinely the reusable concept.
+
 ---
 
 ## 5. Channel
@@ -180,7 +204,7 @@ produced signal shape
 required roles
 linkage affordances
 native reference fields
-optional extraction strategies
+optional default extraction strategy/schema
 ```
 
 A channel does not decide final clinical truth.
@@ -219,6 +243,7 @@ Does this channel provide dates if a time window is requested?
 Does this channel provide values if a numeric reducer is requested?
 Does this channel provide text if an LLM extractor is requested?
 Can this evidence be linked to the selected study unit?
+Does it expose native references for audit?
 ```
 
 The engine should not validate scientific appropriateness:
@@ -231,6 +256,30 @@ Does no text mention mean no disease?
 
 Those are protocol/researcher choices.
 
+### Channel definition versus channel activation
+
+A channel definition lives in `concept_spec`.
+
+A channel activation lives in `variable_spec`.
+
+Example:
+
+```r
+# Concept-level route
+glucose_measurements = lab_channel(
+  source = "biology",
+  selector = analyte("GLU.GLU"),
+  produces = "numeric_measurement"
+)
+
+# Variable-level use of that route
+channels = list(
+  glucose_measurements = use_channel(reducer = max_value())
+)
+```
+
+The reducer belongs to the variable's activation of the channel, not to the reusable channel definition.
+
 ---
 
 ## 6. variable_spec
@@ -239,7 +288,7 @@ A `variable_spec` is the concrete, executable study-specific definition of one a
 
 It answers:
 
-> In this study, for this unit, using these channels, in this time window, with these extraction/reduction/transformation/combination rules, produce this output variable.
+> In this study, for this unit, using these channels, in this time window or event scope, with these extraction/reduction/transformation/combination rules, produce this output variable.
 
 It should explicitly declare:
 
@@ -248,7 +297,7 @@ name
 concept
 unit
 anchor
-time window
+time window or event scope
 selected channels
 per-channel activation options
 retrieval/extraction method
@@ -279,7 +328,7 @@ diabete_pre_greffe <- variable_spec(
     )
   ),
 
-  output = binary(),
+  output = binary_output(),
   combine = any_positive(),
   absence_policy = open_world()
 )
@@ -302,12 +351,12 @@ perioperative_max_glucose <- variable_spec(
     )
   ),
 
-  output = numeric(),
+  output = number_output(),
   absence_policy = missing_if_no_measurement()
 )
 ```
 
-Same concept. Different variable. Different selected channels. Different output.
+Same concept. Different analytical variable. Different selected channels. Different output.
 
 ---
 
@@ -339,6 +388,8 @@ active_smoking_binary_template
 
 dialysis_status_before_anchor_template
 incident_dialysis_after_anchor_template
+
+recipient_anastomoses_template
 ```
 
 Invalid or misplaced examples:
@@ -349,6 +400,8 @@ closest_before_anchor()
 llm_after_lucene()
 any_positive()
 threshold_binary()
+documented_status()
+collect_fields()
 ```
 
 These are operators/helpers, not variable templates.
@@ -368,7 +421,7 @@ diabetes_baseline_status_template <- variable_template(
     window = before_anchor(),
     channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
     text_method = llm_after_lucene(top_n = 20),
-    output = binary(),
+    output = binary_output(),
     combine = any_positive(),
     absence_policy = open_world()
   ),
@@ -427,6 +480,10 @@ threshold_binary()
 lucene_only()
 llm_after_lucene()
 regex_extract()
+categorical_output()
+documented_status()
+fields_output()
+collect_fields()
 ```
 
 They are not variable templates.
@@ -440,6 +497,16 @@ Generic reusable computational pieces are operators/helpers.
 Concept-specific reusable quickstarts are variable_templates.
 Concrete study-specific definitions are variable_specs.
 ```
+
+Operators should primarily implement researcher-defined analytical rules. They should avoid introducing additional clinical interpretation beyond the rule selected in the variable definition.
+
+For example, if a researcher defines:
+
+```text
+dialysis = ICD10 OR CCAM OR text
+```
+
+then the engine should execute that rule and expose which channels had signals. It should not automatically invent labels such as "uncorroborated", "possible", or "weak evidence" unless such labels are explicitly part of the variable definition.
 
 ---
 
@@ -488,9 +555,11 @@ The `variable_spec` decides which unit to use and how to anchor/window the evide
 
 The engine checks whether selected channels can be mechanically linked to the requested unit/window.
 
+Some variables are event-scoped rather than date-windowed. For example, operative-report anastomoses may be linked by subject + surgical event and declare `window = NULL`. The runner should not force a misleading placeholder date window onto event-scoped variables.
+
 ---
 
-## 10. Absence semantics
+## 10. Absence, silence, and source contribution
 
 Absence semantics are hard and must not be collapsed silently.
 
@@ -526,7 +595,41 @@ The engine reports no_candidate.
 The variable_spec decides whether no_candidate means FALSE, NA, unknown, or needs_review.
 ```
 
-Absence is interpreted at `variable_spec` level, not at `concept_spec` or channel level.
+Silence from one channel must never be interpreted as contradiction with another channel unless the variable definition explicitly requests such logic.
+
+For example:
+
+```text
+ICD10/CCAM dialysis signal present
+documents no_candidate
+```
+
+should normally be represented as:
+
+```text
+final_value = value produced by the researcher-selected rule
+positive_sources = ICD10/CCAM channel
+silent_sources = documents
+evidence = coded row(s)
+source_status = documents no_candidate
+```
+
+The engine should not automatically infer "uncorroborated", "weak yes", or "possible dialysis" unless the `variable_spec` explicitly defines such labels.
+
+The primary responsibility of the engine is not to estimate certainty.
+
+Its responsibility is to expose:
+
+```text
+which channels were activated
+which channels produced evidence
+which channels produced no candidate
+which channels were unavailable
+which evidence supports positive outputs
+which rule produced the final value
+```
+
+Clinical interpretation of that evidence belongs to the researcher.
 
 ---
 
@@ -542,6 +645,7 @@ document source
 text roles
 native refs
 candidate retrieval shape
+optional default extractor/schema
 ```
 
 The `variable_spec` decides whether to use:
@@ -554,6 +658,8 @@ whole-corpus query such as *
 top-N retrieval
 specific prompt/schema
 ```
+
+The concept or channel may provide a default extractor/schema when the default answer shape is concept-specific. The variable may override the extraction method or schema when a protocol needs a different text signal.
 
 The LLM should return evidence-grounded outputs where relevant, for example:
 
@@ -575,9 +681,22 @@ model/provider/settings
 LLM response
 parsed output
 evidence refs
+citation warnings
 ```
 
 Candidate retrieval recall is a known ceiling. This is acceptable and must remain visible. If needed, researchers can use broader queries, including `*`, to retrieve larger corpora.
+
+A useful parser behavior for evidence IDs:
+
+```text
+real evidence id + fabricated evidence id
+  → keep value, keep real evidence, surface citation_warning
+
+only fabricated evidence id
+  → invalid / needs_review
+```
+
+This should be generalized only when the relevant parser/extraction path is ready. It does not need to be forced into every concept at once.
 
 ---
 
@@ -596,6 +715,8 @@ evidence sentence or source row
 native refs
 LLM reasoning when applicable
 status/failure information
+field-level validity when relevant
+citation_warning when relevant
 ```
 
 Later, the framework can add:
@@ -668,34 +789,42 @@ These are the core principles future agents should not violate.
 
 2. The engine owns execution and traceability. The researcher owns interpretation.
 
-3. source_spec knows the warehouse.
+3. The engine should avoid introducing new semantic layers unless they are explicitly requested by the protocol.
 
-4. concept_spec declares available signal channels for a clinical/research concept.
+4. source_spec knows the warehouse.
 
-5. A channel resurfaces source-specific signals. It does not interpret their clinical meaning.
+5. concept_spec declares available signal channels for a clinical/research concept.
 
-6. variable_template is a concept-specific parametric quickstart, not a generic computation pattern.
+6. A concept is a reusable signal-channel catalog, not a clinical truth object.
 
-7. variable_spec is the concrete executable study-specific variable definition.
+7. A channel resurfaces source-specific signals. It does not interpret their clinical meaning.
 
-8. Generic reusable pieces such as reducers, windows, extraction methods, and combiners are operators/helpers, not variable templates.
+8. A channel definition lives in concept_spec; a channel activation lives in variable_spec.
 
-9. No concept channel is used by default unless the variable_spec or template explicitly activates it.
+9. variable_template is a concept-specific parametric quickstart, not a generic computation pattern.
 
-10. Absence is never silently inferred. Execution statuses are preserved until variable_spec explicitly collapses them.
+10. variable_spec is the concrete executable study-specific analytical variable definition.
 
-11. The final output type belongs to variable_spec.
+11. Generic reusable pieces such as reducers, windows, extraction methods, and combiners are operators/helpers, not variable templates.
 
-12. Units and linkage are first-class because many errors come from measuring the right signal at the wrong grain.
+12. No concept channel is used by default unless the variable_spec or template explicitly activates it.
 
-13. LLM extraction must be evidence-grounded and auditable.
+13. Absence is never silently inferred. Execution statuses are preserved until variable_spec explicitly collapses them.
 
-14. The framework should optimize for explicitness, reuse, and reviewability, not for hiding protocol choices.
+14. Silence from one channel is not contradiction with another channel unless the variable_spec explicitly defines such logic.
+
+15. The final output type belongs to variable_spec.
+
+16. Units and linkage are first-class because many errors come from measuring the right signal at the wrong grain.
+
+17. LLM extraction must be evidence-grounded and auditable.
+
+18. The framework should optimize for explicitness, reuse, source contribution reporting, and reviewability, not for hiding protocol choices.
 ```
 
 ---
 
-## 16. Minimal example
+## 16. Minimal examples
 
 ```r
 # Stable concept library
@@ -726,13 +855,13 @@ diabetes_baseline_status_template <- variable_template(
   defaults = list(
     window = before_anchor(),
     channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
-    output = binary(),
+    output = binary_output(),
     combine = any_positive(),
     absence_policy = open_world()
   )
 )
 
-# Concrete study-specific variable
+# Concrete study-specific variable from template
 diabete_pre_greffe <- variable_spec(
   template = diabetes_baseline_status_template,
   name = "diabete_pre_greffe",
@@ -748,7 +877,7 @@ diabete_pre_greffe <- variable_spec(
   )
 )
 
-# Different variable from same concept
+# Different direct variable from same concept
 perioperative_max_glucose <- variable_spec(
   name = "perioperative_max_glucose",
   concept = diabetes,
@@ -760,7 +889,7 @@ perioperative_max_glucose <- variable_spec(
       reducer = max_value()
     )
   ),
-  output = numeric(),
+  output = number_output(),
   absence_policy = missing_if_no_measurement()
 )
 ```
@@ -774,3 +903,25 @@ different selected channels
 different units/windows
 different outputs
 ```
+
+A multi-source OR example should expose source contribution rather than infer confidence:
+
+```r
+dialysis_status <- variable_spec(
+  name = "dialysis_status_before_anchor",
+  concept = dialysis,
+  unit = patient_unit(),
+  anchor = inclusion_date(),
+  window = before_anchor(),
+  channels = list(
+    pmsi_dialysis_codes = use_channel(),
+    ccam_dialysis_acts = use_channel(),
+    text_dialysis_mentions = use_channel(method = llm_after_lucene())
+  ),
+  output = binary_output(),
+  combine = any_positive(),
+  absence_policy = open_world()
+)
+```
+
+The output should make clear whether the final value came from PMSI, CCAM, text, or several channels, and which selected channels were silent/unavailable.
