@@ -83,11 +83,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
     # The window is only meaningful for date/interval-scoped structured channels;
     # text eligibility (date-window OR event membership) is resolved upstream, so a
     # text-only variable (e.g. event-scoped anastomoses) need not declare a window.
-    # TODO(slice-N): the lab branch reuses measure_hyperkalaemia() only as a
-    # temporary adapter -- its max-usable-value-in-window + threshold core is
-    # generic over the analyte and is not potassium-specific. Extract that core
-    # under a neutral name (e.g. measure_analyte_value()) and have hyperkalaemia
-    # become one caller, so the lab channel stops borrowing a clinically-named fn.
     switch(channel_def$type,
         code = {
             codes <- .selector_codes(channel_def$selector, "prefixes")
@@ -100,11 +95,12 @@ suppressWarnings(suppressMessages(library(dplyr)))
             }
         },
         lab = {
-            w <- .window_days(variable)
-            measure_hyperkalaemia(          # temporary adapter: selects the max usable
-                sources[[source]], tasks,   # value in window; the threshold is unused
-                analytes = .selector_codes(channel_def$selector, "codes"),  # numeric output
-                from_days = w[["from_days"]], to_days = w[["to_days"]])
+            w <- .window_days(variable)     # neutral analyte executor (no clinical name)
+            measure_analyte_value(          # max usable value in window; no threshold
+                sources[[source]], tasks,   # for a numeric max_value output
+                analytes = .selector_codes(channel_def$selector, "codes"),
+                from_days = w[["from_days"]], to_days = w[["to_days"]],
+                field = variable$name, source = source)
         },
         text = {
             if (is.null(caller)) {

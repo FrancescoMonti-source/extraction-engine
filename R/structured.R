@@ -387,17 +387,22 @@ measure_code_presence_ever <- function(diag, tasks, codes = DIABETES_CODES,
          observations = observations, derivation = derivation)
 }
 
-# --- hyperkalaemia: analyte value threshold over biol (point time) -----------
-# In this warehouse the analyte code fixes the interpretation; unit is not a
-# measurement dimension. Concept selection belongs here, not in the loader.
-POTASSIUM_CODES <- "K.K"
-
+# --- generic analyte value: max usable value in a point-window over biol --------
+# Neutral lab/analyte executor: the generic core behind the clinically-named callers
+# (hyperkalaemia, diabetes glucose) and the run_variable() lab branch. Per task it
+# selects the MAXIMUM usable value of the declared analyte concept inside a point-
+# window around the anchor, with full coverage / values / evidence / observation /
+# derivation artifacts. `field` and `source` name the output rows. `threshold` is
+# OPTIONAL: NA (a pure numeric max_value variable) applies NO present/absent
+# interpretation and lets measurement_value carry the result; a supplied threshold
+# (e.g. hyperkalaemia 5.0) marks value > threshold as "present".
+#
 # biol: normalized result rows
-#   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM,
-#   analyte, value, value_raw.
+#   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
 # tasks: task_id, PATID, anchor_date.
-measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
-                                  threshold = 5.0, from_days = -7L, to_days = 7L) {
+measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
+                                  from_days = -7L, to_days = 7L,
+                                  field = "analyte_value", source = "biology") {
     .validate_structured_inputs(
         tasks, biol,
         c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID", "DATEXAM",
@@ -429,20 +434,21 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
         filter(.within_point(
             DATEXAM, anchor_date + from_days, anchor_date + to_days)) %>%
         mutate(
-            field = "hyperkalaemia",
-            source = "biology",
+            field = field,
+            source = source,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes,
             usable = is_target & !is.na(value),
             invalid = is_target & !usable,
-            above_threshold = usable & value > threshold,
+            above_threshold = usable & !is.na(threshold) & value > threshold,
             scope_reason = "point time inside the task window",
             observation_reason = case_when(
-                !is_target ~ "analyte outside the declared potassium concept",
-                !usable ~ "potassium value is unparseable and excluded",
-                above_threshold ~ "usable potassium value above the strict threshold",
-                TRUE ~ "usable potassium value at or below the strict threshold"),
+                !is_target ~ "analyte outside the declared concept",
+                !usable ~ "value is unparseable and excluded",
+                is.na(threshold) ~ "usable value (no threshold applied)",
+                above_threshold ~ "usable value above the strict threshold",
+                TRUE ~ "usable value at or below the strict threshold"),
             # Non-target rows establish source/scope coverage; their unrelated
             # result values are unnecessary in persisted structured artifacts.
             value_raw = if_else(is_target, value_raw, NA_character_),
@@ -496,11 +502,12 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
         filter(processing_state %in% c("measured", "invalid")) %>%
         mutate(normalized_value = case_when(
             processing_state == "invalid" ~ NA_character_,
+            is.na(threshold) ~ NA_character_,
             measurement_value > threshold ~ "present",
             TRUE ~ "absent")) %>%
         transmute(
             task_id,
-            field = "hyperkalaemia",
+            field = field,
             normalized_value,
             accepted_value = if_else(
                 processing_state == "measured", normalized_value, NA_character_),
@@ -510,7 +517,7 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
                 processing_state == "measured", "valid", "invalid"),
             validity_reason = if_else(
                 processing_state == "measured", "",
-                "potassium rows are in scope but none has a parseable value"),
+                "analyte rows are in scope but none has a parseable value"),
             n_scope_rows,
             n_candidate_rows,
             n_usable,
@@ -528,16 +535,18 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
                 DATEXAM),
             PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
 
+    threshold_clause <- if (is.na(threshold)) "" else
+        sprintf("value > %s; ", format(threshold, trim = TRUE))
     rule <- sprintf(
         paste0(
-            "same_subject; point_window[%d,%+d]; analyte=%s; value > %s; ",
+            "same_subject; point_window[%d,%+d]; analyte=%s; %s",
             "maximum usable value selected (ties: DATEXAM, source_row_id); unit ignored"),
         as.integer(from_days), as.integer(to_days),
-        paste(analytes, collapse = ","), format(threshold, trim = TRUE))
+        paste(analytes, collapse = ","), threshold_clause)
     derivation <- coverage %>%
         transmute(
             task_id,
-            field = "hyperkalaemia",
+            field = field,
             rule = rule,
             n_source_rows,
             n_scope_rows,
@@ -555,6 +564,21 @@ measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
         evidence = evidence,
         observations = observations,
         derivation = derivation)
+}
+
+# --- hyperkalaemia: thin clinically-named caller of measure_analyte_value() ----
+# In this warehouse the analyte code fixes the interpretation; unit is not a
+# measurement dimension. Concept selection belongs here, not in the loader. Kept for
+# backward compatibility (existing callers/tests); the generic run_variable() lab
+# branch calls the neutral measure_analyte_value() core directly.
+POTASSIUM_CODES <- "K.K"
+
+measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
+                                  threshold = 5.0, from_days = -7L, to_days = 7L) {
+    measure_analyte_value(
+        biol, tasks, analytes = analytes, threshold = threshold,
+        from_days = from_days, to_days = to_days,
+        field = "hyperkalaemia", source = "biology")
 }
 
 # One row per task/field with selected evidence collapsed for physician review.

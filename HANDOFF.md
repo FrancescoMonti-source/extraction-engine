@@ -4339,3 +4339,42 @@ the unchanged end-to-end slice tests that drive all four templates through the d
 **Files (this entry):** `R/spec.R`, `R/concepts-diabetes.R`, `R/concepts-smoking.R`,
 `R/concepts-dialysis.R`, `R/concepts-anastomoses.R`, `tests/testthat/test-slice-diabetes-spec.R`,
 `HANDOFF.md`.
+
+---
+
+## Cleanup #5: neutral analyte executor (remove clinical name from the lab spine) — Claude (2026-06-25)
+
+**Done.** The symmetric counterpart to #4: #4 cleaned the constructor layer; this cleans the
+execution spine. The generic `run_variable()` lab branch borrowed `measure_hyperkalaemia()` -- a
+clinically-named executor -- as a temporary adapter. Extracted its generic core (max usable analyte
+value in a point-window) into a neutral `measure_analyte_value()`; `measure_hyperkalaemia()` is now a
+thin backward-compatible wrapper; the lab spine calls the neutral core. Full suite **322/322**, 0
+warnings. Behaviour preserved (constructor syntax, variable semantics, source contribution, absence
+policy all unchanged -- executor-layer only).
+
+- `measure_analyte_value(biol, tasks, analytes, threshold = NA_real_, from_days, to_days,
+  field = "analyte_value", source = "biology")` (R/structured.R): the generic core. `field`/`source`
+  are parameters (were hard-coded "hyperkalaemia"/"biology"); reason/`rule` strings genericised (no
+  "potassium"); `threshold` is now OPTIONAL -- **NA applies NO present/absent interpretation** (a pure
+  numeric max_value variable; `measurement_value` carries the result), a supplied threshold marks
+  `value > threshold` as "present". (`above_threshold` and the `rule` clause guard `is.na(threshold)`.)
+- `measure_hyperkalaemia(biol, tasks, analytes = POTASSIUM_CODES, threshold = 5.0, ...)`: thin caller
+  of the core with `field = "hyperkalaemia"`, `source = "biology"`. Kept for existing callers/tests
+  (incl. `measure_diabetes_glucose()` in multisource.R, left untouched -- not part of the spine).
+- `run_variable()` lab branch: now `measure_analyte_value(..., field = variable$name,
+  source = source)` with no threshold; the stale TODO(slice-N) comment removed.
+
+Proven by: existing glucose test (`perioperative_max_glucose` -> same value 9.4/NA/7.2, evidence
+`biol:002`, source "biology", status complete/hit) unchanged and green; existing hyperkalaemia tests
+green; new `measure_analyte_value` test (non-potassium analyte, NA threshold -> max-value with no
+present/absent, parameterised field/source); new delegation test (`measure_hyperkalaemia` ==
+`measure_analyte_value` with clinical params); new spine-decoupling test asserting
+`.run_selected_channel` references `measure_analyte_value` and NOT `measure_hyperkalaemia`.
+
+**Still temporary adapters in the spine (deferred, same pattern, no action requested):** the CODE
+branch borrows `measure_diabetes()` / `measure_code_presence_ever()` (already generic over `codes=`,
+but concept-named). A future cleanup could rename those to neutral `measure_code_presence[_ever]()`
+the same way. Not done here -- this slice was scoped to the lab branch.
+
+**Files (this entry):** `R/structured.R`, `R/run_variable.R`, `tests/testthat/test-structured.R`,
+`tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`.

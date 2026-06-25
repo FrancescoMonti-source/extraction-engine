@@ -179,6 +179,57 @@ test_that("structured provenance resolves once and review uses concise evidence"
         "source_row_id must be non-missing and unique")
 })
 
+# Why: the NEUTRAL measure_analyte_value() core (extracted from measure_hyperkalaemia)
+# must work for any analyte. With no threshold it is a pure max-value extraction (no
+# present/absent interpretation); field and source are parameters, not baked in.
+test_that("measure_analyte_value selects the max usable value with no clinical threshold", {
+    biol <- biol_rows(
+        PATID = c("P1", "P1", "P2", "P3"),
+        analyte = c("GLU.GLU", "GLU.GLU", "GLU.GLU", "NA.NA"),
+        value_raw = c("9.4", "7.1", "hemolyse", "140"),
+        DATEXAM = c("2025-03-10", "2025-03-11", "2025-03-10", "2025-03-10"))
+    tasks <- structured_tasks(c("P1", "P2", "P3"))
+    run <- measure_analyte_value(biol, tasks, analytes = "GLU.GLU",
+                                 field = "max_glucose", source = "biology")
+
+    states <- setNames(run$coverage$processing_state, run$coverage$task_id)
+    expect_equal(states[["P1::t"]], "measured")
+    expect_equal(states[["P2::t"]], "invalid")        # only an unparseable target value
+    expect_equal(states[["P3::t"]], "no_candidate")   # only a non-target analyte
+
+    mv <- setNames(run$coverage$measurement_value, run$coverage$task_id)
+    expect_equal(mv[["P1::t"]], 9.4)                  # max of 9.4 / 7.1
+
+    # No threshold -> no present/absent interpretation; measurement_value carries it.
+    v1 <- run$values[run$values$task_id == "P1::t", ]
+    expect_true(is.na(v1$normalized_value))
+    expect_equal(v1$measurement_value, 9.4)
+    expect_equal(v1$field, "max_glucose")             # field is parameterised
+    expect_equal(run$evidence$source[run$evidence$task_id == "P1::t"], "biology")
+})
+
+# Why: measure_hyperkalaemia() is now a THIN caller of the neutral core. It must
+# delegate exactly -- the clinical result (potassium concept, strict 5.0 threshold,
+# present/absent) comes from measure_analyte_value(), not a reimplementation.
+test_that("measure_hyperkalaemia delegates to measure_analyte_value with its clinical params", {
+    biol <- biol_rows(
+        PATID = c("P1", "P2"), analyte = "K.K",
+        value_raw = c("5.6", "4.8"),
+        DATEXAM = c("2025-03-10", "2025-03-10"))
+    tasks <- structured_tasks(c("P1", "P2"))
+
+    wrapped <- measure_hyperkalaemia(biol, tasks)
+    direct  <- measure_analyte_value(biol, tasks, analytes = POTASSIUM_CODES,
+                                     threshold = 5.0, field = "hyperkalaemia",
+                                     source = "biology")
+    expect_equal(wrapped, direct)                     # wrapper == core with clinical params
+
+    vals <- setNames(wrapped$values$accepted_value, wrapped$values$task_id)
+    expect_equal(vals[["P1::t"]], "present")          # 5.6 > 5.0
+    expect_equal(vals[["P2::t"]], "absent")           # 4.8 <= 5.0
+    expect_equal(unique(wrapped$values$field), "hyperkalaemia")
+})
+
 # Why: a programming or input-shape failure can occur before per-row measurement.
 # The production wrapper must preserve one failure record per requested output row
 # instead of aborting without a derivation census.
