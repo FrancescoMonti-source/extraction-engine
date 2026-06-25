@@ -113,31 +113,21 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
 }
 
 # =============================================================================
-# Multi-source diabetes (binary) — SPIKE built on combine_any_source_hit above.
-# Diabetes is "present" (1) if ANY selected source has positive evidence:
-#   documents (LLM text path) OR pmsi (ICD-10 E10-E14) OR biology (high glucose).
-# Each source is run by its OWN existing path, then REDUCED to the per-source
-# {status, hit, evidence} contract the combiner consumes. This proves the
-# production seam the ba9f171 proof skipped: heterogeneous real source paths
-# feeding one OR-combine, scoped relative to a fixed anchor.
+# Per-source reduction to the {status, hit, evidence} contract that
+# combine_any_source_hit() consumes (via run_variable()'s any_positive path), plus
+# the diabetes concept's text answer schema.
+#
+# The pre-spine diabetes multi-source orchestration helpers
+# (measure_diabetes_glucose / reduce_structured_source / reduce_text_source /
+# combine_diabetes_any) were removed once run_variable() subsumed them; the OR-combine
+# is now driven by variable_spec activations + combine = any_positive() and exercised
+# at the spine level (see test-slice-diabetes-spec.R, test-slice-dialysis-spec.R).
 # =============================================================================
 
-# Diabetes-defining high glucose over biology: the SAME analyte-threshold recipe
-# as hyperkalaemia, different params. This is the 2nd consumer of that recipe, so
-# it is the repetition that would justify extracting a generic
-# measure_analyte_threshold() (the review's [Med] point). `threshold` here is an
-# arbitrary VEHICLE, not a validated clinical glucose cutoff.
-measure_diabetes_glucose <- function(biol, tasks, analytes = "GLU.GLU",
-                                     threshold = 7.0, from_days = -365L, to_days = 7L) {
-    measure_hyperkalaemia(biol, tasks, analytes = analytes, threshold = threshold,
-                          from_days = from_days, to_days = to_days)
-}
-
-# Minimal diabetes TEXT definition for the documents source (engine plumbing only;
-# the clinical prompt/type is out of scope for a seam spike). One evidenced field:
-# documented => diabetes mentioned (needs evidence) -> hit; not_documented => none.
-# Thin wrapper over the shared binary_presence_text_definition() (R/extract.R);
-# behaviour is unchanged.
+# Minimal diabetes TEXT definition for the documents source: the diabetes concept's
+# answer schema (one evidenced field -- documented => diabetes mentioned (needs
+# evidence) -> hit; not_documented => none). Thin wrapper over the shared
+# binary_presence_text_definition() (R/extract.R).
 diabetes_text_definition <- function() {
     binary_presence_text_definition(
         name = "diabetes_text",
@@ -205,45 +195,4 @@ diabetes_text_definition <- function() {
                            evidence = tibble::tibble(source_row_id = unique(ids)))
     }
     out
-}
-reduce_structured_source <- function(res, task_ids) {
-    .reduce_source(
-        res, task_ids, "source_row_id", no_candidate_status = "complete")
-}
-reduce_text_source <- function(
-    res,
-    task_ids,
-    no_candidate_status = c("unavailable", "complete")) {
-    no_candidate_status <- match.arg(no_candidate_status)
-    .reduce_source(
-        res, task_ids, "hit_ref",
-        no_candidate_status = no_candidate_status)
-}
-
-# Orchestrate the OR-combine across already-reduced sources, one combine per task.
-# Returns the same three-view shape the engine uses elsewhere: per-task value +
-# ascertainment, per-source status, and combined positive evidence with provenance.
-combine_diabetes_any <- function(tasks, sources, incomplete_value = NA_integer_) {
-    task_ids <- as.character(tasks$task_id)
-    values <- vector("list", length(task_ids))
-    status_l <- vector("list", length(task_ids))
-    evidence_l <- list()
-    for (i in seq_along(task_ids)) {
-        tid <- task_ids[[i]]
-        per_source <- lapply(sources, function(src) src[[tid]])
-        combined <- combine_any_source_hit(per_source, incomplete_value = incomplete_value)
-        values[[i]] <- tibble::tibble(task_id = tid, diabetes_any = combined$value,
-                                      ascertainment = combined$ascertainment)
-        status_l[[i]] <- mutate(combined$source_status, task_id = tid, .before = 1L)
-        if (nrow(combined$evidence)) {
-            evidence_l[[length(evidence_l) + 1L]] <-
-                mutate(combined$evidence, task_id = tid, .before = 1L)
-        }
-    }
-    list(
-        values = bind_rows(values),
-        source_status = bind_rows(status_l),
-        evidence = if (length(evidence_l)) bind_rows(evidence_l) else
-            tibble::tibble(task_id = character(), source = character(),
-                           source_row_id = character()))
 }

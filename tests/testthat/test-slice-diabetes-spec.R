@@ -316,3 +316,85 @@ test_that("any_positive combine is wired through run_variable across the gap cas
     expect_true(all(q4_status$status == "complete"))
     expect_true(all(!q4_status$hit))
 })
+
+# ---------------------------------------------------------------------------
+# Multi-source resilience + window scoping through the spine. Re-pins the two
+# invariants the retired pre-spine diabetes spike (test-multisource-diabetes.R)
+# uniquely covered: a positive in one channel survives a model error in another,
+# and out-of-window evidence does not establish a positive. The heterogeneous
+# code+text any_positive matrix, the no_candidate-is-not-absence policy, and
+# cross-channel provenance are already covered by the gap-cases test above.
+# ---------------------------------------------------------------------------
+
+ms_tasks <- tibble::tibble(
+    task_id = c("R1::t", "R2::t"), PATID = c("R1", "R2"),
+    anchor_date = as.Date("2024-06-01"))
+
+# R1: in-window diabetes code (a hit). R2: diabetes code dated WELL before the
+# 5-year window (must NOT count as a positive).
+ms_diag <- tibble::tibble(
+    source_row_id = c("diag:R1", "diag:R2"),
+    PATID = c("R1", "R2"), EVTID = c("E1", "E2"), ELTID = c("D1", "D2"),
+    diag = c("E11.9", "E11.9"),
+    DATENT = c(as.Date("2024-05-20"), as.Date("2015-01-01")),
+    DATSORT = c(as.Date("2024-05-21"), as.Date("2015-01-02")))
+
+# R1 has a retrieved text candidate (the model will ERROR on it); R2 is no_candidate.
+ms_docs <- list(
+    coverage = tibble::tibble(
+        task_id = ms_tasks$task_id, coverage_state = c("candidate", "no_candidate")),
+    candidates = tibble::tibble(
+        task_id = "R1::t", snippet_id = "S001", hit_ref = "DOC_R1::3",
+        ELTID = "DOC_R1", sentence = 3L, hit_text = "diabete",
+        snippet_text = "Patient diabetique.", RECDATE = as.Date("2024-05-15"),
+        RECTYPE = "note"))
+
+ms_sources <- list(documents = ms_docs, pmsi_diag = ms_diag)
+
+# The text model fails (non-transient) on R1's task.
+ms_fake <- function(prompt, type, system_prompt) {
+    if (grepl("R1::t", prompt, fixed = TRUE)) stop("synthetic text model failure")
+    list(diabetes_status = "not_documented", evidence_ids = list())   # R2
+}
+
+ms_baseline <- function() variable_spec(
+    template = diabetes_baseline_status_template(),
+    name = "diabete_pre_greffe", unit = "transplant", anchor = "anchor_date")
+
+# Why: a positive in the code channel must survive a model error in the text channel
+# (heterogeneous failure resilience); the result must flag partial coverage and keep
+# the failed channel auditable -- never lose the code positive or hide the failure.
+test_that("any_positive survives a text-channel model error and keeps code provenance", {
+    run <- run_variable(ms_baseline(), ms_tasks, ms_sources,
+                        caller = ms_fake, model_name = "fake")
+    value <- setNames(run$values$value, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
+
+    expect_equal(value[["R1::t"]], 1L)         # code positive survives the text error
+    expect_equal(cov[["R1::t"]], "partial")    # ...and coverage flags the unevaluable text
+
+    ss <- run$source_status
+    text_status <- ss$status[ss$task_id == "R1::t" &
+                             ss$channel == "text_diabetes_mentions"]
+    expect_equal(text_status, "error")          # the failure is auditable, not hidden
+
+    # provenance: the code channel's evidence survives the text failure
+    ev1 <- run$evidence[run$evidence$task_id == "R1::t", ]
+    expect_equal(ev1$channel, "pmsi_diag_e10_e14")
+    expect_equal(ev1$evidence_ref, "diag:R1")
+})
+
+# Why: evidence dated outside the variable's window must not establish a positive --
+# the window is enforced end-to-end through the spine, not only in the executor unit.
+test_that("out-of-window code does not count as a positive through the spine", {
+    run <- run_variable(ms_baseline(), ms_tasks, ms_sources,
+                        caller = ms_fake, model_name = "fake")
+    value <- setNames(run$values$value, run$values$task_id)
+
+    # R2: E11 dated 2015 is out of the 5-year window + text no_candidate -> not a hit
+    expect_true(is.na(value[["R2::t"]]))
+    code_contrib <- run$source_status$contribution[
+        run$source_status$task_id == "R2::t" &
+        run$source_status$channel == "pmsi_diag_e10_e14"]
+    expect_equal(code_contrib, "negative")      # out-of-window -> ascertained negative
+})

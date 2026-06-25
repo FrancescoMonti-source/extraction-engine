@@ -4694,3 +4694,45 @@ invariant #19), `HANDOFF.md`. Code/tests in commit `e323e8c`.
 **Still queued from the review:** replace the fragile `deparse(body())` spine test with
 a behavioral one (slice B, next); then move clinical examples out of generic engine
 files (slice D, explicitly deferred until after C/B land).
+
+---
+
+## Retire the diabetes multi-source spike test (slice A) — Claude (2026-06-25)
+
+Retired the pre-spine diabetes multi-source plumbing: deleted
+`test-multisource-diabetes.R` and the four helpers it was the sole consumer of
+(`measure_diabetes_glucose`, `reduce_structured_source`, `reduce_text_source`,
+`combine_diabetes_any` in `R/multisource.R`) -- the real-run script uses the
+`run_variable` spine, not these. The OR-combine is now driven only by variable_spec
+activations + `combine = any_positive()`.
+
+**Re-pinned the spike's UNIQUE invariants at spine level** (two new tests in
+`test-slice-diabetes-spec.R`, over the diabetes baseline code+text variable):
+- a code-channel positive survives a text-channel MODEL ERROR -> value 1,
+  channel_coverage partial, the failed text channel auditable (status "error"),
+  code provenance preserved;
+- OUT-OF-WINDOW code does not establish a positive end-to-end (E11 dated 2015 with
+  a 5-year window -> ascertained negative, value NA with text no_candidate).
+
+The spike's other invariants were already covered at spine level and not duplicated:
+the heterogeneous code+text any_positive matrix, no_candidate-is-not-absence, partial
+channel_coverage, and cross-channel provenance live in the gap-cases test; the glucose
+threshold + out-of-window executor units live in `test-structured.R`; the OR combiner
+contract lives in `test-multisource.R` (`combine_any_source_hit`, kept -- live code).
+
+**Deliberately NOT re-pinned (spike-only capability, not in the spine):** the
+configurable "treat document no_candidate as a completed negative" policy. The spine
+hard-wires text no_candidate -> unavailable (the conservative default IS tested). If a
+protocol needs the alternative, it is a future per-channel policy knob, not a regression.
+
+**Kept (live):** `combine_any_source_hit`, `.reduce_source`, `.source_status_from_state`
+(used by run_variable's any_positive path); `diabetes_text_definition` (the diabetes
+concept's text answer schema).
+
+**Suite:** 395 tests, 0 warnings. **Files:** `R/multisource.R` (-4 dead functions),
+`tests/testthat/test-slice-diabetes-spec.R` (+2 tests),
+`tests/testthat/test-multisource-diabetes.R` (deleted).
+
+**Still queued from the review:** clinical examples out of generic engine files (slice
+D); the `source`-vs-`channel` naming blur in the spike layer (slice E reorg of
+`multisource.R`).
