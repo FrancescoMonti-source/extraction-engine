@@ -4496,3 +4496,45 @@ Event-scoped (anastomoses) retrieval is still the one untested-with-a-model path
 
 **Files (this entry):** `scripts/run_variable_diabetes_real.R` (new), `R/multisource.R`,
 `tests/testthat/test-slice-dialysis-spec.R`, `HANDOFF.md`. Run artifacts -> gitignored `outputs/`.
+
+---
+
+## Validation #3 + event-scoped retrieval wiring — Claude (2026-06-25)
+
+**Done.** Closed the last spine gap: EVENT-scoped text channels now retrieve from RAW documents (was
+fixtures-only), and the event-scoped multi-field variable ran end-to-end against a real model.
+
+**Engine change (committed separately):** `.retrieve_text_channel()` (R/run_variable.R) now dispatches
+on the channel's LINKAGE, keeping the spine concept-agnostic:
+  - `event` linkage  -> eligibility = the subject's documents from the SAME event (PATID + EVTID), no
+    date window (mirrors the old adapter_anastomoses eligibility, now generic in the spine);
+  - `subject` linkage -> the subject's documents inside the variable's date window (unchanged).
+Whole-history text (subject linkage, no window) is still fixtures-only. Test added in
+test-slice-anastomoses-spec.R ("event-scoped anastomoses retrieves from raw docs by PATID+EVTID"):
+proves a same-patient document from a DIFFERENT event is excluded. Suite 340/340, 0 warnings.
+
+**Real run:** `scripts/run_variable_anastomoses_real.R` drives `recipient_anastomoses`
+(collect_fields, window=NULL, linkage event) over the real D0840 cohort: raw operative-report docs ->
+create_tcorpus -> event eligibility (PATID+EVTID) -> Lucene -> gemma3:4b nested multi-field
+extraction -> per-field values + envelope. gemma3:4b (grammar gate). Corpus bounded to the sampled
+events' anastomosis-mentioning notes (superset regex), capped per event; tasks sampled among
+recipients that have such a doc (mechanism run, not coverage).
+
+**Result (N=6):** events=6, channel complete=6; documented (extracted value) = 0 of 30 fields; some
+fields documented-but-ungrounded -> invalid (type_arterielle=2, type_ureterale=2, ...) -> **3 events
+needs_review**; events with evidence 4/6; ~42s. The MECHANISM is fully exercised -- event eligibility,
+nested extraction, FIELD-LEVEL acceptance (valid not_documented vs invalid ungrounded), needs_review
+routing, evidence grounding. The honest extraction finding: gemma3:4b pulls little structured
+anastomosis detail from keyword-retrieved sentences and makes some ungrounded claims, which the
+engine correctly routes to review rather than accepting. No gold -> mechanism, not accuracy.
+
+**PRIVACY (held):** console aggregates only; per-row detail (PHI) -> gitignored outputs/*.rds; native
+ELTID side-table in outputs/; corpus doc key synthetic-unique. Committed script embeds no data.
+
+**Spine validation status:** all three subject/event shapes now run end-to-end against gemma3:4b on
+real data -- categorical single-channel (smoking), binary multi-source OR (diabetes, transparent
+contribution), event-scoped multi-field (anastomoses). Remaining: accuracy (needs gold), whole-history
+TEXT retrieval (no consumer), and the citation_warning OR-hoist (no consumer).
+
+**Files (this entry):** `R/run_variable.R`, `tests/testthat/test-slice-anastomoses-spec.R`,
+`scripts/run_variable_anastomoses_real.R` (new), `HANDOFF.md`. Run artifacts -> gitignored outputs/.
