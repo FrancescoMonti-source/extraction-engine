@@ -185,12 +185,15 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
     expect_true(status$hit)
 })
 
-# Why: the generic run_variable() spine must not name a clinical lab executor. The lab
-# branch now calls the neutral measure_analyte_value(); measure_hyperkalaemia() is only
-# a backward-compatible wrapper and must not appear in the dispatcher.
-test_that("run_variable's generic lab branch does not call measure_hyperkalaemia()", {
+# Why: the generic run_variable() spine must not name a clinically-named executor. The
+# code/lab branches call the neutral measure_code_presence[_ever]() / measure_analyte_value();
+# measure_diabetes()/measure_hyperkalaemia() are only backward-compatible wrappers and
+# must not appear in the dispatcher.
+test_that("run_variable's generic spine calls neutral executors, not clinically-named ones", {
     src <- paste(deparse(body(.run_selected_channel)), collapse = "\n")
+    expect_true(grepl("measure_code_presence", src, fixed = TRUE))   # incl. _ever
     expect_true(grepl("measure_analyte_value", src, fixed = TRUE))
+    expect_false(grepl("measure_diabetes", src, fixed = TRUE))
     expect_false(grepl("measure_hyperkalaemia", src, fixed = TRUE))
 })
 

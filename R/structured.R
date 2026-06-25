@@ -148,15 +148,21 @@ code_in_family <- function(codes, families) {
     !is.na(normalized) & grepl("^[A-Z][0-9]{2}[A-Z0-9]{0,4}$", normalized)
 }
 
-# --- diabetes: ICD-10 code presence over pmsi$diag (interval time) ------------
-DIABETES_CODES <- c("E10", "E11", "E12", "E13", "E14")
-
+# --- generic code presence: ICD-10 family over pmsi$diag (interval time) -------
+# Neutral structured executor: the generic core behind the clinically-named caller
+# (measure_diabetes) and the run_variable() code branch. Per task it marks "present"
+# if any usable ICD-10 code in the declared family overlaps the anchor window, "absent"
+# if in-scope rows exist but none matches, with full coverage / values / evidence /
+# observation / derivation artifacts. `field`/`source` name the output rows; `codes`
+# is the declared family (required -- no concept baked in).
+#
 # diag: pmsi$diag rows
 #   source_row_id, PATID, EVTID, ELTID, diag, DATENT, DATSORT.
 # tasks: task_id, PATID, anchor_date.
-measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
-                             from_days = -1825L, to_days = 7L,
-                             missing_datsort = c("use_start", "exclude")) {
+measure_code_presence <- function(diag, tasks, codes,
+                                  from_days = -1825L, to_days = 7L,
+                                  missing_datsort = c("use_start", "exclude"),
+                                  field = "code_presence", source = "diagnosis") {
     missing_datsort <- match.arg(missing_datsort)
     .validate_structured_inputs(
         tasks, diag,
@@ -189,8 +195,8 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
             DATENT, DATSORT, anchor_date + from_days, anchor_date + to_days,
             missing_datsort = missing_datsort)) %>%
         mutate(
-            field = "diabetes_status",
-            source = "diagnosis",
+            field = field,
+            source = source,
             in_scope = TRUE,
             usable = .usable_icd10_code(diag),
             invalid = !usable,
@@ -201,9 +207,9 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
                 "interval overlap; missing DATSORT handled with use_start",
                 "interval overlap"),
             observation_reason = case_when(
-                is_target ~ "ICD-10 code matches the declared diabetes family",
+                is_target ~ "ICD-10 code matches the declared family",
                 !usable ~ "malformed or missing ICD-10 code; excluded",
-                TRUE ~ "diagnosis code outside the declared diabetes family"))
+                TRUE ~ "diagnosis code outside the declared family"))
 
     counts <- observations %>%
         group_by(task_id) %>%
@@ -235,7 +241,7 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
             TRUE ~ "absent")) %>%
         transmute(
             task_id,
-            field = "diabetes_status",
+            field = field,
             normalized_value,
             accepted_value = if_else(
                 processing_state == "measured", normalized_value, NA_character_),
@@ -268,7 +274,7 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
     derivation <- coverage %>%
         transmute(
             task_id,
-            field = "diabetes_status",
+            field = field,
             rule = rule,
             n_source_rows,
             n_scope_rows,
@@ -289,12 +295,13 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
 
 # --- whole-history ("ever") code presence ------------------------------------
 # No anchor, no window: scope is the subject's ENTIRE available record. Sibling of
-# measure_diabetes() for unanchored variables (e.g. diabetes_ever). present if any
-# usable code matches the family anywhere in the record; absent if rows exist but
-# none match; no_eligible_source if the subject has no rows. tasks need only
-# task_id + PATID (no anchor_date). Same output contract as measure_diabetes().
-measure_code_presence_ever <- function(diag, tasks, codes = DIABETES_CODES,
-                                       field = "code_presence") {
+# measure_code_presence() for unanchored variables (e.g. diabetes_ever). present if any
+# usable code matches the family anywhere in the record; absent if rows exist but none
+# match; no_eligible_source if the subject has no rows. tasks need only task_id + PATID
+# (no anchor_date). `codes`/`field`/`source` mirror measure_code_presence(); same output
+# contract.
+measure_code_presence_ever <- function(diag, tasks, codes,
+                                       field = "code_presence", source = "diagnosis") {
     .require_columns(tasks, c("task_id", "PATID"), "tasks")
     .require_columns(
         diag,
@@ -323,7 +330,7 @@ measure_code_presence_ever <- function(diag, tasks, codes = DIABETES_CODES,
     observations <- diag %>%
         inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
         mutate(
-            field = field, source = "diagnosis", in_scope = TRUE,
+            field = field, source = source, in_scope = TRUE,
             usable = .usable_icd10_code(diag), invalid = !usable,
             is_target = usable & code_in_family(diag, codes),
             selected_evidence = is_target,
@@ -385,6 +392,21 @@ measure_code_presence_ever <- function(diag, tasks, codes = DIABETES_CODES,
     .assert_evidence_resolves(evidence, observations, diag)
     list(coverage = coverage, values = values, evidence = evidence,
          observations = observations, derivation = derivation)
+}
+
+# --- diabetes: thin clinically-named caller of measure_code_presence() --------
+# ICD-10 E10-E14 over the diagnosis source, default 5-year lookback. Kept for backward
+# compatibility (existing callers/tests/scripts); the generic run_variable() code branch
+# calls the neutral measure_code_presence() core directly.
+DIABETES_CODES <- c("E10", "E11", "E12", "E13", "E14")
+
+measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
+                             from_days = -1825L, to_days = 7L,
+                             missing_datsort = c("use_start", "exclude")) {
+    measure_code_presence(
+        diag, tasks, codes = codes, from_days = from_days, to_days = to_days,
+        missing_datsort = missing_datsort,
+        field = "diabetes_status", source = "diagnosis")
 }
 
 # --- generic analyte value: max usable value in a point-window over biol --------

@@ -87,11 +87,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
         code = {
             codes <- .selector_codes(channel_def$selector, "prefixes")
             if (is.null(variable$window)) {     # whole-history ("ever"): no anchor/window
-                measure_code_presence_ever(sources[[source]], tasks, codes = codes)
+                measure_code_presence_ever(sources[[source]], tasks, codes = codes,
+                                           field = variable$name, source = source)
             } else {
-                w <- .window_days(variable)     # temporary adapter: generic over `codes=`
-                measure_diabetes(sources[[source]], tasks, codes = codes,
-                                 from_days = w[["from_days"]], to_days = w[["to_days"]])
+                w <- .window_days(variable)     # neutral code executor (no clinical name)
+                measure_code_presence(sources[[source]], tasks, codes = codes,
+                                      from_days = w[["from_days"]], to_days = w[["to_days"]],
+                                      field = variable$name, source = source)
             }
         },
         lab = {

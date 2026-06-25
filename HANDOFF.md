@@ -4378,3 +4378,46 @@ the same way. Not done here -- this slice was scoped to the lab branch.
 
 **Files (this entry):** `R/structured.R`, `R/run_variable.R`, `tests/testthat/test-structured.R`,
 `tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`.
+
+---
+
+## Cleanup #6: neutral code executor (code-branch parity with #5) — Claude (2026-06-25)
+
+**Done.** Same pattern as #5, applied to the CODE branch of the spine. The generic
+`run_variable()` code branch borrowed `measure_diabetes()` (concept-named) for the windowed path.
+Extracted its generic core into a neutral `measure_code_presence()`; `measure_diabetes()` is now a
+thin backward-compatible wrapper; the spine calls the neutral cores. The whole-history sibling
+`measure_code_presence_ever()` was already neutrally named but had a concept default -- tightened to
+match. Full suite **332/332**, 0 warnings. Executor-layer only (constructor syntax, variable
+semantics, source contribution, absence policy unchanged).
+
+- `measure_code_presence(diag, tasks, codes, from_days, to_days, missing_datsort,
+  field = "code_presence", source = "diagnosis")` (R/structured.R): neutral windowed ICD-10 family
+  presence. `field`/`source` are parameters (were hard-coded "diabetes_status"/"diagnosis"); the two
+  observation_reason strings genericised ("declared family", not "declared diabetes family"); `codes`
+  is REQUIRED (no concept default). The `rule` string was already neutral ("ICD-10 prefixes").
+- `measure_code_presence_ever(diag, tasks, codes, field = "code_presence", source = "diagnosis")`:
+  `codes` made required (was defaulted to DIABETES_CODES), `source` parameterised (was hard-coded);
+  it already used a `field` param and generic strings.
+- `measure_diabetes(diag, tasks, codes = DIABETES_CODES, from_days = -1825L, to_days = 7L,
+  missing_datsort)`: thin caller of the windowed core with `field = "diabetes_status"`,
+  `source = "diagnosis"`. Kept for existing callers/tests/scripts (test-structured.R,
+  test-multisource-diabetes.R, scripts/run_structured.R). DIABETES_CODES moved next to it.
+- `run_variable()` code branch: windowed -> `measure_code_presence(...)`, whole-history ->
+  `measure_code_presence_ever(...)`, both with `field = variable$name`, `source = source`; the
+  "temporary adapter" comment removed.
+
+Proven by: existing measure_diabetes tests and the whole-history slice unchanged and green; new
+`measure_code_presence` test (non-diabetes ICD-10 family N18/Z99, parameterised field); new
+delegation test (`measure_diabetes` == `measure_code_presence` with clinical params); the
+spine-decoupling test generalised to assert the dispatcher names the neutral cores and NEITHER
+`measure_diabetes` NOR `measure_hyperkalaemia`.
+
+**Spine status after #5 + #6:** the generic `.run_selected_channel` dispatcher now names only neutral
+executors (`measure_code_presence`, `measure_code_presence_ever`, `measure_analyte_value`,
+`run_extraction`). The clinically-named `measure_diabetes()` / `measure_hyperkalaemia()` survive only
+as thin backward-compatible wrappers for older direct callers (the multisource diabetes spike,
+structured unit tests, scripts) -- not the public architecture.
+
+**Files (this entry):** `R/structured.R`, `R/run_variable.R`, `tests/testthat/test-structured.R`,
+`tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`.

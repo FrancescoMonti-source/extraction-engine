@@ -114,6 +114,47 @@ test_that("diabetes covers scope, malformed rows, and missing-end policy", {
         excluded$derivation$rule[1], "missing_DATSORT=exclude", fixed = TRUE)
 })
 
+# Why: the NEUTRAL measure_code_presence() core (extracted from measure_diabetes) must
+# work for any ICD-10 family. field/source are parameters and codes is required -- no
+# concept baked in.
+test_that("measure_code_presence marks family presence for any ICD-10 codes", {
+    diag <- diag_rows(
+        PATID = c("P1", "P2", "P3"),
+        diag = c("N18.6", "I10", "xxx"),
+        DATENT = c("2025-03-09", "2025-03-09", "2025-03-09"),
+        DATSORT = c("2025-03-10", "2025-03-10", "2025-03-10"))
+    tasks <- structured_tasks(c("P1", "P2", "P3"))
+    run <- measure_code_presence(diag, tasks, codes = c("N18", "Z99"),
+                                 field = "esrd_status", source = "diagnosis")
+
+    states <- setNames(run$coverage$processing_state, run$coverage$task_id)
+    expect_equal(states[["P1::t"]], "measured")
+    expect_equal(states[["P2::t"]], "measured")    # in-scope usable code, outside family
+    expect_equal(states[["P3::t"]], "invalid")     # malformed code only
+
+    vals <- setNames(run$values$accepted_value, run$values$task_id)
+    expect_equal(vals[["P1::t"]], "present")        # N18.6 in {N18, Z99}
+    expect_equal(vals[["P2::t"]], "absent")         # I10 usable but outside family
+    expect_equal(unique(run$values$field), "esrd_status")  # field is parameterised
+})
+
+# Why: measure_diabetes() is now a THIN caller of the neutral core. It must delegate
+# exactly -- E10-E14 family, diabetes_status field -- not reimplement.
+test_that("measure_diabetes delegates to measure_code_presence with its clinical params", {
+    diag <- diag_rows(
+        PATID = c("P1", "P2"),
+        diag = c("E11.9", "I10"),
+        DATENT = c("2025-03-09", "2025-03-09"),
+        DATSORT = c("2025-03-10", "2025-03-10"))
+    tasks <- structured_tasks(c("P1", "P2"))
+
+    wrapped <- measure_diabetes(diag, tasks)
+    direct  <- measure_code_presence(diag, tasks, codes = DIABETES_CODES,
+                                     field = "diabetes_status", source = "diagnosis")
+    expect_equal(wrapped, direct)                   # wrapper == core with clinical params
+    expect_equal(unique(wrapped$values$field), "diabetes_status")
+})
+
 # Why: hyperkalaemia must distinguish source availability, potassium selection,
 # parseability, and threshold outcome. This prevents malformed sibling results or
 # unrelated analytes from silently changing a valid deterministic measurement.
