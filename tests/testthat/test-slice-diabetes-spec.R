@@ -185,16 +185,44 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
     expect_true(status$hit)
 })
 
-# Why: the generic run_variable() spine must not name a clinically-named executor. The
-# code/lab branches call the neutral measure_code_presence[_ever]() / measure_analyte_value();
-# measure_diabetes()/measure_hyperkalaemia() are only backward-compatible wrappers and
-# must not appear in the dispatcher.
-test_that("run_variable's generic spine calls neutral executors, not clinically-named ones", {
-    src <- paste(deparse(body(.run_selected_channel)), collapse = "\n")
-    expect_true(grepl("measure_code_presence", src, fixed = TRUE))   # incl. _ever
-    expect_true(grepl("measure_analyte_value", src, fixed = TRUE))
-    expect_false(grepl("measure_diabetes", src, fixed = TRUE))
-    expect_false(grepl("measure_hyperkalaemia", src, fixed = TRUE))
+# Why: the generic run_variable() spine must be CONCEPT-AGNOSTIC -- each channel's own
+# selector drives a neutral executor, never a clinically-fixed one. Behavioural proof
+# (replaces a former deparse(body()) source-text assertion): a code channel for a
+# NON-diabetes family (ESRD, N18) detects N18 and reads a diabetes code as ABSENT. If
+# the code branch still called measure_diabetes() (hard-wired to E10-E14), the diabetes
+# row would wrongly read present. The lab branch's neutrality is proved analogously by
+# the perioperative_max_glucose test above (a non-potassium analyte is measured).
+test_that("run_variable's spine is concept-agnostic: the channel selector drives the executor", {
+    esrd_concept <- concept_spec(
+        name = "esrd",
+        channels = list(
+            esrd_code = code_channel(
+                source = "pmsi_diag", selector = icd10("N18"),
+                native_grain = "diagnosis_row",
+                required_roles = c("subject", "event", "interval_start",
+                                   "interval_end", "code", "native_ref"),
+                linkage = "subject")))
+    esrd_var <- variable_spec(
+        name = "esrd_status", concept = esrd_concept, unit = "patient",
+        anchor = "anchor_date",
+        window = before_anchor(days = 1825L, grace_days = 7L),
+        channels = list(esrd_code = use_channel()),
+        output = binary_output(), combine = any_positive(),
+        absence_policy = open_world())
+
+    tasks <- tibble::tibble(
+        task_id = c("N1::t", "N2::t"), PATID = c("N1", "N2"),
+        anchor_date = as.Date("2024-06-01"))
+    diag <- tibble::tibble(
+        source_row_id = c("d1", "d2"), PATID = c("N1", "N2"),
+        EVTID = c("E1", "E2"), ELTID = c("L1", "L2"),
+        diag = c("N18.6", "E11.9"),    # N1 has ESRD; N2 has a DIABETES code (not ESRD)
+        DATENT = as.Date("2024-05-20"), DATSORT = as.Date("2024-05-21"))
+
+    run <- run_variable(esrd_var, tasks, list(pmsi_diag = diag))
+    value <- setNames(run$values$value, run$values$task_id)
+    expect_equal(value[["N1::t"]], 1L)   # N18 detected via the channel's OWN selector
+    expect_equal(value[["N2::t"]], 0L)   # a diabetes code is ABSENT for an ESRD variable
 })
 
 # ---------------------------------------------------------------------------
