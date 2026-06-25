@@ -4245,3 +4245,57 @@ or source-contribution change. The windowed code path is untouched.
 
 **Files (this entry):** `R/structured.R`, `R/run_variable.R`,
 `tests/testthat/test-slice-whole-history-spec.R` (new), `HANDOFF.md`. Committed as slice 6.
+
+---
+
+## Slice / cleanup #3: generalize D1 `citation_warning` across text parsers — Claude (2026-06-25)
+
+**Done.** Before #3 the three text parsers diverged on a fabricated (model-invented) citation:
+- smoking — **keep-and-flag** (value kept, `citation_warning = TRUE`);
+- anastomoses — **fail-closed** (field forced `invalid`, value dropped);
+- binary-presence (diabetes/dialysis text) — **silent** (invented id intersected away, no flag).
+
+They now share ONE rule (D1 keep-and-flag, owner-ratified): a value grounded by ≥1 real id is KEPT
+and flagged; a value grounded ONLY by invented ids has empty real ids and is rejected by each
+parser's own evidence rule; the invented id never materializes as evidence. Full suite **302/302**,
+0 warnings.
+
+- `resolve_cited_ids(evidence_ids, snippet_ids)` (R/extract.R): the shared splitter -> `{real_ids,
+  invented_ids, citation_warning, citation_warning_reason}`. Single source of the warning text.
+- `parse_smoking` (R/types/smoking.R): routed through it; behaviour identical (same reason string),
+  just no longer hand-rolls the intersect/setdiff.
+- `binary_presence_text_definition` parser (R/extract.R): routed through it; now COMPUTES
+  `citation_warning` (was silent). Additive `citation_warning[_reason]` columns on its values.
+- `parse_anastomoses` (R/types/anastomoses.R): **flipped from fail-closed to keep-and-flag** (the one
+  decision the owner signed off by choosing #3). Removed the `if (length(invented)) fv <- "invalid"`
+  block; now emits `citation_warning[_reason]` like the others.
+- Envelope surfacing where the combine path already carries per-task status:
+  - `documented_status` (smoking) already surfaced it — unchanged;
+  - `collect_fields` (anastomoses): `.multi_field_variable` now carries `citation_warning` per field
+    on `values` and per task (`any(field flagged)`) on the channel `source_status`.
+
+Proven by: `test-contract.R` (the old "fails the field closed" test rewritten to assert
+kept-and-flagged: `field_validity == "valid"` + `citation_warning` + S999 never materializes); a new
+`test-slice-anastomoses-spec.R` case running the flip end-to-end through `run_variable()` (value
+kept, per-field + per-task flag surface, real evidence grounds, invented id absent); smoking D1 test
+unchanged and still green (behaviour preserved).
+
+**Deferred (no consumer yet — "defer infra until it has a consumer"):** the `any_positive`
+multi-source OR path (`.combine_any_variable`) does NOT hoist `citation_warning` into the top-level
+OR `source_status`. The text channel's flag is COMPUTED and rides in
+`run$channel_results[[ch]]$values$citation_warning`, but surfacing it in the OR envelope would mean
+extending the shared `combine_any_source_hit()` / `.reduce_source()` `{status, hit, evidence}`
+contract — a change to the generic multisource core with no caller needing it today. Wire it when a
+multi-source TEXT variable actually needs the flag in its combined status.
+
+**Not touched:** the design note §11 D1 text states the contract as a principle ("generalize only
+when the parser path is ready") and is not made wrong by doing the generalization; per the
+standalone-design-note-commit rule it is left for a separate note commit if the owner wants it
+marked done. No constructor-syntax or variable-semantics change.
+
+**Owner-set order:** (1) retrieval wiring [done]; (2) whole-history "ever" [done]; (3) generalize D1
+`citation_warning` [done]; (4) constructor-syntax extraction / API cleanup.
+
+**Files (this entry):** `R/extract.R`, `R/types/smoking.R`, `R/types/anastomoses.R`,
+`R/run_variable.R`, `tests/testthat/test-contract.R`, `tests/testthat/test-slice-anastomoses-spec.R`,
+`HANDOFF.md`.

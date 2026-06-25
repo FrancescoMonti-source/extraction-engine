@@ -63,10 +63,8 @@ prompt_smoking <- function(task, candidates) {
 
 parse_smoking <- function(result, snippet_ids) {
     status <- if (length(result$smoking_status) == 1L) as.character(result$smoking_status) else NA_character_
-    returned <- unique(as.character(unlist(result$evidence_ids)))
-    returned <- returned[!is.na(returned) & nzchar(returned)]
-    ids <- intersect(returned, snippet_ids)
-    invented <- setdiff(returned, snippet_ids)   # cited IDs that were never supplied
+    cite <- resolve_cited_ids(result$evidence_ids, snippet_ids)   # shared D1 helper
+    ids <- cite$real_ids
     note <- if (is.null(result$decision_note) || !length(result$decision_note)) NA_character_
             else trimws(as.character(result$decision_note[[1]]))
     reason <- character()
@@ -75,22 +73,17 @@ parse_smoking <- function(result, snippet_ids) {
     } else if (status != "indetermine" && !length(ids)) {
         reason <- c(reason, "definitive status without evidence")
     }
-    # D1 keep-and-flag (owner-ratified): an invented citation does NOT invalidate a
-    # value already grounded by >=1 real id -- it is surfaced as a structured
-    # citation_warning. A value grounded ONLY by an invented id still has no real
-    # grounding, so it is already rejected by "definitive status without evidence"
-    # above (ids is empty). The invented id never materializes as evidence
-    # (.materialize_task_evidence intersects with supplied ids).
-    citation_warning <- length(invented) > 0L
+    # D1 keep-and-flag (owner-ratified): see resolve_cited_ids(). An invented citation
+    # does NOT invalidate a value already grounded by >=1 real id; a value grounded
+    # ONLY by an invented id is already rejected above ("definitive status without
+    # evidence", ids empty). The invented id never materializes as evidence.
     fields <- tibble::tibble(
         field = "smoking_status", status = status, normalized_value = status,
         evidence_ids = list(ids),
         field_validity = if (length(reason)) "invalid" else "valid",
         validity_reason = paste(reason, collapse = "; "),
-        citation_warning = citation_warning,
-        citation_warning_reason = if (citation_warning)
-            "model cited >=1 unsupplied snippet id (value kept, flagged)"
-            else NA_character_)
+        citation_warning = cite$citation_warning,
+        citation_warning_reason = cite$citation_warning_reason)
     list(fields = fields, summary = note)
 }
 

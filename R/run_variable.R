@@ -329,28 +329,35 @@ suppressWarnings(suppressMessages(library(dplyr)))
             transmute(task_id, variable = var_name, field,
                       value = accepted_value, field_validity,
                       needs_review = field_validity == "invalid",
-                      validity_reason, summary = task_summary)
+                      citation_warning, validity_reason, summary = task_summary)
     } else {
         tibble::tibble(task_id = character(), variable = character(),
                        field = character(), value = character(),
                        field_validity = character(), needs_review = logical(),
+                       citation_warning = logical(),
                        validity_reason = character(), summary = character())
     }
 
+    # Per-task citation_warning = any field flagged (D1 keep-and-flag). Folded into the
+    # field-count summary so the channel status row carries the same transparency as the
+    # documented_status (smoking) path.
     field_counts <- if (nrow(vals)) {
         vals %>% group_by(task_id) %>%
             summarise(n_fields = n(),
                       n_valid = sum(field_validity == "valid"),
-                      n_invalid = sum(field_validity == "invalid"), .groups = "drop")
+                      n_invalid = sum(field_validity == "invalid"),
+                      citation_warning = any(citation_warning), .groups = "drop")
     } else {
         tibble::tibble(task_id = character(), n_fields = integer(),
-                       n_valid = integer(), n_invalid = integer())
+                       n_valid = integer(), n_invalid = integer(),
+                       citation_warning = logical())
     }
     source_status <- tibble::tibble(task_id = task_ids) %>%
         left_join(distinct(cov, task_id, processing_state), by = "task_id") %>%
         left_join(field_counts, by = "task_id") %>%
         mutate(
             across(c(n_fields, n_valid, n_invalid), ~ coalesce(as.integer(.x), 0L)),
+            citation_warning = coalesce(citation_warning, FALSE),
             status = case_when(
                 processing_state %in% c("model_error", "processing_error") ~ "error",
                 processing_state %in% c("no_candidate", "no_eligible_document",
@@ -359,7 +366,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             needs_review = status == "error" | n_invalid > 0L) %>%
         transmute(task_id, variable = var_name, channel = channel_name,
                   source = source_name, status, n_fields, n_valid, n_invalid,
-                  needs_review)
+                  citation_warning, needs_review)
 
     evidence <- if (nrow(ev)) {
         ev %>% transmute(task_id, variable = var_name, channel = channel_name,

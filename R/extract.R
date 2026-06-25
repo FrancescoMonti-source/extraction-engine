@@ -53,6 +53,29 @@ standard_field_validity <- function(status, normalized_value, evidence_ids) {
          validity_reason = paste(reason, collapse = "; "))
 }
 
+# Shared citation resolution for ALL text parsers (D1 keep-and-flag, owner-ratified).
+# Splits the model's returned evidence ids into those actually supplied (`real_ids` --
+# the only ids that can ground a value or materialize as evidence) and those that were
+# never supplied (`invented_ids`, i.e. hallucinated). An invented citation does NOT
+# invalidate a value already grounded by >=1 real id; it is surfaced as a structured
+# `citation_warning` so the researcher sees it -- rather than the value being silently
+# dropped (binary-presence) or wrongly failed closed (anastomoses, pre-#3). A value
+# grounded ONLY by invented ids has no real grounding and is rejected by each parser's
+# OWN evidence rule (`real_ids` is empty there). Invented ids never materialize as
+# evidence: .materialize_task_evidence joins on the supplied snippet ids only.
+resolve_cited_ids <- function(evidence_ids, snippet_ids) {
+    returned <- unique(as.character(unlist(evidence_ids)))
+    returned <- returned[!is.na(returned) & nzchar(returned)]
+    invented <- setdiff(returned, snippet_ids)
+    list(
+        real_ids = intersect(returned, snippet_ids),
+        invented_ids = invented,
+        citation_warning = length(invented) > 0L,
+        citation_warning_reason = if (length(invented))
+            "model cited >=1 unsupplied snippet id (value kept, flagged)"
+            else NA_character_)
+}
+
 # Shared binary documented-presence text definition: one evidenced field whose
 # model output is {documented, not_documented}, normalized to present/absent.
 # Concept-specific text definitions (diabetes, dialysis, ...) are thin wrappers
@@ -64,16 +87,21 @@ binary_presence_text_definition <- function(name, status_key, field, system_prom
     parser <- function(result, snippet_ids) {
         status <- if (length(result[[status_key]]) == 1L)
             as.character(result[[status_key]]) else NA_character_
-        returned <- unique(as.character(unlist(result$evidence_ids)))
-        ids <- intersect(returned[!is.na(returned) & nzchar(returned)], snippet_ids)
+        cite <- resolve_cited_ids(result$evidence_ids, snippet_ids)
+        ids <- cite$real_ids
         nv <- dplyr::case_when(identical(status, "documented") ~ "present",
                                identical(status, "not_documented") ~ "absent",
                                TRUE ~ NA_character_)
         v <- standard_field_validity(status, nv, ids)
+        # D1 keep-and-flag (owner-ratified): an invented citation is surfaced via
+        # citation_warning, not silently dropped. A value grounded only by invented
+        # ids has empty real ids, so standard_field_validity already rejects it.
         fields <- tibble::tibble(
             field = field, status = status, normalized_value = nv,
             evidence_ids = list(ids), field_validity = v$field_validity,
-            validity_reason = v$validity_reason)
+            validity_reason = v$validity_reason,
+            citation_warning = cite$citation_warning,
+            citation_warning_reason = cite$citation_warning_reason)
         list(fields = fields, summary = NA_character_)
     }
     new_task_definition(

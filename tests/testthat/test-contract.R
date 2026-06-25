@@ -201,10 +201,12 @@ test_that("acceptance is field-level: a valid field survives an invalid sibling"
     expect_equal(unique(v$task_validity), "invalid")        # task flagged because a field is invalid
 })
 
-# Why: evidence IDs are an integrity boundary. Even if a backend bypasses or weakens
-# the dynamic schema enum, an invented citation must invalidate the field and must
-# never materialise as source evidence.
-test_that("a cited snippet ID that was never supplied fails the field closed", {
+# Why: evidence IDs are an integrity boundary. An invented citation must never
+# materialise as source evidence. Per D1 keep-and-flag (owner-ratified, #3 -- now
+# consistent across all text parsers), a field grounded by >=1 real id is KEPT and
+# flagged via citation_warning rather than failed closed: the real grounding stands and
+# the fabricated id is surfaced, not silently dropped and not buried in free text.
+test_that("a cited snippet ID that was never supplied is kept-and-flagged, not materialised", {
     docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
                                  RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
     tasks <- ana_tasks(); elig <- anastomoses_eligibility(tasks, docs_index)
@@ -220,8 +222,9 @@ test_that("a cited snippet ID that was never supplied fails the field closed", {
     }
     run <- run_extraction(r$coverage, r$candidates, anastomoses_definition(), fake, "fake")
     v <- run$values[run$values$field == "transplantation_type_anastomose_arterielle", ]
-    expect_equal(v$field_validity, "invalid")              # fail closed, not silently dropped
-    expect_match(v$validity_reason, "unsupplied")
+    expect_equal(v$field_validity, "valid")                # kept: grounded by the real id
+    expect_equal(v$accepted_value, "termino-laterale")
+    expect_true(v$citation_warning)                        # flagged: model cited an unsupplied id
     ev <- run$evidence[run$evidence$field == "transplantation_type_anastomose_arterielle", ]
     expect_true(sids[1] %in% ev$snippet_id)                # real ID still resolves
     expect_false("S999" %in% ev$snippet_id)                # fabricated ID never materializes

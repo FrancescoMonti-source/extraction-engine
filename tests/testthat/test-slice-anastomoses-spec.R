@@ -123,3 +123,39 @@ test_that("collect_fields distinguishes no_candidate and a failed call", {
     expect_true(a3$needs_review)
     expect_equal(nrow(run$values[run$values$task_id == "A3::t", ]), 0L)
 })
+
+# Why: D1 keep-and-flag is now consistent across text parsers (owner-ratified, #3).
+# An anastomoses field grounded by >=1 real id is KEPT and flagged when the model also
+# cites an unsupplied id -- no longer failed closed (the pre-#3 behaviour). The flag
+# surfaces in the envelope: per-field on values, per-task on the channel status. The
+# invented id never materializes as evidence.
+test_that("collect_fields keeps-and-flags an invented citation (no longer fail-closed)", {
+    cw_fake <- function(prompt, type, system_prompt) {
+        res <- setNames(
+            lapply(names(ANASTOMOSES_FIELDS),
+                   function(f) list(status = "not_documented", evidence_ids = list())),
+            names(ANASTOMOSES_FIELDS))
+        res$transplantation_type_anastomose_arterielle <-      # one real + one fabricated id
+            list(status = "documented", value = "termino-laterale",
+                 evidence_ids = list("S001", "S999"))
+        res[[ANASTOMOSES_SUMMARY]] <- "resume des anastomoses retenues"
+        res
+    }
+    run <- run_variable(anastomoses_var(), ana_tasks[1, ], ana_sources,
+                        caller = cw_fake, model_name = "fake")
+
+    art <- run$values[run$values$task_id == "A1::t" &
+                      run$values$field == "transplantation_type_anastomose_arterielle", ]
+    expect_equal(art$value, "termino-laterale")    # kept, not dropped
+    expect_equal(art$field_validity, "valid")
+    expect_true(art$citation_warning)              # flagged per field
+
+    ss1 <- run$source_status[run$source_status$task_id == "A1::t", ]
+    expect_true(ss1$citation_warning)              # per-task flag surfaces in channel status
+    expect_false(ss1$needs_review)                 # a flagged-but-valid field is not a review trigger
+
+    # The real id grounds the value; the fabricated id never materializes as evidence.
+    art_ev <- run$evidence[run$evidence$task_id == "A1::t" &
+                           run$evidence$field == "transplantation_type_anastomose_arterielle", ]
+    expect_equal(art_ev$evidence_ref, "OP1::2")
+})
