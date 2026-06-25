@@ -4123,3 +4123,26 @@ anastomoses; constructor-syntax freeze; the binary-presence-text extraction abov
 
 **Files (this entry):** `R/concepts-dialysis.R` (new), `R/run_variable.R`, `tests/testthat.R`,
 `tests/testthat/test-slice-dialysis-spec.R` (new), `HANDOFF.md`. Committed as slice 4.
+
+---
+
+## Design-note boundary update audited — Claude (2026-06-25)
+
+The owner updated `extraction_engine_design_formalization.md` (commit `ea074b4`) to sharpen the
+operator/interpretation boundary and codify source contribution (s8, the rewritten s10, invariants
+#3/#14/#18). The built slices 1-4 were audited against it and **conform**:
+
+- **operators execute researcher-defined rules, not clinical interpretation** -- `any_positive()`,
+  `max_value()`, `documented_status()`, `collect_fields()` are mechanical; none invents confidence
+  labels;
+- **source contribution is surfaced, not converted into inferred confidence** -- slice 4's
+  per-channel `contribution` + raw `processing_state` columns and `run$combine_rule` expose which
+  channel carried the signal and which were silent (and why), without estimating certainty;
+- **silence is not contradiction** (#14) -- a silent channel is non-ascertained (NA under
+  open-world), never a "weak yes".
+
+**Reconcile/precedence is out of scope** -- not a framework axis. It would be added only if a
+future `variable_spec` explicitly requests it, as a protocol-defined operator. Recorded in memory
+([[operators-are-rules-not-interpretation]]).
+
+**Files (this entry):** `HANDOFF.md` only.
