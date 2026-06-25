@@ -4600,3 +4600,58 @@ post-checkpoint.
 
 **Files (this entry):** `extraction_engine_design_formalization.md` (§8 + invariant #19),
 `HANDOFF.md`.
+
+---
+
+## String boolean hit-set expressions become the boolean layer — Claude (2026-06-25)
+
+Owner decision: the engine should have ONE public boolean-combine surface, the bare
+string expression, not two (`hit_set_difference(...)` vs a string). The string DSL
+strictly generalizes the special-case NOT, is closer to how the owner thinks, and is
+easier to document. So the engine moved from "special-case NOT" to a real
+deterministic boolean layer.
+
+**Public surface (commit `Add string boolean hit-set expressions with overlap audit`):**
+
+```r
+combine = "(transplant_act | transplant_status) & !dialysis_signal"
+```
+
+- Grammar: channel-name symbols + `|` `&` `!` + parentheses. Rejected: function
+  calls, arithmetic, comparisons, literals, unknown symbols, malformed expressions.
+- Evaluated as THREE-VALUED (Kleene) set algebra over per-channel hit vectors
+  (TRUE hit / FALSE ascertained no-hit / NA unavailable). R's own vectorised
+  `|`/`&`/`!` already implement Kleene logic, so `!` = complement over the task
+  universe and NA propagates exactly when the decision depends on an unavailable hit
+  set — honest ascertainment for free.
+- Final decision: included / excluded / **undetermined** (NA, partial) — NOT collapsed
+  to binary. Distinguishes observed non-hit (FALSE) from unavailable source (NA).
+
+**Audit for Venn/UpSet (not reduced to in/out):**
+- `values` — value (1/0/NA), decision, ascertainment.
+- `membership` long-form — task_id, channel, role (asserted/negated/mixed), hit
+  (T/F/NA), processing_state, evidence_refs.
+- `overlap` — UpSet/Venn-ready summary: one row per membership pattern across the
+  expression channels (per-channel state columns + pattern + count + decision +
+  ascertainment), directly consumable by ggupset/UpSetR.
+
+**`hit_set_difference()` is now thin sugar**, not a parallel system: it LOWERS to the
+string expression `a & !b` (OR-within-role unions for multiple channels) and is run by
+the same machinery. The prior parallel runner branch (`.hit_set_difference_variable`)
+and the `hit_set_decision()` pure core were removed; the prior slice's test was
+rewritten to pin the lowering + prove end-to-end equivalence with the bare string.
+
+**Mechanics:** a bare string in `combine` is coerced to `hit_set_expr()` at
+`variable_spec` build, where referenced channels are checked to equal the activated
+channels. `R/hitset.R` holds the pure core (parser / grammar check / role derivation /
+Kleene evaluator / overlap); `R/run_variable.R` attaches per-channel provenance.
+
+**Design note:** §8 rewritten ("Boolean hit-set expressions (the deterministic boolean
+layer)") + invariant #19 generalized from "A NOT B" to the string expression layer.
+
+**Suite:** 414 tests, 0 warnings. (README still cites 340 — the tagged
+`checkpoint/spec-layer-validated` state; this is post-checkpoint.)
+
+**Files:** code in commit `428929e` (`R/hitset.R`, `R/operators.R`, `R/run_variable.R`,
+`R/spec.R`, `tests/testthat/test-slice-hitset-{spec,expr-spec}.R`); this doc commit
+covers `extraction_engine_design_formalization.md` (§8 + invariant #19) and `HANDOFF.md`.

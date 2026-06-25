@@ -511,28 +511,57 @@ dialysis = ICD10 OR CCAM OR text
 
 then the engine should execute that rule and expose which channels had signals. It should not automatically invent labels such as "uncorroborated", "possible", or "weak evidence" unless such labels are explicitly part of the variable definition.
 
-### Boolean operators are set algebra over hit sets
+### Boolean hit-set expressions (the deterministic boolean layer)
 
-Boolean logic is **set algebra over explicit hit sets, not clinical ontology**. A hit set is the set of ids (task/patient ids) matched by one signal definition — a channel under a `variable_spec`. The operators are just:
+The engine has a real deterministic boolean layer, not a special-case `NOT`. The **public boolean-combine surface is a bare string expression** over channel names:
 
-```text
-A OR  B  = union(A, B)
-A AND B  = intersect(A, B)
-A NOT B  = setdiff(A, B)
+```r
+combine = "(transplant_act | transplant_status) & !dialysis_signal"
 ```
 
-`A NOT B` therefore means "in A's hit set and **not in B's hit set under the selected B definition**". It does **not** mean "B is clinically absent". So `NOT` is allowed as set exclusion — it subtracts one explicit result set from another, it does not negate a disease — and it must not be over-policed.
-
-What stays mandatory is the **honest label and audit**. The engine never infers clinical absence from silence (invariants #13/#14), so it must distinguish:
+Boolean logic is **set algebra over explicit hit sets, not clinical ontology**. A hit set is the set of ids (task/patient ids) matched by one signal definition — a channel under a `variable_spec`. The operators are plain set algebra over those hit sets:
 
 ```text
-"no exclusion hit observed"            (the selected B definition was not matched, OR was unavailable)
-"exclusion fully ascertained negative" (B was actually evaluated and found absent)
+A | B  = union(A, B)
+A & B  = intersect(A, B)
+!A     = complement of A relative to the current task universe
 ```
 
-A task kept only because the exclude channel was *unavailable* is reported as kept-but-not-fully-ascertained (`ascertainment = partial`), never as a definitive "A and not B". A label like "patients with the act and no dialysis" is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for a closed-world clinical reading; otherwise the result is "patients with the act and **no dialysis hit**".
+`!dialysis_signal` therefore means "**not in the `dialysis_signal` hit set within the current task universe**", under the selected `dialysis_signal` definition. It does **not** mean "clinically no dialysis". So `!` is allowed as set exclusion — it subtracts one explicit result set from another, it does not negate a disease — and must not be over-policed.
 
-`hit_set_difference(include = ..., exclude = ...)` implements the `NOT` case as plain R set algebra (`R/hitset.R` is the pure core; `R/run_variable.R` attaches per-channel provenance). Its audit envelope exposes the inclusion hit set(s), the exclusion hit set(s), which channel produced each (`role` = include/exclude, plus the contribution class), evidence refs for both, and the final include/exclude `decision`. OR-within-role is supported; `AND`-within-include and a general boolean expression DSL are deferred until a protocol requires them.
+**Grammar.**
+
+```text
+allowed   : channel-name symbols (matching the variable's activated channels),
+            the operators | & ! , and parentheses
+rejected  : function calls, arithmetic, comparison operators, literals/constants,
+            unknown symbols (a name not among the activated channels), and any
+            malformed expression
+```
+
+Referenced channels must be exactly the variable's activated channels; an unknown symbol or an activated-but-unused channel is a build-time error.
+
+**Three-valued (Kleene) evaluation.** Each channel is a logical vector over the task universe: `TRUE` = hit, `FALSE` = ascertained no-hit, `NA` = unavailable / unevaluable. The expression is evaluated with three-valued logic, so `NA` propagates **only when the final decision depends on an unavailable hit set**:
+
+```text
+TRUE  | NA = TRUE     FALSE & NA = FALSE     !NA = NA
+FALSE | NA = NA       TRUE  & NA = NA
+```
+
+The per-task final decision is **`included` / `excluded` / `undetermined`** — it is **not** collapsed to binary in the envelope. `undetermined` (value `NA`, `ascertainment = partial`) is exactly the case where the result hinges on a channel that was unavailable. This is how the engine keeps two things distinct (invariants #13/#14 — never infer clinical absence from silence):
+
+```text
+"no hit observed"            (FALSE: the selected definition was evaluated and not matched)
+"unavailable / unevaluable"  (NA: the source could not be ascertained)
+```
+
+A task kept only because an exclusion channel was *unavailable* comes back `undetermined`/`partial`, never a definitive "A and not B". The closed-world clinical label ("patients with the act and no dialysis") is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for it; otherwise the result is "patients with the act and **no dialysis hit**".
+
+**Overlap audit (Venn / UpSet).** The audit is not reduced to in/out. Alongside `values` it emits a **membership long-form** (`task_id`, `channel`, `role` in the expression = asserted/negated/mixed, `hit` = TRUE/FALSE/NA, `processing_state`, `evidence_refs` for hits) and an **overlap summary** that groups tasks by their membership pattern across the expression channels (per-channel state columns + `pattern` + count + the pattern-determined `decision` and `ascertainment`). The overlap summary is directly consumable by ggupset / UpSetR; the scientifically useful part is how the source hit sets overlap or fail to overlap, not just the final flag.
+
+`R/hitset.R` is the pure core (parser, grammar check, role derivation, Kleene evaluator, overlap); `R/run_variable.R` attaches per-channel status + evidence provenance.
+
+**`hit_set_difference()` is sugar, not a parallel system.** `hit_set_difference(include = a, exclude = b)` lowers to the string expression `a & !b` (with OR-within-role unions for multiple channels) and is evaluated by the same machinery. It exists only as a convenience for the common "include minus exclude" case; the string expression is the primary, documented API. There is one boolean mental model, not two.
 
 ---
 
@@ -869,7 +898,7 @@ These are the core principles future agents should not violate.
 
 18. The framework should optimize for explicitness, reuse, source contribution reporting, and reviewability, not for hiding protocol choices.
 
-19. Boolean operators are set algebra over explicit hit sets, not clinical ontology. `A NOT B` is setdiff(A_hits, B_hits); the audit must distinguish "no exclusion hit observed" from "exclusion fully ascertained negative", and never read silence as a closed-world clinical absence.
+19. The boolean combine surface is a string hit-set expression (`|` `&` `!` over channel names) evaluated as three-valued set algebra over explicit hit sets, not clinical ontology. `!A` is complement within the task universe, not clinical negation. The final decision is included / excluded / undetermined (NA propagates when it depends on an unavailable hit set); the audit must distinguish an observed non-hit from an unavailable source and never read silence as a closed-world clinical absence. `hit_set_difference()` is sugar that lowers to `a & !b`, not a parallel system.
 ```
 
 ---
