@@ -4456,3 +4456,43 @@ natural next step if wanted: a held-out gold comparison, or the same wiring for 
 
 **Files (this entry):** `scripts/run_variable_smoking_real.R` (new), `HANDOFF.md`. Run artifacts stay
 in gitignored `outputs/`.
+
+---
+
+## Validation #2: multi-source OR end-to-end on real model + real data — Claude (2026-06-25)
+
+**Done.** The any_positive OR path run against a real model on real data, with both channels live on
+the same subjects. New runner `scripts/run_variable_diabetes_real.R` drives `diabete_pre_greffe`
+(diabetes_baseline_status_template) over the real D0840 cohort:
+  - code channel `pmsi_diag_e10_e14`  -> deterministic ICD-10 E10-E14 over real pmsi$diag;
+  - text channel `text_diabetes_mentions` -> Lucene retrieval over real notes -> gemma3:4b binary presence;
+  - combine = `any_positive()`. The headline is TRANSPARENT SOURCE CONTRIBUTION.
+
+- **Model gate honoured:** gemma3:4b (RELIABLE per the grammar gate). Ollama pre-flighted.
+- **Real data:** D0840 chirurgie.xlsx (recipient anchors), `pmsi` (load_pmsi_diag, 36.7k rows), `docs`
+  (65k notes). The documents corpus is bounded to diabetes-mentioning notes (`diabet|insulin`, a
+  SUPERSET of the channel's Lucene terms) within the variable's window, capped to MAX_DOCS closest to
+  the anchor per subject -- bounds the raw input only; eligibility + retrieval semantics unchanged.
+- **Result (N=8, warning-clean):** value 1=4 0=0 NA=4; ascertainment complete=4 partial=4; code
+  signal=3 negative=5; text signal=3 negative=1 silent=4; **positives attributed both=2, code-only=1,
+  text-only=1**. The text-only positive is the design's target case: a `1` from a clinician's note
+  while ICD-10 had nothing. Open-world NA where code was negative AND text silent (cannot assert
+  absence when a channel could not be evaluated).
+
+**Engine fix surfaced by this run (committed separately):** `.reduce_source()` (R/multisource.R)
+emitted a benign "Unknown or uninitialised column: task_id" warning when a channel's run_extraction
+returned COLUMN-LESS empty values/evidence (every task no_candidate -- the tests never hit it because
+their fixtures always had >=1 text candidate). Guarded with has_val/has_ev checks (behaviour
+unchanged); regression test added in test-slice-dialysis-spec.R ("multi-source OR is warning-clean
+when the text channel is entirely silent"). Suite 337/337, 0 warnings.
+
+**PRIVACY (held):** console prints ONLY aggregates; per-row detail (PHI) -> gitignored
+`outputs/*.rds`; the native ELTID side-table also stays in outputs/. The committed script embeds no
+data. The corpus doc key is synthetic-unique (native ELTID kept aside for traceability).
+
+**Proves / does NOT:** proves the OR + retrieval + grammar-enforced extraction + transparent
+contribution work together on real inputs for two live channels. Does NOT measure accuracy (no gold).
+Event-scoped (anastomoses) retrieval is still the one untested-with-a-model path.
+
+**Files (this entry):** `scripts/run_variable_diabetes_real.R` (new), `R/multisource.R`,
+`tests/testthat/test-slice-dialysis-spec.R`, `HANDOFF.md`. Run artifacts -> gitignored `outputs/`.
