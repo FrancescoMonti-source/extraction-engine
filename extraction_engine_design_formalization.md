@@ -478,6 +478,7 @@ closest_before_anchor()
 first_event()
 last_event()
 any_positive()
+hit_set_difference()
 threshold_binary()
 lucene_only()
 llm_after_lucene()
@@ -509,6 +510,29 @@ dialysis = ICD10 OR CCAM OR text
 ```
 
 then the engine should execute that rule and expose which channels had signals. It should not automatically invent labels such as "uncorroborated", "possible", or "weak evidence" unless such labels are explicitly part of the variable definition.
+
+### Boolean operators are set algebra over hit sets
+
+Boolean logic is **set algebra over explicit hit sets, not clinical ontology**. A hit set is the set of ids (task/patient ids) matched by one signal definition — a channel under a `variable_spec`. The operators are just:
+
+```text
+A OR  B  = union(A, B)
+A AND B  = intersect(A, B)
+A NOT B  = setdiff(A, B)
+```
+
+`A NOT B` therefore means "in A's hit set and **not in B's hit set under the selected B definition**". It does **not** mean "B is clinically absent". So `NOT` is allowed as set exclusion — it subtracts one explicit result set from another, it does not negate a disease — and it must not be over-policed.
+
+What stays mandatory is the **honest label and audit**. The engine never infers clinical absence from silence (invariants #13/#14), so it must distinguish:
+
+```text
+"no exclusion hit observed"            (the selected B definition was not matched, OR was unavailable)
+"exclusion fully ascertained negative" (B was actually evaluated and found absent)
+```
+
+A task kept only because the exclude channel was *unavailable* is reported as kept-but-not-fully-ascertained (`ascertainment = partial`), never as a definitive "A and not B". A label like "patients with the act and no dialysis" is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for a closed-world clinical reading; otherwise the result is "patients with the act and **no dialysis hit**".
+
+`hit_set_difference(include = ..., exclude = ...)` implements the `NOT` case as plain R set algebra (`R/hitset.R` is the pure core; `R/run_variable.R` attaches per-channel provenance). Its audit envelope exposes the inclusion hit set(s), the exclusion hit set(s), which channel produced each (`role` = include/exclude, plus the contribution class), evidence refs for both, and the final include/exclude `decision`. OR-within-role is supported; `AND`-within-include and a general boolean expression DSL are deferred until a protocol requires them.
 
 ---
 
@@ -844,6 +868,8 @@ These are the core principles future agents should not violate.
 17. LLM extraction must be evidence-grounded and auditable.
 
 18. The framework should optimize for explicitness, reuse, source contribution reporting, and reviewability, not for hiding protocol choices.
+
+19. Boolean operators are set algebra over explicit hit sets, not clinical ontology. `A NOT B` is setdiff(A_hits, B_hits); the audit must distinguish "no exclusion hit observed" from "exclusion fully ascertained negative", and never read silence as a closed-world clinical absence.
 ```
 
 ---

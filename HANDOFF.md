@@ -4560,3 +4560,43 @@ Deterministic suite: 340 tests, 0 warnings. Real-model runners:
 scripts/run_variable_{smoking,diabetes,anastomoses}_real.R (artifacts -> gitignored outputs/).
 
 **Files (this entry):** `README.md`, `HANDOFF.md`. Then tagged.
+
+---
+
+## Boolean set-algebra operator: hit_set_difference (NOT) — Claude (2026-06-25)
+
+Post-checkpoint slice completing the deterministic boolean family. Owner reframed
+boolean operators (correcting an earlier over-strict NOT framing): **boolean logic is
+set algebra over explicit hit sets, not clinical ontology.** A hit set is the ids
+matched by one signal definition (a channel). `A OR B = union`, `A AND B = intersect`,
+`A NOT B = setdiff`. `A NOT B` means "in A's hit set and not in B's hit set under the
+SELECTED B definition" — NOT "B is clinically absent". So NOT is allowed as set
+exclusion and must not be over-policed; the guardrail is the honest label, not a ban.
+
+**Built (commit `Add hit-set difference combine operator`):**
+- `R/hitset.R` (new) — pure core `hit_set_decision(universe, include_sets, exclude_sets)`
+  = setdiff(union(include), union(exclude)), per-id `decision`
+  (included / excluded / no_include_hit). Plain R over named id sets; no DSL.
+- `R/operators.R` — `hit_set_difference(include, exclude)` combiner (guards: ≥1 include;
+  no channel in both roles). OR-within-role; AND-within-include + expression DSL deferred.
+- `R/run_variable.R` — `.hit_set_difference_variable()` + dispatch. Reuses the OR-path
+  reduction; audit envelope exposes both hit sets with provenance: `role` (include/exclude)
+  + contribution + raw processing_state on source_status, evidence refs for both roles,
+  and `decision` per task.
+- `tests/testthat/test-slice-hitset-spec.R` (new) — 8 tests over two code channels
+  (Z94 include / Z99 exclude, separate sources): full decision×ascertainment matrix,
+  the honest-partial-label test, role/contribution transparency, dual-role evidence,
+  pure `hit_set_decision()`, constructor + mismatch guards.
+
+**Honest-label invariant (the point):** the audit distinguishes "no exclusion hit
+observed" (selected B definition not matched, or B unavailable) from "exclusion fully
+ascertained negative" (B evaluated, found absent). A task kept only because the exclude
+channel was unavailable comes back `included` but `ascertainment = partial`, never a
+definitive "A and not B". Recorded as design invariant #19 and in §8 of the design note.
+
+**Suite:** 385 tests, 0 warnings (was 340 at the checkpoint). README still cites 340 —
+correct, that documents the tagged `checkpoint/spec-layer-validated` state; this is
+post-checkpoint.
+
+**Files (this entry):** `extraction_engine_design_formalization.md` (§8 + invariant #19),
+`HANDOFF.md`.
