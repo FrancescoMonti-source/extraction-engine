@@ -55,11 +55,13 @@ collect_fields <- function() {
 # Channel-name symbols + the operators | (union) & (intersection) ! (complement)
 # + parentheses; nothing else. Parsed + grammar-checked at construction; channel
 # symbols are checked against the variable's activated channels at variable_spec
-# build. Evaluated as three-valued (Kleene) logic over the channels' hit vectors so
-# NA (unavailable) propagates honestly into ascertainment, and the decision is
-# included / excluded / undetermined (never silently collapsed to binary). The pure
-# parser/evaluator/overlap live in R/hitset.R. A bare string passed as `combine` is
-# coerced to this operator, so callers simply write combine = "...".
+# build. The decision is OBSERVED hit-set algebra (a task is a member of a channel's
+# set iff hit == TRUE; FALSE and NA both mean "no observed hit"), so it is always
+# determined (included / excluded) -- an unavailable channel is reported via
+# channel_coverage, not propagated into the decision. The per-channel audit keeps the
+# raw TRUE/FALSE/NA. The pure parser/evaluator/overlap live in R/hitset.R. A bare
+# string passed as `combine` is coerced to this operator, so callers write
+# combine = "...".
 hit_set_expr <- function(expr) {
     ast <- .parse_hitset_expr(expr)
     channels <- .check_hitset_grammar(ast)

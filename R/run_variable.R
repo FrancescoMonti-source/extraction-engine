@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # Executes one variable_spec over supplied input rows and a named list of source
 # data, then assembles a reviewable audit envelope (final value, selected
-# channels, per-channel/source status, evidence refs, ascertainment/absence).
+# channels, per-channel/source status, evidence refs, channel coverage/absence).
 #
 # Channel execution dispatches on the channel TYPE (code / text / lab), NOT on the
 # channel name -- the runner must stay free of any one concept's vocabulary. The
@@ -202,7 +202,9 @@ suppressWarnings(suppressMessages(library(dplyr)))
         combined <- combine_any_source_hit(reduced, incomplete_value = absence_value)
         values[[i]] <- tibble::tibble(
             task_id = tid, variable = var_name, value = combined$value,
-            ascertainment = combined$ascertainment)
+            # combine_any_source_hit's "ascertainment" is the channel-coverage notion
+            # (were all selected channels evaluable); the public envelope names it so.
+            channel_coverage = combined$ascertainment)
         status_l[[i]] <- combined$source_status %>%
             rename(channel = source) %>%
             mutate(
@@ -245,8 +247,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
     values <- result$coverage %>%
         transmute(task_id, variable = var_name,
                   value = measurement_value,
-                  ascertainment = if_else(processing_state == "measured",
-                                          "complete", "partial"))
+                  channel_coverage = if_else(processing_state == "measured",
+                                             "complete", "partial"))
     status <- result$coverage %>%
         transmute(
             task_id,
@@ -269,7 +271,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # documented_status(): a single text channel whose accepted categorical status
 # becomes the cohort value. Keeps the categorical STRING (not a binary hit), and
 # the three non-positive outcomes distinct:
-#   valid        -> the status; ascertainment complete
+#   valid        -> the status; channel_coverage complete
 #   no_candidate -> NA, partial (nothing retrieved; open-world, not absence)
 #   invalid      -> NA, needs_review (e.g. definitive status without grounding)
 # citation_warning (D1 keep-and-flag) rides through as a structured column: a value
@@ -297,7 +299,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         tibble::tibble(
             task_id = tid,
             value = if (identical(state, "valid")) status_val else NA_character_,
-            ascertainment = if (identical(state, "valid")) "complete" else "partial",
+            channel_coverage = if (identical(state, "valid")) "complete" else "partial",
             needs_review = needs_review,
             citation_warning = cw,
             review_reason = if (needs_review) reason else NA_character_,
@@ -308,7 +310,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }))
 
     values <- rows %>%
-        transmute(task_id, variable = var_name, value, ascertainment,
+        transmute(task_id, variable = var_name, value, channel_coverage,
                   needs_review, citation_warning, review_reason)
     source_status <- rows %>%
         transmute(task_id, variable = var_name, channel = channel_name,
@@ -395,22 +397,27 @@ suppressWarnings(suppressMessages(library(dplyr)))
     list(values = values, source_status = source_status, evidence = evidence)
 }
 
-# hit_set_expr(): the string boolean operator. Reduces each activated
-# channel to a per-task three-valued hit vector (TRUE hit / FALSE ascertained no-hit
-# / NA unavailable), evaluates the parsed expression with Kleene logic (R's own
-# |/&/!), and emits an audit envelope built for Venn/UpSet analysis -- NOT reduced to
-# included/excluded. NA propagation is the honest ascertainment: result NA <=> the
-# decision depends on an unavailable channel.
-#   values        per task: value (1/0/NA), decision (included/excluded/undetermined),
-#                 ascertainment (complete/partial).
-#   source_status per task x channel: role (asserted/negated/mixed), status, hit,
-#                 processing_state, contribution, evidence_refs -- the membership
-#                 long-form (see $membership for the trimmed view).
+# hit_set_expr(): the string boolean operator. The final cohort decision is
+# OBSERVED hit-set algebra, not Kleene truth logic: each channel contributes its
+# OBSERVED hit set (a task is a member iff hit == TRUE; both FALSE and NA mean "no
+# observed hit", hence non-member). `!A` is the complement of A's observed hit set
+# within the task universe. So `A & !B` with B unavailable keeps an A-hit task
+# INCLUDED (B produced no observed hit) -- the uncertainty lives in channel_coverage
+# and the membership audit, never silently in the final set operation. The decision
+# is therefore always determined (included / excluded); NA is preserved only in the
+# per-channel audit (membership/overlap), not propagated into value/decision. (A
+# strict epistemic mode that propagates NA into the decision is a deliberate future
+# extension, not the default.)
+#   values        per task: value (1/0), decision (included/excluded),
+#                 decision_state (determined), channel_coverage (complete/partial/failed).
+#   source_status per task x channel: role (asserted/negated/mixed), status, hit
+#                 (TRUE/FALSE/NA), processing_state, contribution, evidence_refs.
 #   evidence      per hit ref, role-tagged.
-#   membership    long-form for analysis: task_id, channel, role, hit,
+#   membership    long-form for analysis: task_id, channel, role, hit (TRUE/FALSE/NA),
 #                 processing_state, evidence_refs.
-#   overlap       UpSet-style summary: one row per membership pattern across the
-#                 expression channels, with count, decision, ascertainment.
+#   overlap       UpSet-style summary: one row per membership pattern (TRUE/FALSE/NA
+#                 preserved) across the expression channels, with count, decision,
+#                 decision_state, channel_coverage.
 .hit_set_expr_variable <- function(variable, tasks, channel_results) {
     var_name <- variable$name
     combine <- variable$combine
@@ -432,23 +439,35 @@ suppressWarnings(suppressMessages(library(dplyr)))
     })
     names(reduced) <- declared
 
-    # one three-valued logical vector per channel, over the task universe
+    # Audit truth: one three-valued hit vector per channel (TRUE/FALSE/NA), kept for
+    # membership/overlap. Decision input: the OBSERVED hit set (hit == TRUE), so the
+    # set algebra is two-valued and the decision is always determined.
     hit_vec <- function(ch) vapply(task_ids, function(tid) {
         h <- reduced[[ch]][[tid]]$hit
         if (length(h)) h[[1]] else NA
     }, logical(1))
-    vectors <- setNames(lapply(referenced, hit_vec), referenced)
+    vectors  <- setNames(lapply(referenced, hit_vec), referenced)
+    observed <- setNames(lapply(vectors, function(v) v %in% TRUE), referenced)
 
-    result <- .eval_hitset_expr(combine$ast, vectors)   # three-valued over task_ids
-    decision <- dplyr::case_when(
-        result        ~ "included",
-        !result       ~ "excluded",
-        TRUE          ~ "undetermined")
-    ascertainment <- if_else(is.na(result), "partial", "complete")
+    result <- .eval_hitset_expr(combine$ast, observed)   # always TRUE/FALSE
+    decision <- if_else(result, "included", "excluded")
+    decision_state <- rep("determined", length(result))  # observed mode is determined
+
+    # channel_coverage: were the selected channels actually evaluable for this task?
+    # failed (a channel errored) > partial (a channel unavailable/unusable) > complete.
+    coverage_of <- function(tid) {
+        sts <- vapply(referenced, function(ch) reduced[[ch]][[tid]]$status,
+                      character(1))
+        if (any(sts == "error")) "failed"
+        else if (any(sts %in% c("unavailable", "invalid"))) "partial"
+        else "complete"
+    }
+    channel_coverage <- unname(vapply(task_ids, coverage_of, character(1)))
+
     values <- tibble::tibble(
         task_id = task_ids, variable = var_name,
         value = as.integer(result), decision = decision,
-        ascertainment = ascertainment)
+        decision_state = decision_state, channel_coverage = channel_coverage)
 
     role_of <- function(ch) {
         r <- if (ch %in% names(roles)) unname(roles[[ch]]) else NA_character_
@@ -482,7 +501,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
     wide <- tibble::tibble(task_id = task_ids)
     for (ch in referenced) wide[[ch]] <- vectors[[ch]]
-    overlap <- hit_set_overlap(wide, referenced, decision, ascertainment)
+    overlap <- hit_set_overlap(wide, referenced, decision, decision_state,
+                               channel_coverage)
 
     list(
         values = values,

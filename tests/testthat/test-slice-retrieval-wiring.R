@@ -54,13 +54,13 @@ test_that("run_variable executes a text variable from raw documents via retrieva
                         caller = rw_fake, model_name = "fake")
 
     value <- setNames(run$values$value, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(value[["P1::s"]], "actif")   # retrieved smoking sentence -> extracted
     expect_true(is.na(value[["P2::s"]]))       # in-window doc, no smoking term -> no_candidate
     expect_true(is.na(value[["P3::s"]]))       # smoking doc OUT of window -> not eligible
-    expect_equal(asc[["P1::s"]], "complete")
-    expect_equal(asc[["P2::s"]], "partial")
+    expect_equal(cov[["P1::s"]], "complete")
+    expect_equal(cov[["P2::s"]], "partial")
 
     # P1's value is grounded by a real retrieved sentence reference into the corpus.
     ev1 <- run$evidence[run$evidence$task_id == "P1::s", ]

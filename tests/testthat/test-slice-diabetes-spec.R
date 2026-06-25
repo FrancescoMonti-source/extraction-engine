@@ -128,12 +128,12 @@ test_that("baseline diabetes variable from template returns traceable output", {
         c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
 
     values <- setNames(run$values$value, run$values$task_id)
-    ascertainment <- setNames(run$values$ascertainment, run$values$task_id)
+    channel_coverage <- setNames(run$values$channel_coverage, run$values$task_id)
     expect_equal(values[["P1::t"]], 1L)       # text channel
     expect_equal(values[["P2::t"]], 1L)       # PMSI channel
     expect_true(is.na(values[["P3::t"]]))     # text no_candidate remains partial
-    expect_equal(ascertainment[["P1::t"]], "complete")
-    expect_equal(ascertainment[["P2::t"]], "partial")
+    expect_equal(channel_coverage[["P1::t"]], "complete")
+    expect_equal(channel_coverage[["P2::t"]], "partial")
 
     p1_text <- run$source_status[
         run$source_status$task_id == "P1::t" &
@@ -257,17 +257,17 @@ test_that("any_positive combine is wired through run_variable across the gap cas
                         caller = cg_fake, model_name = "fake")
 
     values <- setNames(run$values$value, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(values[["Q1::t"]], 1L)        # PMSI + text both positive
     expect_equal(values[["Q2::t"]], 1L)        # PMSI positive + text no_candidate
     expect_true(is.na(values[["Q3::t"]]))      # PMSI negative + text no_candidate -> not absence
     expect_equal(values[["Q4::t"]], 0L)        # both complete, no positive -> documented negative
 
-    expect_equal(asc[["Q1::t"]], "complete")
-    expect_equal(asc[["Q2::t"]], "partial")    # text source not ascertained
-    expect_equal(asc[["Q3::t"]], "partial")
-    expect_equal(asc[["Q4::t"]], "complete")
+    expect_equal(cov[["Q1::t"]], "complete")
+    expect_equal(cov[["Q2::t"]], "partial")    # text channel not evaluable
+    expect_equal(cov[["Q3::t"]], "partial")
+    expect_equal(cov[["Q4::t"]], "complete")
 
     # Evidence from BOTH positive channels survives for Q1.
     q1_ev <- run$evidence[run$evidence$task_id == "Q1::t", ]

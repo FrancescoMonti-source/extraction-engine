@@ -95,18 +95,19 @@ test_that("hit_set_difference(a, b) is exactly combine = 'a & !b' end-to-end", {
     expect_equal(run_sugar$combine_rule, "hit_set_expr")
 })
 
-# Why: document the lowered three-valued semantics of "act & !signal" on real-ish
-# data -- in particular that an unavailable exclusion yields undetermined (partial),
-# never a silent definitive negative.
-test_that("the lowered expression evaluates as three-valued set algebra", {
+# Why: document the lowered OBSERVED semantics of "act & !signal" on real-ish data --
+# in particular that an unavailable exclusion keeps an act-hit task INCLUDED (B
+# produced no observed hit), with the uncertainty reported as channel_coverage, never
+# a silent definitive negative or an undetermined decision.
+test_that("the lowered expression evaluates as observed set algebra", {
     run <- run_variable(hs_var(), hs_tasks, hs_sources)
     dec <- setNames(run$values$decision, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(dec[["HS1::t"]], "included")        # act hit, signal negative
-    expect_equal(asc[["HS1::t"]], "complete")
-    expect_equal(dec[["HS2::t"]], "undetermined")    # act hit, signal UNAVAILABLE
-    expect_equal(asc[["HS2::t"]], "partial")
+    expect_equal(cov[["HS1::t"]], "complete")
+    expect_equal(dec[["HS2::t"]], "included")        # act hit, signal UNAVAILABLE -> kept
+    expect_equal(cov[["HS2::t"]], "partial")         # ...with coverage flagging it
     expect_equal(dec[["HS3::t"]], "excluded")        # act hit, signal hit
     expect_equal(dec[["HS4::t"]], "excluded")        # act negative
     expect_equal(dec[["HS5::t"]], "excluded")        # signal hit removes regardless

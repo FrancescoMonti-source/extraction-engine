@@ -45,16 +45,16 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
     run <- run_variable(var, wh_tasks, wh_sources)   # no caller: structured only
 
     value <- setNames(run$values$value, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(value[["Q1"]], 1L)        # diabetes code present
     expect_equal(value[["Q2"]], 0L)        # only a non-diabetes code -> negative
     expect_true(is.na(value[["Q3"]]))      # no diagnosis rows -> not ascertained
     expect_equal(value[["Q4"]], 1L)        # 2005 code still counts (no window)
 
-    expect_equal(asc[["Q1"]], "complete")
-    expect_equal(asc[["Q2"]], "complete")
-    expect_equal(asc[["Q3"]], "partial")
+    expect_equal(cov[["Q1"]], "complete")
+    expect_equal(cov[["Q2"]], "complete")
+    expect_equal(cov[["Q3"]], "partial")
 })
 
 # Why: whole-history source contribution must stay transparent like the windowed

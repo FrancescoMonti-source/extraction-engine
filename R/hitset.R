@@ -16,17 +16,21 @@
 # from silence; the audit keeps "no hit observed" distinct from "ascertained
 # negative" (see the design note's operator/interpretation boundary).
 #
-# The expression is parsed to an R AST, structurally validated, then evaluated as
-# THREE-VALUED (Kleene) logic over per-channel hit vectors. Each channel is a
-# logical vector over the task universe: TRUE = hit, FALSE = ascertained no-hit,
-# NA = unavailable/unascertained. R's own vectorised operators already implement
-# Kleene logic, which is exactly what we want:
-#   |  union        (TRUE | NA = TRUE,  FALSE | NA = NA)
-#   &  intersection (FALSE & NA = FALSE, TRUE & NA = NA)
-#   !  complement relative to the task universe (!NA = NA)
-# So NA-propagation gives honest ascertainment for free: the result is NA exactly
-# when its truth depends on an unavailable channel -> ascertainment "partial", and
-# the final decision is included / excluded / undetermined (never silently binary).
+# The expression is parsed to an R AST and structurally validated. The final cohort
+# decision uses OBSERVED hit-set algebra, NOT Kleene truth logic: each channel
+# contributes its OBSERVED hit set (a task is a member iff hit == TRUE; both an
+# ascertained no-hit (FALSE) and an unavailable channel (NA) mean "no observed hit").
+# The evaluator runs over two-valued observed-membership vectors:
+#   |  union of observed hit sets
+#   &  intersection of observed hit sets
+#   !  complement of an observed hit set relative to the task universe
+# `A & !B` with B unavailable keeps an A-hit task INCLUDED -- B produced no observed
+# hit, so the task stays in A. The uncertainty does NOT propagate into the decision;
+# it is reported separately as channel_coverage (complete/partial/failed) and kept in
+# the per-channel audit, which preserves the raw TRUE/FALSE/NA hit. (A strict
+# epistemic mode that propagates NA into the decision is a deliberate future
+# extension, not the default.) Set algebra over EXPLICIT observed hit sets, not
+# clinical ontology.
 #
 # This file is the PURE core (parser / grammar / role derivation / evaluator /
 # overlap), decoupled from the channel/reduce machinery; run_variable.R wraps it to
@@ -98,8 +102,9 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }, character(1))
 }
 
-# Evaluate a validated AST over a named list of per-channel logical vectors. Pure
-# three-valued logic via R's own operators; no eval(), no base-function exposure.
+# Evaluate a validated AST over a named list of per-channel logical vectors via R's
+# own operators; no eval(), no base-function exposure. The decision path passes
+# OBSERVED (two-valued) membership vectors, so the result is always TRUE/FALSE.
 .eval_hitset_expr <- function(node, vectors) {
     if (is.name(node)) return(vectors[[as.character(node)]])
     op <- as.character(node[[1L]])
@@ -112,21 +117,25 @@ suppressWarnings(suppressMessages(library(dplyr)))
 }
 
 # UpSet-style overlap summary: group tasks by their membership PATTERN across the
-# expression channels (the scientifically useful overlap structure), with the count,
-# the (pattern-determined) final decision and ascertainment. `wide` is one row per
-# task: task_id + one logical column per channel (hit T/F/NA). Keeps the per-channel
-# state columns so it is directly pivotable for ggupset/UpSetR.
-hit_set_overlap <- function(wide, channels, decision, ascertainment) {
+# expression channels (the scientifically useful overlap structure), with the count
+# and the pattern-determined final decision, decision_state, and channel_coverage.
+# `wide` is one row per task: task_id + one logical column per channel (hit T/F/NA,
+# NA states preserved). Keeps the per-channel state columns so it is directly
+# pivotable for ggupset/UpSetR.
+hit_set_overlap <- function(wide, channels, decision, decision_state,
+                            channel_coverage) {
     state_str <- function(x) ifelse(is.na(x), "NA", ifelse(x, "TRUE", "FALSE"))
     parts <- lapply(channels, function(ch) sprintf("%s:%s", ch, state_str(wide[[ch]])))
     pattern <- do.call(paste, c(parts, list(sep = " | ")))
     df <- wide
     df$pattern <- pattern
     df$decision <- decision
-    df$ascertainment <- ascertainment
+    df$decision_state <- decision_state
+    df$channel_coverage <- channel_coverage
     df %>%
         dplyr::group_by(dplyr::across(dplyr::all_of(
-            c(channels, "pattern", "decision", "ascertainment")))) %>%
+            c(channels, "pattern", "decision", "decision_state",
+              "channel_coverage")))) %>%
         dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
         dplyr::arrange(dplyr::desc(n))
 }

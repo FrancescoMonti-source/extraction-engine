@@ -87,15 +87,15 @@ test_that("documented_status returns the categorical status and distinct absence
                         caller = sm_fake, model_name = "fake")
 
     value <- setNames(run$values$value, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
     nr <- setNames(run$values$needs_review, run$values$task_id)
 
     expect_equal(value[["T1::t"]], "actif")        # documented status transcribed
-    expect_equal(asc[["T1::t"]], "complete")
+    expect_equal(cov[["T1::t"]], "complete")
     expect_equal(value[["T2::t"]], "indetermine")  # abstention is a VALID ascertained value
     expect_false(nr[["T2::t"]])
     expect_true(is.na(value[["T3::t"]]))            # no_candidate -> not ascertained
-    expect_equal(asc[["T3::t"]], "partial")
+    expect_equal(cov[["T3::t"]], "partial")
     expect_true(is.na(value[["T4::t"]]))            # definitive without evidence -> invalid
     expect_true(nr[["T4::t"]])
 

@@ -56,20 +56,20 @@ dia_var <- function() {
 # Why: dialysis is OR'd across ICD-10 + text with the researcher's any_positive().
 # A positive in either source yields 1; absence stays open-world (NA when a source
 # was merely silent, 0 only when every source ascertained a negative).
-test_that("dialysis multi-source OR yields the expected values and ascertainment", {
+test_that("dialysis multi-source OR yields the expected values and channel coverage", {
     run <- run_variable(dia_var(), dia_tasks, dia_sources,
                         caller = dia_fake, model_name = "fake")
     value <- setNames(run$values$value, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(value[["DG1::t"]], 1L)        # ICD-10 only
     expect_equal(value[["DG2::t"]], 1L)        # text only
     expect_true(is.na(value[["DG3::t"]]))      # both silent -> not ascertained
     expect_equal(value[["DG4::t"]], 0L)        # both ascertained negative
 
-    expect_equal(asc[["DG1::t"]], "partial")   # text was silent
-    expect_equal(asc[["DG2::t"]], "complete")
-    expect_equal(asc[["DG4::t"]], "complete")
+    expect_equal(cov[["DG1::t"]], "partial")   # text was silent
+    expect_equal(cov[["DG2::t"]], "complete")
+    expect_equal(cov[["DG4::t"]], "complete")
 
     expect_equal(run$combine_rule, "any_positive")   # researcher-selected rule, exposed
     expect_equal(run$selected_channels$channel,

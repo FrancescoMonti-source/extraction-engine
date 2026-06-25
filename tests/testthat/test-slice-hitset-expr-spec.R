@@ -1,11 +1,12 @@
 # Contract tests for the string boolean hit-set expression combine:
 #   combine = "(transplant_act | transplant_status) & !dialysis_signal"
-# Grammar: channel symbols + | & ! and parentheses, nothing else. Evaluation is
-# three-valued (Kleene) over per-channel hit vectors (TRUE hit / FALSE ascertained
-# no-hit / NA unavailable): | union, & intersection, ! complement over the task
-# universe. NA propagates honestly into ascertainment. The audit is built for
-# Venn/UpSet -- a membership long-form + an overlap summary -- NOT reduced to
-# included/excluded. Three code channels over synthetic data; no model.
+# Grammar: channel symbols + | & ! and parentheses, nothing else. The final decision
+# is OBSERVED hit-set algebra: a task is a member of a channel's set iff hit == TRUE;
+# both FALSE (ascertained no-hit) and NA (unavailable) mean "no observed hit". So the
+# decision is always determined (included/excluded); an unavailable channel surfaces
+# as channel_coverage = partial, NOT as an undetermined decision. The per-channel
+# audit (membership + overlap) preserves the raw TRUE/FALSE/NA. Three code channels
+# over synthetic data; no model.
 
 # Synthetic ICD-10 vehicles (real-shaped so they pass the usability check): Z94
 # (transplant status) as the two inclusion signals from two separate sources, Z99
@@ -86,34 +87,41 @@ hx_sources <- list(acts = hx_acts, status_dx = hx_status, dialysis_dx = hx_dia)
 
 hx_run <- function(...) run_variable(hx_var(), hx_tasks, hx_sources, ...)
 
-# Expected per-task evaluation of (act | status) & !dialysis :
-#   HX1 act T,            dia F -> (T|F)&!F = T  included     complete
-#   HX2 status T,         dia F -> (F|T)&!F = T  included     complete
-#   HX3 act T,            dia T -> (T|F)&!T = F  excluded     complete
-#   HX4 both negative,    dia F -> (F|F)&!F = F  excluded     complete
-#   HX5 act T,            dia NA-> (T|F)&!NA= NA undetermined partial   (exclusion unavailable)
-#   HX6 act+status NA,    dia F -> (NA|NA)&!F=NA undetermined partial   (inclusion unavailable)
-#   HX7 act T,            dia F -> same pattern as HX1 (counted together in overlap)
+# Expected per-task OBSERVED evaluation of (act | status) & !dialysis. Observed sets:
+# hit==TRUE is a member; FALSE and NA are both non-members. Decision always determined;
+# an NA channel only lowers channel_coverage.
+#   HX1 act T,         dia F      -> (T|F)&!F = T  included  complete
+#   HX2 status T,      dia F      -> (F|T)&!F = T  included  complete
+#   HX3 act T,         dia T      -> (T|F)&!T = F  excluded  complete
+#   HX4 both negative, dia F      -> (F|F)&!F = F  excluded  complete
+#   HX5 act T,         dia NA     -> observed (T|F)&!F = T   included  partial  (B unavailable)
+#   HX6 act+status NA, dia F      -> observed (F|F)&!F = F   excluded  partial  (A unavailable)
+#   HX7 act T,         dia F      -> same pattern as HX1 (counted together in overlap)
 
-test_that("a bare string combine evaluates as three-valued boolean set algebra", {
+test_that("a bare string combine evaluates as observed boolean set algebra", {
     run <- hx_run()
     val <- setNames(run$values$value, run$values$task_id)
     dec <- setNames(run$values$decision, run$values$task_id)
-    asc <- setNames(run$values$ascertainment, run$values$task_id)
+    ds  <- setNames(run$values$decision_state, run$values$task_id)
+    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(dec[["HX1::t"]], "included");     expect_equal(val[["HX1::t"]], 1L)
-    expect_equal(asc[["HX1::t"]], "complete")
+    expect_equal(cov[["HX1::t"]], "complete")
     expect_equal(dec[["HX2::t"]], "included");     expect_equal(val[["HX2::t"]], 1L)
     expect_equal(dec[["HX3::t"]], "excluded");     expect_equal(val[["HX3::t"]], 0L)
-    expect_equal(asc[["HX3::t"]], "complete")
+    expect_equal(cov[["HX3::t"]], "complete")
     expect_equal(dec[["HX4::t"]], "excluded");     expect_equal(val[["HX4::t"]], 0L)
 
-    # NA propagation -> undetermined, partial (NOT silently excluded)
-    expect_equal(dec[["HX5::t"]], "undetermined"); expect_true(is.na(val[["HX5::t"]]))
-    expect_equal(asc[["HX5::t"]], "partial")
-    expect_equal(dec[["HX6::t"]], "undetermined"); expect_true(is.na(val[["HX6::t"]]))
-    expect_equal(asc[["HX6::t"]], "partial")
+    # B unavailable -> the A-hit task stays INCLUDED (observed set algebra); the
+    # uncertainty is reported as channel_coverage, NOT as an undetermined decision.
+    expect_equal(dec[["HX5::t"]], "included");     expect_equal(val[["HX5::t"]], 1L)
+    expect_equal(cov[["HX5::t"]], "partial")
+    # A unavailable -> no observed inclusion hit -> excluded, but coverage flags it.
+    expect_equal(dec[["HX6::t"]], "excluded");     expect_equal(val[["HX6::t"]], 0L)
+    expect_equal(cov[["HX6::t"]], "partial")
 
+    # the decision is always determined in observed mode
+    expect_true(all(ds == "determined"))
     expect_equal(run$combine_rule, "hit_set_expr")
 })
 
@@ -148,12 +156,14 @@ test_that("membership long-form exposes per-channel hit structure for Venn/UpSet
 })
 
 # Why: the overlap summary is the scientifically useful view -- how the source hit
-# sets overlap, with counts + the pattern-determined decision/ascertainment.
+# sets overlap (TRUE/FALSE/NA preserved), with counts + the pattern-determined
+# decision, decision_state, and channel_coverage.
 test_that("overlap summary groups tasks by membership pattern (UpSet-style)", {
     run <- hx_run()
     ov <- run$overlap
     expect_true(all(c("transplant_act", "transplant_status", "dialysis_signal",
-                      "pattern", "decision", "ascertainment", "n") %in% names(ov)))
+                      "pattern", "decision", "decision_state",
+                      "channel_coverage", "n") %in% names(ov)))
 
     # the summary partitions the cohort
     expect_equal(sum(ov$n), nrow(hx_tasks))
@@ -163,13 +173,15 @@ test_that("overlap summary groups tasks by membership pattern (UpSet-style)", {
                   ov$dialysis_signal %in% FALSE, ]
     expect_equal(inc_pat$n, 2L)
     expect_equal(inc_pat$decision, "included")
-    expect_equal(inc_pat$ascertainment, "complete")
+    expect_equal(inc_pat$channel_coverage, "complete")
+    # NA states are preserved in the overlap (HX5 has dialysis NA)
+    expect_true(any(is.na(ov$dialysis_signal)))
 
-    # aggregate decision counts across patterns
+    # aggregate decision counts across patterns (observed algebra: always determined)
     dec_n <- tapply(ov$n, ov$decision, sum)
-    expect_equal(unname(dec_n[["included"]]), 3L)       # HX1, HX2, HX7
-    expect_equal(unname(dec_n[["excluded"]]), 2L)       # HX3, HX4
-    expect_equal(unname(dec_n[["undetermined"]]), 2L)   # HX5, HX6
+    expect_equal(unname(dec_n[["included"]]), 4L)       # HX1, HX2, HX5, HX7
+    expect_equal(unname(dec_n[["excluded"]]), 3L)       # HX3, HX4, HX6
+    expect_false("undetermined" %in% names(dec_n))      # no NA-propagated decision
 })
 
 # --- the parser / grammar, in isolation --------------------------------------
@@ -194,21 +206,21 @@ test_that("hit_set_expr() rejects everything outside the grammar", {
     expect_error(hit_set_expr(""), "non-empty")             # empty
 })
 
-# Why: the evaluator is pure three-valued (Kleene) logic; verify NA short-circuits.
-test_that(".eval_hitset_expr is Kleene three-valued logic", {
-    ast <- hit_set_expr("(a | b) & !c")$ast
-    res <- .eval_hitset_expr(ast, list(
-        a = c(TRUE,  FALSE, TRUE,  NA),
-        b = c(FALSE, TRUE,  FALSE, FALSE),
-        c = c(FALSE, FALSE, TRUE,  FALSE)))
-    expect_equal(res, c(TRUE, TRUE, FALSE, NA))
+# Why: the audit truth and the cohort decision are decoupled. The membership audit
+# preserves the raw NA for an unavailable channel, while the observed set-algebra
+# decision treats that NA as "no observed hit" (non-member) -- so A & !B with B
+# unavailable stays included, and the uncertainty lives ONLY in channel_coverage.
+test_that("observed decision and the raw-NA audit are decoupled", {
+    run <- hx_run()
+    m <- run$membership
+    hit <- m$hit[m$task_id == "HX5::t" & m$channel == "dialysis_signal"]
+    val <- run$values[run$values$task_id == "HX5::t", ]
 
-    # FALSE & NA short-circuits to FALSE (decision determined despite an unknown);
-    # TRUE & NA stays NA (decision depends on the unavailable channel)
-    expect_false(.eval_hitset_expr(hit_set_expr("a & b")$ast,
-                                   list(a = FALSE, b = NA)))
-    expect_true(is.na(.eval_hitset_expr(hit_set_expr("a & b")$ast,
-                                        list(a = TRUE, b = NA))))
+    expect_true(is.na(hit))                     # audit preserves the unavailable state
+    expect_equal(val$decision, "included")       # but the decision treats NA as non-member
+    expect_equal(val$value, 1L)
+    expect_equal(val$decision_state, "determined")
+    expect_equal(val$channel_coverage, "partial")  # the only place the NA surfaces
 })
 
 # --- spec-time channel validation --------------------------------------------
