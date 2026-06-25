@@ -15,6 +15,27 @@ Project data preparation remains upstream: the files supplied in `/data` already
 the study population and outer protocol period. The engine only constructs variables
 within that supplied study universe.
 
+## Checkpoint: spec-layer architecture validated
+
+Tag `checkpoint/spec-layer-validated` marks a validated state of the spec-layer spine
+(concept → channel → variable_template → variable_spec → run_variable), exercised end-to-end across:
+
+- a categorical single-channel text variable (smoking);
+- a binary multi-source OR variable with transparent source contribution (diabetes);
+- an event-scoped multi-field text variable (anastomoses);
+- deterministic code / lab / text execution (ICD-10 presence, analyte max-value, retrieval/eligibility);
+- real retrieval + real local-model runs (gemma3:4b) on de-identified data — not just fakes.
+
+The LLM step is **review-by-design**. The engine does **not** claim LLM accuracy; it guarantees the
+deterministic eligibility / retrieval / combine / audit behavior around the LLM call and emits a
+reviewable, grounded envelope (evidence, status/provenance, field-level acceptance, `needs_review`,
+source contribution). See the LLM-boundary promise in
+[`extraction_engine_design_formalization.md`](extraction_engine_design_formalization.md) §1 and §11.
+
+Reproduce: deterministic suite `Rscript tests/testthat.R` (340 tests, 0 warnings); real-model runs
+(need a local Ollama + de-identified data outside the repo) `scripts/run_variable_smoking_real.R`,
+`scripts/run_variable_diabetes_real.R`, `scripts/run_variable_anastomoses_real.R`.
+
 Start with:
 
 - **[DESIGN.md](DESIGN.md)** — the current owner-facing product and architecture.

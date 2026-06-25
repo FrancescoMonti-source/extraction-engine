@@ -4538,3 +4538,25 @@ TEXT retrieval (no consumer), and the citation_warning OR-hoist (no consumer).
 
 **Files (this entry):** `R/run_variable.R`, `tests/testthat/test-slice-anastomoses-spec.R`,
 `scripts/run_variable_anastomoses_real.R` (new), `HANDOFF.md`. Run artifacts -> gitignored outputs/.
+
+---
+
+## Checkpoint: spec-layer architecture validated (tag) — Claude (2026-06-25)
+
+Administrative milestone marking the validated architecture state. Tag
+`checkpoint/spec-layer-validated` on branch `codex/multisource-diabetes-spike`.
+
+The spec-layer spine (concept -> channel -> variable_template -> variable_spec -> run_variable) is
+validated end-to-end across: categorical single-channel text (smoking); binary multi-source OR with
+transparent source contribution (diabetes); event-scoped multi-field text (anastomoses); deterministic
+code/lab/text execution; and real retrieval + real local-model (gemma3:4b) runs on de-identified data.
+
+The LLM step is review-by-design. The engine does NOT claim LLM accuracy; it guarantees the
+deterministic eligibility/retrieval/combine/audit behavior around the LLM call and emits a reviewable,
+grounded envelope. The promise/non-promise contract is in
+extraction_engine_design_formalization.md §1 and §11, and summarised in README.md ("Checkpoint").
+
+Deterministic suite: 340 tests, 0 warnings. Real-model runners:
+scripts/run_variable_{smoking,diabetes,anastomoses}_real.R (artifacts -> gitignored outputs/).
+
+**Files (this entry):** `README.md`, `HANDOFF.md`. Then tagged.
