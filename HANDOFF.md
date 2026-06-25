@@ -3983,3 +3983,54 @@ so it satisfies the build-then-name guardrail before any constructor *syntax* is
 
 **Files (this entry):** `tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`. Committed as
 slice 1b.
+
+---
+
+## Slice 2: smoking — second concept shape + second policy — Claude / owner (2026-06-25)
+
+**Done.** A second concept that stresses NEW architecture axes (per
+[[validate-via-concept-shape-not-depth]]): text-dominant, **categorical** output, a **non-`any`
+collapse** (`documented_status`), real parser/schema behaviour, evidence-sentence grounding, and
+`invalid` / `citation_warning` / `no_candidate` semantics. Also the **second non-`any`
+construction policy**, so constructor-syntax extraction is now justified (still deferred until we
+choose to). Full suite **219/219**.
+
+**Owner rulings folded in:**
+1. **Concept stays neutral: `smoking_concept_spec()`** (name `"smoking"`), not
+   `documented_smoking_status`. The text channel declares only the route (Lucene selector) and
+   carries **no** answer schema. "Documented current status" lives in the **template/activation**
+   (the categorical `text_extractor = smoking_definition()`) and **output**
+   (`categorical_output(SMOKING_STATUSES)`). New runner seam: the text extractor is read from the
+   **activation first**, falling back to the channel — so a neutral concept (smoking) and a
+   concept-owned one (diabetes) both work. `.activate_channels` gained `text_extractor`.
+2. **`pmsi_tobacco_f17` left OUT of slice 2** — single text channel, so nothing implies
+   F17/Z72.0 resolves categorical smoking status. (A weak `tobacco_coding_present` signal could be
+   added later, explicitly marked non-current-status.)
+3. **D1 keep-and-flag implemented, scoped to smoking.** `parse_smoking` flipped from fail-closed to
+   keep-and-flag: a status grounded by >=1 real id is kept even if the model also cited an
+   unsupplied id, surfaced as a structured **`citation_warning`** column (not a buried `CAUTION`
+   substring, not `invalid`). A status grounded ONLY by an invented id still has no grounding -> it
+   stays `invalid`. The invented id never materializes as evidence. Scope kept to the smoking field
+   + the envelope column; not generalized engine-wide.
+
+**New vocabulary / spine:** `categorical_output(levels)`, `documented_status()` combine, and a
+`.documented_status_variable` collapse in `run_variable.R` that preserves the categorical STRING
+(vs the binary hit of the OR/numeric paths) and keeps `valid` (status, complete) /
+`no_candidate` (NA, partial) / `invalid` (NA, needs_review) distinct, carrying `citation_warning`.
+`indetermine` is a VALID ascertained value (model judged evidence inconclusive), deliberately
+distinct from `no_candidate` (nothing retrieved).
+
+**Boundary held:** `R/types/smoking.R` (+`smoking_definition`/`parse_smoking`) and
+`adapter_smoking.R`'s `SMOKING_QUERY` are reused as **temporary adapters** (the extractor + the
+selector), not deleted; the user-facing path is concept → channel → variable_template →
+variable_spec → run_variable. Text source is pre-retrieved synthetic fixtures + a deterministic
+fake caller (real retrieval wiring still deferred).
+
+**Still open (carried):** multi-source categorical reconcile (the `documented_status` slot is ready
+but only single-channel is wired); real retrieval/eligibility wiring; whole-history "ever smoked"
+variant; constructor-syntax freeze (now unblocked by a 2nd policy, still deferred); generalizing
+`citation_warning` beyond smoking.
+
+**Files (this entry):** `R/concepts-smoking.R` (new), `R/operators.R`, `R/spec.R`,
+`R/run_variable.R`, `R/types/smoking.R`, `tests/testthat.R`,
+`tests/testthat/test-slice-smoking-spec.R` (new), `HANDOFF.md`. Committed as slice 2.

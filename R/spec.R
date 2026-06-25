@@ -58,15 +58,19 @@ use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
 }
 
 # Turn a template's declared channel selection into per-channel use_channel()
-# records. Generic: a text-type channel receives the template's text method; every
-# other channel is activated with defaults. If the caller already supplied a named
-# list of use_channel() (a direct override), it is returned unchanged.
-.activate_channels <- function(concept, channels, text_method = NULL) {
+# records. Generic: a text-type channel receives the template's text method and,
+# when the concept is neutral (no answer schema on the channel), the template's
+# text_extractor -- so "which documented status" is a template/activation choice,
+# not baked into the concept. Other channels are activated with defaults. If the
+# caller already supplied a named list of use_channel() (a direct override), it is
+# returned unchanged.
+.activate_channels <- function(concept, channels, text_method = NULL,
+                               text_extractor = NULL) {
     if (is.list(channels) && !is.null(names(channels))) return(channels)
     channel_names <- as.character(channels)
     uses <- lapply(channel_names, function(nm) {
         if (identical(concept$channels[[nm]]$type, "text")) {
-            use_channel(method = text_method)
+            use_channel(method = text_method, extractor = text_extractor)
         } else {
             use_channel()
         }

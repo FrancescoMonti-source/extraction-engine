@@ -66,10 +66,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 stop("Text channel '", channel_name, "' requires a caller.",
                      call. = FALSE)
             }
-            extractor <- channel_def$extractor          # concept-owned answer definition
+            # The answer schema may live on the activation (neutral concept, e.g.
+            # smoking) or default to the channel (concept-owned, e.g. diabetes).
+            extractor <- variable$channels[[channel_name]]$extractor
+            if (is.null(extractor)) extractor <- channel_def$extractor
             if (is.null(extractor)) {
                 stop("Text channel '", channel_name,
-                     "' declares no concept-owned extractor.", call. = FALSE)
+                     "' has no extractor (activation or concept).", call. = FALSE)
             }
             run_extraction(
                 sources[[source]]$coverage, sources[[source]]$candidates,
@@ -172,6 +175,63 @@ suppressWarnings(suppressMessages(library(dplyr)))
     list(values = values, source_status = status, evidence = evidence)
 }
 
+# documented_status(): a single text channel whose accepted categorical status
+# becomes the cohort value. Keeps the categorical STRING (not a binary hit), and
+# the three non-positive outcomes distinct:
+#   valid        -> the status; ascertainment complete
+#   no_candidate -> NA, partial (nothing retrieved; open-world, not absence)
+#   invalid      -> NA, needs_review (e.g. definitive status without grounding)
+# citation_warning (D1 keep-and-flag) rides through as a structured column: a value
+# grounded by >=1 real id is kept even if the model also cited an unsupplied id.
+.documented_status_variable <- function(variable, tasks, channel_name, result) {
+    var_name <- variable$name
+    source_name <- .source_name_for_channel(channel_name, variable)
+    cov <- result$coverage
+    vals <- result$values
+    ev <- result$evidence
+    task_ids <- as.character(tasks$task_id)
+
+    rows <- bind_rows(lapply(task_ids, function(tid) {
+        state <- cov$processing_state[cov$task_id == tid]
+        state <- if (length(state)) as.character(state[[1]]) else "no_eligible_source"
+        vrow <- vals[vals$task_id == tid, , drop = FALSE]
+        status_val <- if (nrow(vrow)) as.character(vrow$accepted_value[[1]]) else NA_character_
+        cw <- isTRUE(nrow(vrow) > 0L && "citation_warning" %in% names(vrow) &&
+                     isTRUE(vrow$citation_warning[[1]]))
+        reason <- if (nrow(vrow)) as.character(vrow$validity_reason[[1]]) else NA_character_
+        needs_review <- state %in% c("invalid", "model_error", "processing_error")
+        tibble::tibble(
+            task_id = tid,
+            value = if (identical(state, "valid")) status_val else NA_character_,
+            ascertainment = if (identical(state, "valid")) "complete" else "partial",
+            needs_review = needs_review,
+            citation_warning = cw,
+            review_reason = if (needs_review) reason else NA_character_,
+            status = switch(state,
+                valid = "complete", invalid = "invalid",
+                model_error = "error", processing_error = "error",
+                "unavailable"))
+    }))
+
+    values <- rows %>%
+        transmute(task_id, variable = var_name, value, ascertainment,
+                  needs_review, citation_warning, review_reason)
+    source_status <- rows %>%
+        transmute(task_id, variable = var_name, channel = channel_name,
+                  source = source_name, status, value, citation_warning, needs_review)
+    evidence <- if (nrow(ev)) {
+        ev %>% transmute(task_id, variable = var_name, channel = channel_name,
+                         source = source_name, source_row_id = hit_ref,
+                         evidence_ref = hit_ref, hit_text)
+    } else {
+        tibble::tibble(task_id = character(), variable = character(),
+                       channel = character(), source = character(),
+                       source_row_id = character(), evidence_ref = character(),
+                       hit_text = character())
+    }
+    list(values = values, source_status = source_status, evidence = evidence)
+}
+
 run_variable <- function(variable, tasks, sources, caller = NULL,
                          model_name = "fake") {
     if (!inherits(variable, "ee_variable_spec")) {
@@ -201,9 +261,22 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         source = selected_sources,
         produces = selected_produces)
 
-    if (inherits(variable$combine, "ee_combiner") &&
-        identical(variable$combine$kind, "any_positive")) {
+    combine <- variable$combine
+    if (inherits(combine, "ee_combiner") &&
+        identical(combine$kind, "any_positive")) {
         out <- .combine_any_variable(variable, tasks, channel_results)
+    } else if (inherits(combine, "ee_combiner") &&
+               identical(combine$kind, "documented_status")) {
+        if (length(channel_results) != 1L) {
+            stop("documented_status() currently supports a single channel.",
+                 call. = FALSE)
+        }
+        ch <- names(channel_results)[[1]]
+        if (!identical(.channel_type(ch, variable), "text")) {
+            stop("documented_status() currently requires a text channel.",
+                 call. = FALSE)
+        }
+        out <- .documented_status_variable(variable, tasks, ch, channel_results[[1]])
     } else if (length(channel_results) == 1L) {
         ch <- names(channel_results)[[1]]
         reducer <- variable$channels[[ch]]$reducer
@@ -214,8 +287,8 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         }
         out <- .single_numeric_variable(variable, tasks, ch, channel_results[[1]])
     } else {
-        stop("This experimental runner only supports any_positive() or a single ",
-             "max_value() channel.", call. = FALSE)
+        stop("This experimental runner supports any_positive(), documented_status(), ",
+             "or a single max_value() channel.", call. = FALSE)
     }
     c(list(spec = variable, selected_channels = selected,
            channel_results = channel_results), out)

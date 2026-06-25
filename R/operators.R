@@ -28,9 +28,19 @@ max_value <- function() {
     .experimental_spec(list(kind = "max_value"), "ee_reducer")
 }
 
-# --- cross-channel combiners --------------------------------------------------
+# --- cross-channel combiners / collapses --------------------------------------
 any_positive <- function() {
     .experimental_spec(list(kind = "any_positive"), "ee_combiner")
+}
+
+# Non-`any` collapse for a categorical documented status: take the activated
+# channel's documented status as the value, keeping `indetermine` (model judged
+# the evidence inconclusive) distinct from `no_candidate` (nothing retrieved) and
+# from `invalid` (definitive status without grounding -> needs_review). For one
+# channel it is a passthrough; the slot is ready for a categorical reconcile if a
+# second channel is ever activated.
+documented_status <- function() {
+    .experimental_spec(list(kind = "documented_status"), "ee_combiner")
 }
 
 # --- text extraction methods --------------------------------------------------
@@ -50,6 +60,12 @@ binary_output <- function() {
 
 number_output <- function() {
     .experimental_spec(list(kind = "number"), "ee_output_type")
+}
+
+# A categorical cohort column over a fixed level set (e.g. smoking statuses).
+categorical_output <- function(levels) {
+    .experimental_spec(list(kind = "categorical", levels = as.character(levels)),
+                       "ee_output_type")
 }
 
 # --- absence policies ---------------------------------------------------------

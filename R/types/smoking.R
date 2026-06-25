@@ -75,12 +75,22 @@ parse_smoking <- function(result, snippet_ids) {
     } else if (status != "indetermine" && !length(ids)) {
         reason <- c(reason, "definitive status without evidence")
     }
-    if (length(invented)) reason <- c(reason, "cited unsupplied snippet id")  # fail closed
+    # D1 keep-and-flag (owner-ratified): an invented citation does NOT invalidate a
+    # value already grounded by >=1 real id -- it is surfaced as a structured
+    # citation_warning. A value grounded ONLY by an invented id still has no real
+    # grounding, so it is already rejected by "definitive status without evidence"
+    # above (ids is empty). The invented id never materializes as evidence
+    # (.materialize_task_evidence intersects with supplied ids).
+    citation_warning <- length(invented) > 0L
     fields <- tibble::tibble(
         field = "smoking_status", status = status, normalized_value = status,
         evidence_ids = list(ids),
         field_validity = if (length(reason)) "invalid" else "valid",
-        validity_reason = paste(reason, collapse = "; "))
+        validity_reason = paste(reason, collapse = "; "),
+        citation_warning = citation_warning,
+        citation_warning_reason = if (citation_warning)
+            "model cited >=1 unsupplied snippet id (value kept, flagged)"
+            else NA_character_)
     list(fields = fields, summary = note)
 }
 
