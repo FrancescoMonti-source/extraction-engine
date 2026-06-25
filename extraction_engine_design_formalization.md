@@ -20,6 +20,8 @@ A central boundary:
 
 The engine should avoid introducing new semantic layers unless they are explicitly requested by the protocol. Whenever possible, it should expose source contributions rather than infer confidence levels.
 
+Concretely at the LLM boundary, the engine does **not** promise that the model's output is accurate — that is reviewed. It promises a deterministic pipeline that selected the candidates, called the model under a controlled schema, accepted only the grounded/valid parts, routed failures and ungrounded claims to review, and preserved evidence, status, and provenance. See §11.
+
 ---
 
 ## 2. Core mental model
@@ -697,6 +699,28 @@ only fabricated evidence id
 ```
 
 This keep-and-flag rule is now uniform across the text parsers (smoking, anastomoses, and the shared binary-presence definition), implemented once in a shared `resolve_cited_ids()` helper rather than re-derived per concept. Surfacing the flag into the higher combine/envelope paths stays incremental: the single-channel text paths (`documented_status`, `collect_fields`) carry it; the multi-source OR path (`any_positive`) computes it per channel but does not yet hoist it into the combined source status, because doing so would extend the generic combine contract with no current consumer.
+
+### What the engine promises at the LLM boundary
+
+The LLM call is the **only** non-deterministic node in the pipeline; everything else (retrieval and eligibility, the structured code/lab measures, the combine operators, the absence policy, and the audit envelope) is deterministic. That node is human-reviewed by design — the researcher never assumes the model is correct.
+
+So the engine does **not** promise:
+
+```text
+the LLM output is accurate.
+```
+
+The engine **does** promise that, around that one call, the deterministic pipeline:
+
+```text
+1. selected the candidates                         (retrieval + eligibility)
+2. called the model under a controlled schema      (grammar-enforced JSON)
+3. accepted only the grounded / valid parts        (field-level acceptance)
+4. routed failures or ungrounded claims to review  (needs_review, citation_warning)
+5. preserved evidence / status / provenance        (the audit envelope)
+```
+
+Consequently, accuracy / gold-label scoring of the model is **out of scope** for the engine's guarantees. A run where the model extracted little, abstained (`not_documented`), or made an ungrounded claim that was routed to `needs_review` is the pipeline working as promised, not a failure. The engine's job at this boundary is a controlled, fully auditable, reviewable call — not a correct one. Validation therefore targets the *mechanism* (does the deterministic pipeline run end-to-end and emit a reviewable, grounded envelope), not the model's answers.
 
 ---
 
