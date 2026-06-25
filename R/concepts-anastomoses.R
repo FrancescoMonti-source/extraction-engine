@@ -37,21 +37,5 @@ recipient_anastomoses_template <- function(concept = anastomoses_concept_spec())
             text_extractor = anastomoses_definition(),        # multi-field answer schema
             output = fields_output(names(ANASTOMOSES_FIELDS)),
             combine = collect_fields(),
-            absence_policy = open_world()),
-        build = function(params) {
-            variable_spec(
-                name = params$name,
-                concept = concept,
-                unit = params$unit,
-                anchor = params$anchor,
-                window = params$window,
-                channels = .activate_channels(
-                    concept, params$channels,
-                    text_method = params$text_method,
-                    text_extractor = params$text_extractor),
-                output = params$output,
-                combine = params$combine,
-                absence_policy = params$absence_policy,
-                template_name = params$template_name)
-        })
+            absence_policy = open_world()))   # build = .default_template_build(concept)
 }

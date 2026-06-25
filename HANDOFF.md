@@ -4299,3 +4299,43 @@ marked done. No constructor-syntax or variable-semantics change.
 **Files (this entry):** `R/extract.R`, `R/types/smoking.R`, `R/types/anastomoses.R`,
 `R/run_variable.R`, `tests/testthat/test-contract.R`, `tests/testthat/test-slice-anastomoses-spec.R`,
 `HANDOFF.md`.
+
+---
+
+## Slice / cleanup #4: constructor-syntax extraction (template build) — Claude (2026-06-25)
+
+**Done.** All four concept templates (diabetes, smoking, dialysis, anastomoses) carried the
+IDENTICAL `build = function(params) { variable_spec(...) }` closure -- a 1:1 map of merged params
+into a `variable_spec`, the only per-concept difference being whether a `text_extractor` was
+threaded (already just a param, `NULL` when absent). Factored that closure into one shared
+`.default_template_build(concept)` (R/spec.R) and made `variable_template(build = NULL)` default to
+it. Each template now declares only its `defaults` and omits `build` entirely; ~13 lines of copy-
+pasted closure removed per concept. Behaviour is byte-identical (the generated specs are unchanged),
+full suite **308/308**, 0 warnings.
+
+- `.default_template_build(concept)` (R/spec.R): the generic 1:1 builder. A template that ever needs
+  a genuinely different assembly can still pass its own `build =` -- the escape hatch is preserved.
+- `variable_template()`: `build` is now optional (`NULL` -> default builder); validation message
+  reworded to "build= must be a function".
+- The four `concepts-*.R` templates: dropped the inline build closure (one-line comment left where it
+  was, pointing at the default builder).
+
+Proven by a focused test in `test-slice-diabetes-spec.R` (default builder assembles a working spec
+when `build` is omitted; an explicit `build =` is still honoured and receives the merged params) plus
+the unchanged end-to-end slice tests that drive all four templates through the default builder.
+
+**Deliberately NOT done (considered, consciously deferred):**
+- Speculative knobs `use_channel(method=, prompt=)` and `llm_after_lucene(top_n=)` are set-but-not-
+  read. They are KEPT: `top_n`/`method` is an acknowledged retrieval-ordering seam (noted in
+  operators.R), not accidental cruft. Remove only if the seam is abandoned.
+- Declared HDW metadata `native_grain` / `required_roles` / `linkage` is not consumed by the runner
+  yet but is design-note-backed channel declaration (and `linkage` is asserted in a test). KEPT.
+- Renaming `binary_output()`/`number_output()` to the design note's `binary()`/`numeric()` spelling
+  is still declined (base masking). `use_channel()` name kept (owner decision).
+
+**Owner-set order:** (1) retrieval wiring [done]; (2) whole-history "ever" [done]; (3) generalize D1
+`citation_warning` [done]; (4) constructor-syntax extraction / API cleanup [done].
+
+**Files (this entry):** `R/spec.R`, `R/concepts-diabetes.R`, `R/concepts-smoking.R`,
+`R/concepts-dialysis.R`, `R/concepts-anastomoses.R`, `tests/testthat/test-slice-diabetes-spec.R`,
+`HANDOFF.md`.

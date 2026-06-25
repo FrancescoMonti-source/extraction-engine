@@ -45,21 +45,5 @@ documented_smoking_status_periop_template <- function(concept = smoking_concept_
             text_extractor = smoking_definition(),   # categorical answer schema (types/smoking.R)
             output = categorical_output(SMOKING_STATUSES),
             combine = documented_status(),
-            absence_policy = open_world()),
-        build = function(params) {
-            variable_spec(
-                name = params$name,
-                concept = concept,
-                unit = params$unit,
-                anchor = params$anchor,
-                window = params$window,
-                channels = .activate_channels(
-                    concept, params$channels,
-                    text_method = params$text_method,
-                    text_extractor = params$text_extractor),
-                output = params$output,
-                combine = params$combine,
-                absence_policy = params$absence_policy,
-                template_name = params$template_name)
-        })
+            absence_policy = open_world()))   # build = .default_template_build(concept)
 }

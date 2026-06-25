@@ -60,21 +60,5 @@ dialysis_status_template <- function(concept = dialysis_concept_spec()) {
             text_extractor = dialysis_text_definition(),
             output = binary_output(),
             combine = any_positive(),
-            absence_policy = open_world()),
-        build = function(params) {
-            variable_spec(
-                name = params$name,
-                concept = concept,
-                unit = params$unit,
-                anchor = params$anchor,
-                window = params$window,
-                channels = .activate_channels(
-                    concept, params$channels,
-                    text_method = params$text_method,
-                    text_extractor = params$text_extractor),
-                output = params$output,
-                combine = params$combine,
-                absence_policy = params$absence_policy,
-                template_name = params$template_name)
-        })
+            absence_policy = open_world()))   # build = .default_template_build(concept)
 }

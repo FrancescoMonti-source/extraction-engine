@@ -81,6 +81,33 @@ test_that("diabetes concept and baseline template select channels explicitly", {
     expect_false("glucose_measurements" %in% names(baseline$channels))
 })
 
+# Why: #4 factored the per-concept template build() -- it was identical across the four
+# concepts -- into a shared default builder, so a template may omit build=. The default
+# must produce the same executable variable_spec, and an explicit build= must still be
+# honoured for a template that ever needs a different assembly.
+test_that("variable_template build= defaults to the shared builder and still accepts an override", {
+    concept <- diabetes_concept_spec()
+
+    # Omitted build: the default 1:1 builder assembles a working spec.
+    tmpl <- diabetes_baseline_status_template(concept)
+    expect_true(is.function(tmpl$build))
+    spec <- variable_spec(template = tmpl, name = "diabete_pre_greffe",
+                          unit = "transplant", anchor = "anchor_date")
+    expect_s3_class(spec, "ee_variable_spec")
+    expect_equal(spec$combine$kind, "any_positive")
+    expect_setequal(names(spec$channels),
+                    c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
+
+    # Explicit build= escape hatch: a template can still supply its own assembly.
+    custom <- variable_template(
+        name = "custom_tmpl", concept = concept, defaults = list(unit = "x"),
+        build = function(params) structure(list(tag = "custom", unit = params$unit),
+                                           class = "ee_variable_spec"))
+    out <- variable_spec(template = custom, name = "v")
+    expect_equal(out$tag, "custom")
+    expect_equal(out$unit, "x")     # default param flows into the custom build
+})
+
 # Why: the executable slice must preserve the formal boundary: selected channels
 # resurface source-specific signals, variable_spec combines them, and output keeps
 # final value, per-source status, and evidence refs instead of hiding judgment.

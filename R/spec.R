@@ -78,17 +78,45 @@ use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
     setNames(uses, channel_names)
 }
 
+# The default template build(): map the merged params 1:1 into a variable_spec,
+# activating the declared channels with the template's text method/extractor. Every
+# concept template (diabetes, smoking, dialysis, anastomoses) used this SAME closure --
+# the only per-concept difference (whether a text_extractor is supplied) is already
+# just a param, NULL when absent -- so it is factored here instead of copy-pasted into
+# each concept. A template needing a genuinely different assembly can still pass its
+# own build = to variable_template().
+.default_template_build <- function(concept) {
+    function(params) {
+        variable_spec(
+            name = params$name,
+            concept = concept,
+            unit = params$unit,
+            anchor = params$anchor,
+            window = params$window,
+            channels = .activate_channels(
+                concept, params$channels,
+                text_method = params$text_method,
+                text_extractor = params$text_extractor),
+            output = params$output,
+            combine = params$combine,
+            absence_policy = params$absence_policy,
+            template_name = params$template_name)
+    }
+}
+
 # A variable_template is a CONCEPT-SPECIFIC parametric quickstart (not a generic
-# computation pattern). Its build() turns merged parameters into a variable_spec.
-variable_template <- function(name, concept, defaults = list(), build) {
+# computation pattern). Its build() turns merged parameters into a variable_spec; when
+# omitted it defaults to the 1:1 .default_template_build() above (the common case).
+variable_template <- function(name, concept, defaults = list(), build = NULL) {
     if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
         stop("variable_template() requires one non-empty name.", call. = FALSE)
     }
     if (!inherits(concept, "ee_concept_spec")) {
         stop("variable_template() requires a concept_spec().", call. = FALSE)
     }
+    if (is.null(build)) build <- .default_template_build(concept)
     if (!is.function(build)) {
-        stop("variable_template() requires a build function.", call. = FALSE)
+        stop("variable_template() build= must be a function.", call. = FALSE)
     }
     .experimental_spec(
         list(name = name, concept = concept, defaults = defaults, build = build),
