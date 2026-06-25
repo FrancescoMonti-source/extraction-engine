@@ -4421,3 +4421,38 @@ structured unit tests, scripts) -- not the public architecture.
 
 **Files (this entry):** `R/structured.R`, `R/run_variable.R`, `tests/testthat/test-structured.R`,
 `tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`.
+
+---
+
+## Validation: new vocabulary end-to-end on real model + real data — Claude (2026-06-25)
+
+**Done.** First time the spec layer runs against an actual model instead of a `fake` caller. Every
+text path in the spike had only ever been exercised with fakes; this closes that gap. New runner
+`scripts/run_variable_smoking_real.R` drives `documented_smoking_status_periop` over the real
+de-identified smoking pool through the FULL new chain: raw note text -> `create_tcorpus` -> Lucene
+retrieval + date-window eligibility -> `gemma3:4b` structured extraction -> categorical values +
+audit envelope (source_status, evidence, citation_warning). `run_variable()`, not the old direct
+scripts.
+
+- **Model gate honoured:** pre-flighted `scripts/check_grammar_enforcement.R` -> `gemma3:4b` RELIABLE
+  (8/8, 0 prose escapes). Reasoning models (gpt-oss/gemma4) are rejected by that gate; the runner is
+  hard-wired to gemma3:4b. Ollama pre-flighted (`ollama list`).
+- **Data:** `C:/Users/franc/Documents/Datasets/tabac_eval_pool_1000.rds` (450 rows: PATID, DATEACTE,
+  role, ELTID_tabac_contexte, text_tabac_llm). Real note text + real DATEACTE; SYNTHETIC per-note
+  subject key for clean 1:1 task<->document linkage. No gold label in the pool -> this validates the
+  MECHANISM, not accuracy.
+- **Results:** N=3 and N=10 both clean. N=10: actif=5 sevre=1 non_fumeur=4; ascertainment complete=10;
+  channel status complete=10; grounded 10/10; needs_review=0; citation_warning=0; ~2.7s/note.
+
+**PRIVACY (held):** console prints ONLY aggregates (counts/rates) -- never note text, model evidence
+quotes, or subject ids. Per-row detail (PHI, incl. evidence text) is written ONLY to
+`outputs/*.rds`, which is gitignored (`outputs/` + `*.rds`); verified via `git check-ignore`. The
+committed script contains NO data. Clinical data never touches the repo.
+
+**What this proves / does NOT:** proves the new vocabulary + retrieval + grammar-enforced extraction
+work together on real inputs and produce a grounded, reviewable envelope. Does NOT measure accuracy
+(no gold), does NOT cover the event-scoped (anastomoses) retrieval path, and is one variable. A
+natural next step if wanted: a held-out gold comparison, or the same wiring for a second variable.
+
+**Files (this entry):** `scripts/run_variable_smoking_real.R` (new), `HANDOFF.md`. Run artifacts stay
+in gitignored `outputs/`.
