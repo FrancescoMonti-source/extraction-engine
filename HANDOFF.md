@@ -4146,3 +4146,23 @@ future `variable_spec` explicitly requests it, as a protocol-defined operator. R
 ([[operators-are-rules-not-interpretation]]).
 
 **Files (this entry):** `HANDOFF.md` only.
+
+---
+
+## Extract generic binary-presence text definition — Claude / owner (2026-06-25)
+
+Narrowly-scoped refactor (owner-directed): factor the shared schema + parser pattern behind
+`diabetes_text_definition()` and `dialysis_text_definition()` into one
+`binary_presence_text_definition(name, status_key, field, system_prompt)` in `R/extract.R`
+(generic plumbing, next to `standard_field_validity`). The two concept-specific functions are now
+**thin wrappers** that supply only the model's status key, the engine field name, and the
+concept-specific system prompt.
+
+**Behaviour-preserving by construction:** identical JSON Schema (same `required` order, same
+`properties` order via `setNames`, same `{documented,not_documented}` enum + `evidence_ids`
+`maxItems`) and identical parser output (present/absent + `standard_field_validity`). No generic
+variable_template, no change to variable semantics, no change to source-contribution behaviour.
+Full suite **268/268** (unchanged), with the diabetes and dialysis text paths exercised by
+`test-multisource-diabetes` and `test-slice-dialysis`.
+
+**Files (this entry):** `R/extract.R`, `R/multisource.R`, `R/concepts-dialysis.R`, `HANDOFF.md`.

@@ -12,49 +12,17 @@
 # Reconcile/precedence is deferred until a real protocol requires it.
 # =============================================================================
 
-# Minimal binary documented-presence text definition (mirrors
-# diabetes_text_definition in multisource.R). Temporary adapter; the duplication of
-# these two now justifies a later generic binary-presence text definition.
+# Binary documented-presence dialysis text definition: a thin wrapper over the
+# shared binary_presence_text_definition() (R/extract.R). The concept-specific
+# parts are only the status key, the engine field name, and the system prompt.
 dialysis_text_definition <- function() {
-    parser <- function(result, snippet_ids) {
-        status <- if (length(result$dialysis_status) == 1L)
-            as.character(result$dialysis_status) else NA_character_
-        returned <- unique(as.character(unlist(result$evidence_ids)))
-        ids <- intersect(returned[!is.na(returned) & nzchar(returned)], snippet_ids)
-        nv <- dplyr::case_when(identical(status, "documented") ~ "present",
-                               identical(status, "not_documented") ~ "absent",
-                               TRUE ~ NA_character_)
-        v <- standard_field_validity(status, nv, ids)
-        fields <- tibble::tibble(
-            field = "dialysis_mention", status = status, normalized_value = nv,
-            evidence_ids = list(ids), field_validity = v$field_validity,
-            validity_reason = v$validity_reason)
-        list(fields = fields, summary = NA_character_)
-    }
-    new_task_definition(
+    binary_presence_text_definition(
         name = "dialysis_text",
+        status_key = "dialysis_status",
+        field = "dialysis_mention",
         system_prompt = paste(
             "Identify only explicitly documented chronic dialysis in the snippets.",
-            "Do not infer absence from silence."),
-        type_builder = function(ids) {
-            schema <- list(
-                type = "object", additionalProperties = FALSE,
-                required = as.list(c("dialysis_status", "evidence_ids")),
-                properties = list(
-                    dialysis_status = list(
-                        type = "string",
-                        enum = as.list(c("documented", "not_documented"))),
-                    evidence_ids = list(
-                        type = "array", maxItems = 5L,
-                        items = list(type = "string", enum = as.list(ids)))))
-            ellmer::type_from_schema(
-                text = jsonlite::toJSON(schema, auto_unbox = TRUE))
-        },
-        prompt_builder = function(task, cands) {
-            paste(paste0("Input row: ", task$task_id[[1]]),
-                  "Snippets:", format_snippet_block(cands), sep = "\n")
-        },
-        parser = parser, summary_field = NULL, summary_required = FALSE)
+            "Do not infer absence from silence."))
 }
 
 # Z99.2 (dialysis dependence) / N18.6 (ESRD) are synthetic code vehicles here, not a

@@ -53,6 +53,58 @@ standard_field_validity <- function(status, normalized_value, evidence_ids) {
          validity_reason = paste(reason, collapse = "; "))
 }
 
+# Shared binary documented-presence text definition: one evidenced field whose
+# model output is {documented, not_documented}, normalized to present/absent.
+# Concept-specific text definitions (diabetes, dialysis, ...) are thin wrappers
+# that supply only the model's status key, the engine field name, and the
+# concept-specific system prompt. This factors the schema + parser pattern without
+# adding any new semantics: behaviour is identical to the hand-written definitions.
+binary_presence_text_definition <- function(name, status_key, field, system_prompt,
+                                            evidence_max_items = 5L) {
+    parser <- function(result, snippet_ids) {
+        status <- if (length(result[[status_key]]) == 1L)
+            as.character(result[[status_key]]) else NA_character_
+        returned <- unique(as.character(unlist(result$evidence_ids)))
+        ids <- intersect(returned[!is.na(returned) & nzchar(returned)], snippet_ids)
+        nv <- dplyr::case_when(identical(status, "documented") ~ "present",
+                               identical(status, "not_documented") ~ "absent",
+                               TRUE ~ NA_character_)
+        v <- standard_field_validity(status, nv, ids)
+        fields <- tibble::tibble(
+            field = field, status = status, normalized_value = nv,
+            evidence_ids = list(ids), field_validity = v$field_validity,
+            validity_reason = v$validity_reason)
+        list(fields = fields, summary = NA_character_)
+    }
+    new_task_definition(
+        name = name,
+        system_prompt = system_prompt,
+        type_builder = function(ids) {
+            schema <- list(
+                type = "object",
+                additionalProperties = FALSE,
+                required = as.list(c(status_key, "evidence_ids")),
+                properties = setNames(
+                    list(
+                        list(type = "string",
+                             enum = as.list(c("documented", "not_documented"))),
+                        list(type = "array",
+                             maxItems = evidence_max_items,
+                             items = list(type = "string", enum = as.list(ids)))),
+                    c(status_key, "evidence_ids")))
+            ellmer::type_from_schema(
+                text = jsonlite::toJSON(schema, auto_unbox = TRUE))
+        },
+        prompt_builder = function(task, cands) {
+            paste(
+                paste0("Input row: ", task$task_id[[1]]),
+                "Snippets:",
+                format_snippet_block(cands),
+                sep = "\n")
+        },
+        parser = parser, summary_field = NULL, summary_required = FALSE)
+}
+
 make_ollama_caller <- function(model = "gemma3:4b", seed = 20260621L, max_tokens = 1024L) {
     force(model); force(seed); force(max_tokens)
     function(prompt, type, system_prompt) {
