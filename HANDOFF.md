@@ -4034,3 +4034,46 @@ variant; constructor-syntax freeze (now unblocked by a 2nd policy, still deferre
 **Files (this entry):** `R/concepts-smoking.R` (new), `R/operators.R`, `R/spec.R`,
 `R/run_variable.R`, `R/types/smoking.R`, `tests/testthat.R`,
 `tests/testthat/test-slice-smoking-spec.R` (new), `HANDOFF.md`. Committed as slice 2.
+
+---
+
+## Slice 3: anastomoses — multi-field text, event-scoped — Claude (2026-06-25)
+
+**Done.** A third concept SHAPE (per [[validate-via-concept-shape-not-depth]]): one extraction
+task -> SEVERAL related fields (arterial/venous durations, types, locations) from one operative
+report, with **field-level acceptance** (a valid grounded field survives an invalid sibling; the
+task is flagged for review iff any field is invalid or the call failed). Also the first
+**event-scoped** variable (same surgical event, not a date window). Full suite **245/245**.
+
+**New vocabulary / spine:**
+- `fields_output(fields)` (a SET of cohort columns) + `collect_fields()` combine, and a
+  `.multi_field_variable` collapse that emits one value row per task x field (value =
+  accepted_value, already NA for invalid fields), a per-task channel status with field counts
+  (`n_fields`/`n_valid`/`n_invalid` + `needs_review`), and per-field evidence.
+- **Window made lazy**: `.window_days()` is now computed only inside the code/lab branches, not
+  unconditionally. A text-only variable can therefore declare `window = NULL` -- anastomoses is
+  EVENT-scoped (eligibility resolved upstream), so forcing a placeholder date window would have
+  been misleading. The channel records `linkage = c("subject","event")` to express event scope.
+
+**Boundary held:** `R/types/anastomoses.R` (`anastomoses_definition`/`parse_anastomoses`) and
+`adapter_anastomoses.R`'s `ANASTOMOSES_QUERY` reused as **temporary adapters** (the multi-field
+extractor + the selector), not deleted. Concept is neutral (`transplant_anastomoses`); the
+multi-field answer schema lives at the template/activation layer. Text source is pre-retrieved
+synthetic fixtures + a deterministic fake caller.
+
+**Scope note (deliberate):** D1 keep-and-flag is still **scoped to smoking** per the owner's
+ruling -- `parse_anastomoses` keeps its existing fail-closed-on-invented-citation behaviour for
+now; the slice-3 tests do not exercise invented citations, to avoid coupling to that pending
+decision. Applying D1 to anastomoses (per migration v2) remains a future step.
+
+**Where the policy axes stand now:** binary multi-source (`any_positive`), numeric single-channel
+(`max_value`), categorical text (`documented_status`), and multi-field text (`collect_fields`).
+The remaining big shape is **dialysis: multi-source reconcile/precedence** (a non-`any` *combine*
+across text + CCAM + pre-emptive status, with conflict -> `needs_review`) -- still the heaviest
+and not yet built. Other open threads: real retrieval/eligibility wiring (text is pre-retrieved);
+whole-history "ever" variant; constructor-syntax freeze (now backed by four policies, still
+deferred); generalizing `citation_warning`.
+
+**Files (this entry):** `R/concepts-anastomoses.R` (new), `R/operators.R`, `R/run_variable.R`,
+`tests/testthat.R`, `tests/testthat/test-slice-anastomoses-spec.R` (new), `HANDOFF.md`. Committed
+as slice 3.

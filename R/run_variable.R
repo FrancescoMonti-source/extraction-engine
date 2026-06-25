@@ -45,22 +45,29 @@ suppressWarnings(suppressMessages(library(dplyr)))
         stop("Missing source data for channel '", channel_name,
              "' (source: ", source, ").", call. = FALSE)
     }
-    w <- .window_days(variable)
-
+    # The window is only meaningful for date/interval-scoped structured channels;
+    # text eligibility (date-window OR event membership) is resolved upstream, so a
+    # text-only variable (e.g. event-scoped anastomoses) need not declare a window.
     # TODO(slice-N): the lab branch reuses measure_hyperkalaemia() only as a
     # temporary adapter -- its max-usable-value-in-window + threshold core is
     # generic over the analyte and is not potassium-specific. Extract that core
     # under a neutral name (e.g. measure_analyte_value()) and have hyperkalaemia
     # become one caller, so the lab channel stops borrowing a clinically-named fn.
     switch(channel_def$type,
-        code = measure_diabetes(            # temporary adapter: generic over `codes=`
-            sources[[source]], tasks,
-            codes = .selector_codes(channel_def$selector, "prefixes"),
-            from_days = w[["from_days"]], to_days = w[["to_days"]]),
-        lab = measure_hyperkalaemia(        # temporary adapter: selects the max usable
-            sources[[source]], tasks,       # value in window; the threshold is unused
-            analytes = .selector_codes(channel_def$selector, "codes"),  # for numeric output
-            from_days = w[["from_days"]], to_days = w[["to_days"]]),
+        code = {
+            w <- .window_days(variable)
+            measure_diabetes(               # temporary adapter: generic over `codes=`
+                sources[[source]], tasks,
+                codes = .selector_codes(channel_def$selector, "prefixes"),
+                from_days = w[["from_days"]], to_days = w[["to_days"]])
+        },
+        lab = {
+            w <- .window_days(variable)
+            measure_hyperkalaemia(          # temporary adapter: selects the max usable
+                sources[[source]], tasks,   # value in window; the threshold is unused
+                analytes = .selector_codes(channel_def$selector, "codes"),  # numeric output
+                from_days = w[["from_days"]], to_days = w[["to_days"]])
+        },
         text = {
             if (is.null(caller)) {
                 stop("Text channel '", channel_name, "' requires a caller.",
@@ -232,6 +239,68 @@ suppressWarnings(suppressMessages(library(dplyr)))
     list(values = values, source_status = source_status, evidence = evidence)
 }
 
+# collect_fields(): one text task -> several fields. Emits one value row per
+# task x field (the field's accepted value -- already NA for invalid fields, so a
+# valid grounded field survives an invalid sibling), a per-task channel status with
+# field counts, and per-field evidence. The task is flagged for review iff any
+# field is invalid or the call failed.
+.multi_field_variable <- function(variable, tasks, channel_name, result) {
+    var_name <- variable$name
+    source_name <- .source_name_for_channel(channel_name, variable)
+    cov <- result$coverage; vals <- result$values; ev <- result$evidence
+    task_ids <- as.character(tasks$task_id)
+
+    values <- if (nrow(vals)) {
+        vals %>%
+            filter(task_id %in% task_ids) %>%
+            transmute(task_id, variable = var_name, field,
+                      value = accepted_value, field_validity,
+                      needs_review = field_validity == "invalid",
+                      validity_reason, summary = task_summary)
+    } else {
+        tibble::tibble(task_id = character(), variable = character(),
+                       field = character(), value = character(),
+                       field_validity = character(), needs_review = logical(),
+                       validity_reason = character(), summary = character())
+    }
+
+    field_counts <- if (nrow(vals)) {
+        vals %>% group_by(task_id) %>%
+            summarise(n_fields = n(),
+                      n_valid = sum(field_validity == "valid"),
+                      n_invalid = sum(field_validity == "invalid"), .groups = "drop")
+    } else {
+        tibble::tibble(task_id = character(), n_fields = integer(),
+                       n_valid = integer(), n_invalid = integer())
+    }
+    source_status <- tibble::tibble(task_id = task_ids) %>%
+        left_join(distinct(cov, task_id, processing_state), by = "task_id") %>%
+        left_join(field_counts, by = "task_id") %>%
+        mutate(
+            across(c(n_fields, n_valid, n_invalid), ~ coalesce(as.integer(.x), 0L)),
+            status = case_when(
+                processing_state %in% c("model_error", "processing_error") ~ "error",
+                processing_state %in% c("no_candidate", "no_eligible_document",
+                                        "not_called") ~ "unavailable",
+                TRUE ~ "complete"),       # valid OR invalid task: the call produced fields
+            needs_review = status == "error" | n_invalid > 0L) %>%
+        transmute(task_id, variable = var_name, channel = channel_name,
+                  source = source_name, status, n_fields, n_valid, n_invalid,
+                  needs_review)
+
+    evidence <- if (nrow(ev)) {
+        ev %>% transmute(task_id, variable = var_name, channel = channel_name,
+                         source = source_name, field, source_row_id = hit_ref,
+                         evidence_ref = hit_ref, hit_text)
+    } else {
+        tibble::tibble(task_id = character(), variable = character(),
+                       channel = character(), source = character(),
+                       field = character(), source_row_id = character(),
+                       evidence_ref = character(), hit_text = character())
+    }
+    list(values = values, source_status = source_status, evidence = evidence)
+}
+
 run_variable <- function(variable, tasks, sources, caller = NULL,
                          model_name = "fake") {
     if (!inherits(variable, "ee_variable_spec")) {
@@ -277,6 +346,18 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
                  call. = FALSE)
         }
         out <- .documented_status_variable(variable, tasks, ch, channel_results[[1]])
+    } else if (inherits(combine, "ee_combiner") &&
+               identical(combine$kind, "collect_fields")) {
+        if (length(channel_results) != 1L) {
+            stop("collect_fields() currently supports a single channel.",
+                 call. = FALSE)
+        }
+        ch <- names(channel_results)[[1]]
+        if (!identical(.channel_type(ch, variable), "text")) {
+            stop("collect_fields() currently requires a text channel.",
+                 call. = FALSE)
+        }
+        out <- .multi_field_variable(variable, tasks, ch, channel_results[[1]])
     } else if (length(channel_results) == 1L) {
         ch <- names(channel_results)[[1]]
         reducer <- variable$channels[[ch]]$reducer
@@ -288,7 +369,7 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         out <- .single_numeric_variable(variable, tasks, ch, channel_results[[1]])
     } else {
         stop("This experimental runner supports any_positive(), documented_status(), ",
-             "or a single max_value() channel.", call. = FALSE)
+             "collect_fields(), or a single max_value() channel.", call. = FALSE)
     }
     c(list(spec = variable, selected_channels = selected,
            channel_results = channel_results), out)

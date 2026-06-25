@@ -1,0 +1,57 @@
+# =============================================================================
+# concepts-anastomoses.R -- recipient transplant anastomoses (multi-field text)
+# -----------------------------------------------------------------------------
+# A third concept SHAPE: one extraction task -> SEVERAL related fields (arterial /
+# venous durations, types, locations) from one operative report, with FIELD-LEVEL
+# acceptance (a valid grounded field survives an invalid sibling). It is also
+# EVENT-scoped (same surgical event), not date-windowed -- so the variable declares
+# no window; eligibility is resolved upstream (link by subject + event).
+#
+# Like smoking, the concept is neutral (it declares the operative-report text
+# route); the multi-field answer schema (anastomoses_definition, from
+# types/anastomoses.R) is supplied at the template/activation layer, and the output
+# is a SET of cohort columns (fields_output) collapsed with collect_fields().
+# =============================================================================
+
+anastomoses_concept_spec <- function() {
+    concept_spec(
+        name = "transplant_anastomoses",
+        channels = list(
+            text_operative_report = text_channel(
+                source = "documents",
+                selector = lucene_query(ANASTOMOSES_QUERY),   # from adapter_anastomoses.R
+                native_grain = "document_sentence",
+                required_roles = c("subject", "event", "date", "text",
+                                   "native_ref"),
+                linkage = c("subject", "event"))))            # EVENT scope, not a date window
+}
+
+recipient_anastomoses_template <- function(concept = anastomoses_concept_spec()) {
+    variable_template(
+        name = "recipient_anastomoses_template",
+        concept = concept,
+        defaults = list(
+            window = NULL,                                    # event-scoped: no date window
+            channels = c("text_operative_report"),
+            text_method = llm_after_lucene(),
+            text_extractor = anastomoses_definition(),        # multi-field answer schema
+            output = fields_output(names(ANASTOMOSES_FIELDS)),
+            combine = collect_fields(),
+            absence_policy = open_world()),
+        build = function(params) {
+            variable_spec(
+                name = params$name,
+                concept = concept,
+                unit = params$unit,
+                anchor = params$anchor,
+                window = params$window,
+                channels = .activate_channels(
+                    concept, params$channels,
+                    text_method = params$text_method,
+                    text_extractor = params$text_extractor),
+                output = params$output,
+                combine = params$combine,
+                absence_policy = params$absence_policy,
+                template_name = params$template_name)
+        })
+}

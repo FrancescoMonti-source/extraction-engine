@@ -43,6 +43,13 @@ documented_status <- function() {
     .experimental_spec(list(kind = "documented_status"), "ee_combiner")
 }
 
+# Collect one extraction task's several fields, keeping field-level acceptance: a
+# valid grounded field survives an invalid sibling, and the task is flagged for
+# review iff any field is invalid (or the call failed). Not a binary collapse.
+collect_fields <- function() {
+    .experimental_spec(list(kind = "collect_fields"), "ee_combiner")
+}
+
 # --- text extraction methods --------------------------------------------------
 # top_n is carried for provenance; the slice's text source is pre-retrieved, so it
 # is not yet consumed by run_extraction (a retrieval-ordering seam is future work).
@@ -65,6 +72,14 @@ number_output <- function() {
 # A categorical cohort column over a fixed level set (e.g. smoking statuses).
 categorical_output <- function(levels) {
     .experimental_spec(list(kind = "categorical", levels = as.character(levels)),
+                       "ee_output_type")
+}
+
+# A SET of cohort columns produced by one extraction task (e.g. the several
+# anastomosis durations / types / locations from one operative report). The output
+# contract belongs to the task, not to one scalar column.
+fields_output <- function(fields) {
+    .experimental_spec(list(kind = "fields", fields = as.character(fields)),
                        "ee_output_type")
 }
 
