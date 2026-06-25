@@ -50,6 +50,36 @@ collect_fields <- function() {
     .experimental_spec(list(kind = "collect_fields"), "ee_combiner")
 }
 
+# Boolean NOT as set algebra over channel hit sets:
+#   result = (union of include channels' hit sets) MINUS (union of exclude channels'
+#            hit sets)   ==  setdiff(union(include), union(exclude)).
+# `include` / `exclude` name channels the variable activates. `A NOT B` means "in
+# A's hit set and not in B's hit set under the SELECTED B definition" -- it does NOT
+# mean B is clinically absent, so the runner keeps the label honest ("no exclude
+# HIT", not "no condition") and exposes both hit sets with evidence. OR-within-role
+# (several include or exclude channels are unioned). AND-within-include
+# (intersection) and a general boolean expression DSL are deferred -- no consumer
+# yet. See hit_set_decision() (R/hitset.R) for the pure core.
+hit_set_difference <- function(include, exclude = character()) {
+    include <- as.character(include)
+    exclude <- as.character(exclude)
+    if (!length(include) || anyNA(include) || any(!nzchar(include))) {
+        stop("hit_set_difference() needs >=1 non-empty include channel.",
+             call. = FALSE)
+    }
+    if (length(exclude) && (anyNA(exclude) || any(!nzchar(exclude)))) {
+        stop("hit_set_difference() exclude channels must be non-empty names.",
+             call. = FALSE)
+    }
+    if (length(intersect(include, exclude))) {
+        stop("A channel cannot be both an include and an exclude channel.",
+             call. = FALSE)
+    }
+    .experimental_spec(
+        list(kind = "hit_set_difference", include = include, exclude = exclude),
+        "ee_combiner")
+}
+
 # --- text extraction methods --------------------------------------------------
 # top_n is carried for provenance; the slice's text source is pre-retrieved, so it
 # is not yet consumed by run_extraction (a retrieval-ordering seam is future work).

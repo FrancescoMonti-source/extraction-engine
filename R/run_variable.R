@@ -395,6 +395,105 @@ suppressWarnings(suppressMessages(library(dplyr)))
     list(values = values, source_status = source_status, evidence = evidence)
 }
 
+# hit_set_difference(): boolean NOT as set algebra over channel hit sets. Reduces
+# each activated channel to per-task {status, hit, evidence} (the SAME reduction the
+# OR path uses), forms each channel's hit set (task_ids it flagged), then resolves
+#   setdiff(union(include hit sets), union(exclude hit sets))   via hit_set_decision().
+# The envelope exposes both hit sets with provenance: a `role` (include/exclude)
+# column on source_status + evidence, the per-channel contribution, and a `decision`
+# telling WHY each task landed in or out. Honest labels: a task kept because no
+# exclude channel hit is `ascertainment = "partial"` when an exclude channel was
+# merely unavailable -- "no exclude HIT", not an inferred clinical absence.
+.hit_set_difference_variable <- function(variable, tasks, channel_results) {
+    var_name <- variable$name
+    include_ch <- variable$combine$include
+    exclude_ch <- variable$combine$exclude
+    declared <- names(channel_results)
+    referenced <- c(include_ch, exclude_ch)
+    missing_ch <- setdiff(referenced, declared)
+    if (length(missing_ch)) {
+        stop("hit_set_difference() references unactivated channel(s): ",
+             paste(missing_ch, collapse = ", "), call. = FALSE)
+    }
+    extra_ch <- setdiff(declared, referenced)
+    if (length(extra_ch)) {
+        stop("hit_set_difference() leaves activated channel(s) unused: ",
+             paste(extra_ch, collapse = ", "), call. = FALSE)
+    }
+    task_ids <- as.character(tasks$task_id)
+
+    # Reduce every channel to per-task {status, hit, evidence} -- identical reduction
+    # to the OR path (text no_candidate -> unavailable; structured -> complete).
+    reduced <- lapply(declared, function(ch) {
+        is_text <- identical(.channel_type(ch, variable), "text")
+        id_col <- if (is_text) "hit_ref" else "source_row_id"
+        no_candidate <- if (is_text) "unavailable" else "complete"
+        .reduce_channel_result(channel_results[[ch]], task_ids, id_col, no_candidate)
+    })
+    names(reduced) <- declared
+
+    hit_ids <- function(ch) {
+        r <- reduced[[ch]]
+        task_ids[vapply(task_ids, function(tid) isTRUE(r[[tid]]$hit), logical(1))]
+    }
+    include_sets <- setNames(lapply(include_ch, hit_ids), include_ch)
+    exclude_sets <- setNames(lapply(exclude_ch, hit_ids), exclude_ch)
+    decision <- hit_set_decision(task_ids, include_sets, exclude_sets)
+
+    # Honest ascertainment: a role is "ascertained" for a task only when every channel
+    # in it reported a complete status (so silence isn't read as a negative).
+    ascertained <- function(channels, tid) {
+        if (!length(channels)) return(TRUE)
+        all(vapply(channels, function(ch)
+            identical(reduced[[ch]][[tid]]$status, "complete"), logical(1)))
+    }
+    asc <- vapply(seq_len(nrow(decision)), function(k) {
+        tid <- decision$id[[k]]
+        ok <- switch(decision$decision[[k]],
+            excluded       = TRUE,                          # definitive exclude hit
+            included       = ascertained(exclude_ch, tid),  # claiming no exclude hit
+            no_include_hit = ascertained(include_ch, tid))  # claiming not in include set
+        if (isTRUE(ok)) "complete" else "partial"
+    }, character(1))
+
+    values <- tibble::tibble(
+        task_id = decision$id, variable = var_name,
+        value = as.integer(decision$included),
+        decision = decision$decision, ascertainment = asc)
+
+    role_of <- function(ch) if (ch %in% include_ch) "include" else "exclude"
+    status_l <- list(); evidence_l <- list()
+    for (ch in declared) {
+        src <- .source_name_for_channel(ch, variable)
+        role <- role_of(ch)
+        for (tid in task_ids) {
+            r <- reduced[[ch]][[tid]]
+            status_l[[length(status_l) + 1L]] <- tibble::tibble(
+                task_id = tid, variable = var_name, channel = ch, source = src,
+                role = role, status = r$status, hit = r$hit,
+                processing_state = .channel_raw_state(channel_results, ch, tid),
+                contribution = .contribution_class(r$status, r$hit),
+                error = NA_character_)
+            if (isTRUE(r$hit) && nrow(r$evidence)) {
+                evidence_l[[length(evidence_l) + 1L]] <- r$evidence %>%
+                    transmute(task_id = tid, variable = var_name, channel = ch,
+                              source = src, role = role,
+                              source_row_id = as.character(source_row_id),
+                              evidence_ref = source_row_id)
+            }
+        }
+    }
+
+    list(
+        values = values,
+        source_status = bind_rows(status_l),
+        evidence = if (length(evidence_l)) bind_rows(evidence_l) else
+            tibble::tibble(task_id = character(), variable = character(),
+                           channel = character(), source = character(),
+                           role = character(), source_row_id = character(),
+                           evidence_ref = character()))
+}
+
 run_variable <- function(variable, tasks, sources, caller = NULL,
                          model_name = "fake") {
     if (!inherits(variable, "ee_variable_spec")) {
@@ -452,6 +551,9 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
                  call. = FALSE)
         }
         out <- .multi_field_variable(variable, tasks, ch, channel_results[[1]])
+    } else if (inherits(combine, "ee_combiner") &&
+               identical(combine$kind, "hit_set_difference")) {
+        out <- .hit_set_difference_variable(variable, tasks, channel_results)
     } else if (length(channel_results) == 1L) {
         ch <- names(channel_results)[[1]]
         reducer <- variable$channels[[ch]]$reducer
