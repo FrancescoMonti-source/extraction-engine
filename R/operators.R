@@ -50,16 +50,33 @@ collect_fields <- function() {
     .experimental_spec(list(kind = "collect_fields"), "ee_combiner")
 }
 
-# Boolean NOT as set algebra over channel hit sets:
-#   result = (union of include channels' hit sets) MINUS (union of exclude channels'
-#            hit sets)   ==  setdiff(union(include), union(exclude)).
-# `include` / `exclude` name channels the variable activates. `A NOT B` means "in
-# A's hit set and not in B's hit set under the SELECTED B definition" -- it does NOT
-# mean B is clinically absent, so the runner keeps the label honest ("no exclude
-# HIT", not "no condition") and exposes both hit sets with evidence. OR-within-role
-# (several include or exclude channels are unioned). AND-within-include
-# (intersection) and a general boolean expression DSL are deferred -- no consumer
-# yet. See hit_set_decision() (R/hitset.R) for the pure core.
+# String boolean hit-set expression -- the public boolean-combine surface:
+#   combine = "(transplant_act | transplant_status) & !dialysis_signal"
+# Channel-name symbols + the operators | (union) & (intersection) ! (complement)
+# + parentheses; nothing else. Parsed + grammar-checked at construction; channel
+# symbols are checked against the variable's activated channels at variable_spec
+# build. Evaluated as three-valued (Kleene) logic over the channels' hit vectors so
+# NA (unavailable) propagates honestly into ascertainment, and the decision is
+# included / excluded / undetermined (never silently collapsed to binary). The pure
+# parser/evaluator/overlap live in R/hitset.R. A bare string passed as `combine` is
+# coerced to this operator, so callers simply write combine = "...".
+hit_set_expr <- function(expr) {
+    ast <- .parse_hitset_expr(expr)
+    channels <- .check_hitset_grammar(ast)
+    if (!length(channels)) {
+        stop("A hit-set expression must reference >=1 channel.", call. = FALSE)
+    }
+    .experimental_spec(
+        list(kind = "hit_set_expr", expr = expr, ast = ast,
+             channels = channels, roles = .hitset_expr_roles(ast)),
+        "ee_combiner")
+}
+
+# Backward-compatible sugar that LOWERS to a hit_set_expr. It is NOT a parallel
+# boolean system: hit_set_difference(include = a, exclude = b) is exactly the string
+# expression `a & !b` (with OR-within-role unions for multiple channels). The string
+# expression DSL is the primary, documented surface; this just spares a caller the
+# string for the common "include minus exclude" case.
 hit_set_difference <- function(include, exclude = character()) {
     include <- as.character(include)
     exclude <- as.character(exclude)
@@ -75,9 +92,15 @@ hit_set_difference <- function(include, exclude = character()) {
         stop("A channel cannot be both an include and an exclude channel.",
              call. = FALSE)
     }
-    .experimental_spec(
-        list(kind = "hit_set_difference", include = include, exclude = exclude),
-        "ee_combiner")
+    grp <- function(chs) {
+        if (length(chs) == 1L) chs else sprintf("(%s)", paste(chs, collapse = " | "))
+    }
+    expr <- if (length(exclude)) {
+        sprintf("%s & !%s", grp(include), grp(exclude))
+    } else {
+        grp(include)
+    }
+    hit_set_expr(expr)
 }
 
 # --- text extraction methods --------------------------------------------------

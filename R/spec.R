@@ -30,6 +30,40 @@ suppressWarnings(suppressMessages(library(dplyr)))
     invisible(TRUE)
 }
 
+# Normalize a combine= value into an ee_combiner. A bare string is a hit-set
+# expression (combine = "(a | b) & !c"); operator records pass through; NULL is
+# allowed (single-channel direct specs). See hit_set_expr() in operators.R.
+.as_combiner <- function(combine) {
+    if (is.null(combine) || inherits(combine, "ee_combiner")) return(combine)
+    if (is.character(combine) && length(combine) == 1L && nzchar(combine)) {
+        return(hit_set_expr(combine))
+    }
+    stop("combine must be a combiner operator or a hit-set expression string.",
+         call. = FALSE)
+}
+
+# A hit-set expression's referenced channels must be exactly the variable's
+# activated channels: a referenced channel that is not activated is an unknown
+# symbol; an activated channel absent from the expression is dead weight. Both are
+# spec errors, surfaced at build time.
+.check_expr_channels <- function(combine, activated) {
+    if (!inherits(combine, "ee_combiner") ||
+        !identical(combine$kind, "hit_set_expr")) {
+        return(invisible(TRUE))
+    }
+    missing_ch <- setdiff(combine$channels, activated)
+    if (length(missing_ch)) {
+        stop("combine expression references non-activated channel(s): ",
+             paste(missing_ch, collapse = ", "), call. = FALSE)
+    }
+    unused <- setdiff(activated, combine$channels)
+    if (length(unused)) {
+        stop("activated channel(s) not used by the combine expression: ",
+             paste(unused, collapse = ", "), call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 # A concept_spec declares the signal channels available for a clinical concept.
 # It does not interpret meaning and it does not activate any channel by default.
 concept_spec <- function(name, channels) {
@@ -162,6 +196,9 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
         stop("Selected channel(s) not declared by concept_spec: ",
              paste(unknown, collapse = ", "), call. = FALSE)
     }
+
+    combine <- .as_combiner(combine)            # bare string -> hit_set_expr()
+    .check_expr_channels(combine, names(channels))
 
     .experimental_spec(
         list(name = name, concept = concept, unit = unit, anchor = anchor,
