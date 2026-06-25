@@ -287,6 +287,106 @@ measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
         derivation = derivation)
 }
 
+# --- whole-history ("ever") code presence ------------------------------------
+# No anchor, no window: scope is the subject's ENTIRE available record. Sibling of
+# measure_diabetes() for unanchored variables (e.g. diabetes_ever). present if any
+# usable code matches the family anywhere in the record; absent if rows exist but
+# none match; no_eligible_source if the subject has no rows. tasks need only
+# task_id + PATID (no anchor_date). Same output contract as measure_diabetes().
+measure_code_presence_ever <- function(diag, tasks, codes = DIABETES_CODES,
+                                       field = "code_presence") {
+    .require_columns(tasks, c("task_id", "PATID"), "tasks")
+    .require_columns(
+        diag,
+        c("source_row_id", "PATID", "EVTID", "ELTID", "diag", "DATENT", "DATSORT"),
+        "diagnosis rows")
+    task_ids <- as.character(tasks$task_id)
+    if (anyNA(task_ids) || any(!nzchar(task_ids)) || anyDuplicated(task_ids)) {
+        stop("tasks$task_id must be non-missing and unique", call. = FALSE)
+    }
+    source_ids <- as.character(diag$source_row_id)
+    if (anyNA(source_ids) || any(!nzchar(source_ids)) || anyDuplicated(source_ids)) {
+        stop("diagnosis rows$source_row_id must be non-missing and unique",
+             call. = FALSE)
+    }
+
+    diag <- diag %>% transmute(
+        source_row_id = as.character(source_row_id),
+        PATID = as.character(PATID), EVTID = as.character(EVTID),
+        ELTID = as.character(ELTID), diag = as.character(diag),
+        DATENT = .clinical_date(DATENT), DATSORT = .clinical_date(DATSORT))
+    tkeys <- tasks %>%
+        transmute(task_id = as.character(task_id), PATID = as.character(PATID))
+
+    source_counts <- diag %>%
+        filter(!is.na(PATID)) %>% count(PATID, name = "n_source_rows")
+    observations <- diag %>%
+        inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
+        mutate(
+            field = field, source = "diagnosis", in_scope = TRUE,
+            usable = .usable_icd10_code(diag), invalid = !usable,
+            is_target = usable & code_in_family(diag, codes),
+            selected_evidence = is_target,
+            scope_reason = "whole history (no window)",
+            observation_reason = case_when(
+                is_target ~ "ICD-10 code matches the declared family (whole history)",
+                !usable ~ "malformed or missing ICD-10 code; excluded",
+                TRUE ~ "diagnosis code outside the declared family"))
+
+    counts <- observations %>%
+        group_by(task_id) %>%
+        summarise(n_scope_rows = n(), n_usable = sum(usable),
+                  n_unusable = sum(invalid), n_matching_rows = sum(is_target),
+                  .groups = "drop")
+    coverage <- tkeys %>%
+        left_join(source_counts, by = "PATID") %>%
+        left_join(counts, by = "task_id") %>%
+        mutate(
+            across(c(n_source_rows, n_scope_rows, n_usable, n_unusable,
+                     n_matching_rows), ~ coalesce(as.integer(.x), 0L)),
+            processing_state = case_when(
+                n_source_rows == 0L ~ "no_eligible_source",
+                n_usable == 0L ~ "invalid",
+                TRUE ~ "measured"))
+
+    values <- coverage %>%
+        filter(processing_state %in% c("measured", "invalid")) %>%
+        mutate(normalized_value = case_when(
+            processing_state == "invalid" ~ NA_character_,
+            n_matching_rows > 0L ~ "present", TRUE ~ "absent")) %>%
+        transmute(
+            task_id, field = field, normalized_value,
+            accepted_value = if_else(
+                processing_state == "measured", normalized_value, NA_character_),
+            field_validity = if_else(
+                processing_state == "measured", "valid", "invalid"),
+            validity_reason = if_else(
+                processing_state == "measured", "",
+                "diagnosis rows exist but none has a usable ICD-10 code"),
+            n_scope_rows, n_usable, n_unusable, n_matching_rows)
+
+    evidence <- observations %>%
+        filter(selected_evidence) %>%
+        transmute(
+            task_id, field, source, source_row_id, evidence_ref = source_row_id,
+            evidence_summary = sprintf(
+                "%s (%s to %s)", diag, DATENT,
+                ifelse(is.na(DATSORT), "missing", as.character(DATSORT))),
+            PATID, EVTID, ELTID, diag, DATENT, DATSORT)
+
+    derivation <- coverage %>%
+        transmute(
+            task_id, field = field,
+            rule = sprintf("whole_history; ICD-10 prefixes %s",
+                           paste(codes, collapse = ",")),
+            n_source_rows, n_scope_rows, n_usable, n_unusable, n_matching_rows,
+            status = processing_state, error = NA_character_)
+
+    .assert_evidence_resolves(evidence, observations, diag)
+    list(coverage = coverage, values = values, evidence = evidence,
+         observations = observations, derivation = derivation)
+}
+
 # --- hyperkalaemia: analyte value threshold over biol (point time) -----------
 # In this warehouse the analyte code fixes the interpretation; unit is not a
 # measurement dimension. Concept selection belongs here, not in the loader.

@@ -4211,3 +4211,37 @@ concept-specific (no generic `status_around_anchor_template` -- that is the gene
 
 **Files (this entry):** `R/run_variable.R`, `tests/testthat/test-slice-retrieval-wiring.R` (new),
 `HANDOFF.md`. Committed as slice 5.
+
+---
+
+## Slice 6: whole-history ("ever") variant — the unanchored axis — Claude (2026-06-25)
+
+**Done.** The design note's first-class but previously-unexercised axis: a variable with
+`anchor = NULL` and `window = NULL` whose scope is the subject's ENTIRE record. `diabetes_ever`
+contrasts with the windowed `diabete_pre_greffe` -- same concept + same `pmsi_diag_e10_e14`
+channel, different anchor/window choice at the variable level (DESIGN.md: "ever smoked anywhere ...
+would be a different variable with a whole-history scope"). Full suite **295/295**, 0 warnings.
+
+- `measure_code_presence_ever()` (R/structured.R): whole-history sibling of `measure_diabetes()` --
+  no anchor, no window, scope = all of the subject's rows; `present` if any usable code matches the
+  family anywhere, `absent` if rows exist but none match, `no_eligible_source` if no rows. Same
+  output contract (coverage/values/evidence/derivation). Tasks need only `task_id` + `PATID`.
+- Runner: the code branch dispatches on `is.null(variable$window)` -- whole-history -> the ever
+  executor; otherwise the windowed `measure_diabetes`. Single-channel binary `any_positive`
+  collapse, so source contribution (signal/negative/silent + `processing_state` + `combine_rule`)
+  is preserved exactly like the windowed OR path.
+
+Proven by `test-slice-whole-history-spec.R`: diabetes code anywhere -> 1; only a non-diabetes code
+-> 0 (ascertained negative); no rows -> NA (not ascertained); a 2005 code still counts (no window);
+contribution + grounding intact. Tasks carry NO `anchor_date`, proving anchor = none works.
+
+**Tight by design:** only the structured code channel has a whole-history executor so far; a
+whole-history TEXT variant ("ever smoked anywhere") would need no-window eligibility (all subject
+docs) -- a small parallel to slice 5's seam, deferred. No constructor-syntax, variable-semantics,
+or source-contribution change. The windowed code path is untouched.
+
+**Owner-set order:** (1) retrieval wiring [done]; (2) whole-history "ever" [done]; (3) generalize D1
+`citation_warning` if still useful; (4) constructor-syntax extraction / API cleanup.
+
+**Files (this entry):** `R/structured.R`, `R/run_variable.R`,
+`tests/testthat/test-slice-whole-history-spec.R` (new), `HANDOFF.md`. Committed as slice 6.

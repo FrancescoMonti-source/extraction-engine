@@ -90,11 +90,14 @@ suppressWarnings(suppressMessages(library(dplyr)))
     # become one caller, so the lab channel stops borrowing a clinically-named fn.
     switch(channel_def$type,
         code = {
-            w <- .window_days(variable)
-            measure_diabetes(               # temporary adapter: generic over `codes=`
-                sources[[source]], tasks,
-                codes = .selector_codes(channel_def$selector, "prefixes"),
-                from_days = w[["from_days"]], to_days = w[["to_days"]])
+            codes <- .selector_codes(channel_def$selector, "prefixes")
+            if (is.null(variable$window)) {     # whole-history ("ever"): no anchor/window
+                measure_code_presence_ever(sources[[source]], tasks, codes = codes)
+            } else {
+                w <- .window_days(variable)     # temporary adapter: generic over `codes=`
+                measure_diabetes(sources[[source]], tasks, codes = codes,
+                                 from_days = w[["from_days"]], to_days = w[["to_days"]])
+            }
         },
         lab = {
             w <- .window_days(variable)
