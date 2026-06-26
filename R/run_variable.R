@@ -10,7 +10,16 @@
 # channel name -- the runner must stay free of any one concept's vocabulary. The
 # existing measure_*() / run_extraction() functions are reused as TEMPORARY
 # adapters (they are generic over their parameters); they are not the public
-# architecture. Cross-channel combination reuses combine_any_channel_hit().
+# architecture.
+#
+# VALUE assembly dispatches on combine vs output (design note §8):
+#   - combine present (a hit-set expression; any_positive() lowered to one) ->
+#     cross-channel hit-set algebra over >=2 channels -> a 0/1 membership value;
+#   - combine = NULL -> a SINGLE channel, assembled by output() shape:
+#       binary  -> the channel's observed membership (0/1),
+#       number  -> the channel's reduced numeric value,
+#       categorical -> the channel's documented status,
+#       fields  -> the task's several extracted fields.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
@@ -168,61 +177,57 @@ suppressWarnings(suppressMessages(library(dplyr)))
         TRUE                 ~ "unknown")
 }
 
-# any_positive(): OR across the activated channels, one combine per task. Keyed on
-# channel TYPE, not source name. The text default (no_candidate -> unavailable)
-# keeps "no text retrieved" distinct from a documented negative, honouring the
-# open-world absence policy; the incomplete_value comes from that policy. The
-# per-channel channel_status carries the RAW processing_state and a contribution
-# class so each channel's contribution is fully transparent.
-.combine_any_variable <- function(variable, tasks, channel_results) {
+# Single-channel binary membership (combine = NULL + binary output): the value IS
+# the channel's observed hit, as OBSERVED set algebra -- a task is a member iff
+# hit == TRUE, so both FALSE and NA give 0 and the value is always 0/1 (a degenerate
+# one-set hit-algebra; the open-world uncertainty rides on channel_coverage, never on
+# the value). The per-channel channel_status keeps the RAW processing_state, the raw
+# TRUE/FALSE/NA hit, and a contribution class so a `0` from an unavailable channel is
+# distinguishable from an ascertained negative.
+.single_membership_variable <- function(variable, tasks, channel_name, result) {
     var_name <- variable$name
-    spec_obj <- variable   # alias: `variable` is also a mutate() column name below
+    source_name <- .source_name_for_channel(channel_name, variable)
+    is_text <- identical(.channel_type(channel_name, variable), "text")
+    id_col <- if (is_text) "hit_ref" else "source_row_id"
+    no_candidate <- if (is_text) "unavailable" else "complete"
     task_ids <- as.character(tasks$task_id)
-    values <- vector("list", length(task_ids))
-    status_l <- vector("list", length(task_ids))
-    evidence_l <- list()
-    absence_value <- variable$absence_policy$incomplete_value
-    for (i in seq_along(task_ids)) {
-        tid <- task_ids[[i]]
-        reduced <- lapply(names(channel_results), function(ch) {
-            is_text <- identical(.channel_type(ch, variable), "text")
-            id_col <- if (is_text) "hit_ref" else "source_row_id"
-            no_candidate <- if (is_text) "unavailable" else "complete"
-            .reduce_channel_result(channel_results[[ch]], tid, id_col,
-                                   no_candidate)[[tid]]
-        })
-        names(reduced) <- names(channel_results)
-        combined <- combine_any_channel_hit(reduced, incomplete_value = absence_value)
-        values[[i]] <- tibble::tibble(
-            task_id = tid, variable = var_name, value = combined$value,
-            # combine_any_channel_hit's "ascertainment" is the channel-coverage notion
-            # (were all selected channels evaluable); the public envelope names it so.
-            channel_coverage = combined$ascertainment)
-        status_l[[i]] <- combined$channel_status %>%
-            mutate(
-                task_id = tid,
-                variable = var_name,
-                source = unname(vapply(channel, .source_name_for_channel,
-                                       character(1), variable = spec_obj)),
-                processing_state = unname(vapply(channel, .channel_raw_state,
-                                          character(1),
-                                          channel_results = channel_results,
-                                          tid = tid)),
-                contribution = .contribution_class(status, hit),
-                .before = 1L)
-        if (nrow(combined$evidence)) {
-            evidence_l[[length(evidence_l) + 1L]] <- combined$evidence %>%
-                mutate(
-                    task_id = tid,
-                    variable = var_name,
-                    source = unname(vapply(channel, .source_name_for_channel,
-                                           character(1), variable = spec_obj)),
-                    evidence_ref = source_row_id,
-                    .before = 1L)
+    reduced <- .reduce_channel_result(result, task_ids, id_col, no_candidate)
+
+    raw_state <- function(tid) {
+        s <- result$coverage$processing_state[as.character(result$coverage$task_id) == tid]
+        if (length(s)) as.character(s[[1]]) else NA_character_
+    }
+
+    values_l <- list(); status_l <- list(); evidence_l <- list()
+    for (tid in task_ids) {
+        r <- reduced[[tid]]
+        observed <- isTRUE(r$hit)               # NA / FALSE -> non-member (0)
+        coverage <- switch(r$status,
+            complete = "complete",
+            error    = "failed",
+            "partial")                          # unavailable / invalid
+        refs <- if (observed && nrow(r$evidence)) {
+            as.character(r$evidence$source_row_id)
+        } else character()
+        values_l[[length(values_l) + 1L]] <- tibble::tibble(
+            task_id = tid, variable = var_name,
+            value = as.integer(observed), channel_coverage = coverage)
+        status_l[[length(status_l) + 1L]] <- tibble::tibble(
+            task_id = tid, variable = var_name, channel = channel_name,
+            source = source_name, status = r$status, hit = r$hit,
+            processing_state = raw_state(tid),
+            contribution = .contribution_class(r$status, r$hit),
+            evidence_refs = if (length(refs)) paste(refs, collapse = "; ")
+                            else NA_character_,
+            error = NA_character_)
+        if (length(refs)) {
+            evidence_l[[length(evidence_l) + 1L]] <- tibble::tibble(
+                task_id = tid, variable = var_name, channel = channel_name,
+                source = source_name, source_row_id = refs, evidence_ref = refs)
         }
     }
     list(
-        values = bind_rows(values),
+        values = bind_rows(values_l),
         channel_status = bind_rows(status_l),
         evidence = if (length(evidence_l)) bind_rows(evidence_l) else
             tibble::tibble(task_id = character(), variable = character(),
@@ -259,9 +264,9 @@ suppressWarnings(suppressMessages(library(dplyr)))
     list(values = values, channel_status = status, evidence = evidence)
 }
 
-# documented_status(): a single text channel whose accepted categorical status
-# becomes the cohort value. Keeps the categorical STRING (not a binary hit), and
-# the three non-positive outcomes distinct:
+# categorical output (combine = NULL): a single text channel whose accepted
+# categorical status becomes the cohort value. Keeps the categorical STRING (not a
+# binary hit), and the three non-positive outcomes distinct:
 #   valid        -> the status; channel_coverage complete
 #   no_candidate -> NA, partial (nothing retrieved; open-world, not absence)
 #   invalid      -> NA, needs_review (e.g. definitive status without grounding)
@@ -319,8 +324,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
     list(values = values, channel_status = channel_status, evidence = evidence)
 }
 
-# collect_fields(): one text task -> several fields. Emits one value row per
-# task x field (the field's accepted value -- already NA for invalid fields, so a
+# fields output (combine = NULL): one text task -> several fields. Emits one value
+# row per task x field (the field's accepted value -- already NA for invalid fields, so a
 # valid grounded field survives an invalid sibling), a per-task channel status with
 # field counts, and per-field evidence. The task is flagged for review iff any
 # field is invalid or the call failed.
@@ -539,48 +544,39 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
 
     combine <- variable$combine
     if (inherits(combine, "ee_combiner") &&
-        identical(combine$kind, "any_positive")) {
-        out <- .combine_any_variable(variable, tasks, channel_results)
-    } else if (inherits(combine, "ee_combiner") &&
-               identical(combine$kind, "documented_status")) {
-        if (length(channel_results) != 1L) {
-            stop("documented_status() currently supports a single channel.",
-                 call. = FALSE)
-        }
-        ch <- names(channel_results)[[1]]
-        if (!identical(.channel_type(ch, variable), "text")) {
-            stop("documented_status() currently requires a text channel.",
-                 call. = FALSE)
-        }
-        out <- .documented_status_variable(variable, tasks, ch, channel_results[[1]])
-    } else if (inherits(combine, "ee_combiner") &&
-               identical(combine$kind, "collect_fields")) {
-        if (length(channel_results) != 1L) {
-            stop("collect_fields() currently supports a single channel.",
-                 call. = FALSE)
-        }
-        ch <- names(channel_results)[[1]]
-        if (!identical(.channel_type(ch, variable), "text")) {
-            stop("collect_fields() currently requires a text channel.",
-                 call. = FALSE)
-        }
-        out <- .multi_field_variable(variable, tasks, ch, channel_results[[1]])
-    } else if (inherits(combine, "ee_combiner") &&
-               identical(combine$kind, "hit_set_expr")) {
+        identical(combine$kind, "hit_set_expr")) {
+        # Multi-channel hit-set algebra (any_positive() lowered to an expression at
+        # build, or a written expression). The constructor guarantees >=2 channels.
         out <- .hit_set_expr_variable(variable, tasks, channel_results)
-    } else if (length(channel_results) == 1L) {
+    } else if (is.null(combine)) {
+        # Single channel (constructor-guaranteed): assemble on the output() shape.
         ch <- names(channel_results)[[1]]
-        reducer <- variable$channels[[ch]]$reducer
-        if (!inherits(reducer, "ee_reducer") ||
-            !identical(reducer$kind, "max_value")) {
-            stop("Single-channel direct specs currently require max_value().",
-                 call. = FALSE)
-        }
-        out <- .single_numeric_variable(variable, tasks, ch, channel_results[[1]])
+        ch_type <- .channel_type(ch, variable)
+        output_kind <- if (is.null(variable$output)) NA_character_ else variable$output$kind
+        out <- switch(output_kind,
+            binary = .single_membership_variable(
+                variable, tasks, ch, channel_results[[1]]),
+            number = .single_numeric_variable(
+                variable, tasks, ch, channel_results[[1]]),
+            categorical = {
+                if (!identical(ch_type, "text")) {
+                    stop("categorical output currently requires a text channel.",
+                         call. = FALSE)
+                }
+                .documented_status_variable(variable, tasks, ch, channel_results[[1]])
+            },
+            fields = {
+                if (!identical(ch_type, "text")) {
+                    stop("fields output currently requires a text channel.",
+                         call. = FALSE)
+                }
+                .multi_field_variable(variable, tasks, ch, channel_results[[1]])
+            },
+            stop("Unsupported single-channel output: ", output_kind,
+                 " (expected binary/number/categorical/fields).", call. = FALSE))
     } else {
-        stop("This experimental runner supports any_positive(), documented_status(), ",
-             "collect_fields(), a hit-set expression string, ",
-             "or a single max_value() channel.", call. = FALSE)
+        stop("Unsupported combine; expected a hit-set expression (>=2 channels) ",
+             "or NULL (single channel).", call. = FALSE)
     }
     combine_rule <- if (inherits(combine, "ee_combiner")) combine$kind else NA_character_
     c(list(spec = variable, selected_channels = selected,

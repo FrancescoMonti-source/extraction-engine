@@ -1,6 +1,6 @@
 # Contract tests for slice 2: a NEUTRAL smoking concept + documented-status
 # template -> categorical text variable. Synthetic data, deterministic fake model.
-# Protects architecture boundaries (categorical output, documented_status collapse,
+# Protects architecture boundaries (categorical output, single-channel assembly,
 # abstention, invalid->needs_review, no_candidate, and D1 keep-and-flag), not
 # clinical truth for smoking.
 
@@ -75,14 +75,15 @@ test_that("smoking concept is neutral; documented status lives in the template",
     expect_false(is.null(smk$channels$text_smoking_mentions$extractor))  # activation owns it
     expect_equal(smk$output$kind, "categorical")
     expect_setequal(smk$output$levels, SMOKING_STATUSES)
-    expect_equal(smk$combine$kind, "documented_status")
+    expect_null(smk$combine)        # single channel: categorical output drives assembly
+
 })
 
-# Why: the documented_status collapse must carry a CATEGORICAL value and keep the
-# three non-positive outcomes distinct -- indetermine (model judged evidence
-# inconclusive) is a real ascertained value, while no_candidate (nothing retrieved)
-# and invalid (definitive without grounding) are not.
-test_that("documented_status returns the categorical status and distinct absence states", {
+# Why: single-channel categorical assembly (combine = NULL, output = categorical)
+# must carry a CATEGORICAL value and keep the three non-positive outcomes distinct --
+# indetermine (model judged evidence inconclusive) is a real ascertained value, while
+# no_candidate (nothing retrieved) and invalid (definitive without grounding) are not.
+test_that("categorical output returns the status and distinct absence states", {
     run <- run_variable(smoking_periop(), sm_tasks, sm_sources,
                         caller = sm_fake, model_name = "fake")
 

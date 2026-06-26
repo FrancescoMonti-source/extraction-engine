@@ -8,13 +8,14 @@
 #
 # "Documented current status" is a TEMPLATE/ACTIVATION choice, not a concept fact:
 # the template supplies the categorical answer schema (smoking_definition, from
-# types/smoking.R) as the channel's text_extractor, the categorical output, and the
-# documented_status() collapse. A different smoking variable could activate the same
-# channel with a different extractor/output without touching the concept.
+# types/smoking.R) as the channel's text_extractor and the categorical output. A
+# different smoking variable could activate the same channel with a different
+# extractor/output without touching the concept.
 #
-# This is a different concept SHAPE from diabetes: text-dominant, categorical
-# output, a non-`any` collapse, model parser/schema behaviour, evidence-sentence
-# grounding, and invalid / citation_warning / no_candidate semantics.
+# This is a different concept SHAPE from diabetes: text-dominant, single-channel
+# (combine = NULL; the categorical output drives assembly), model parser/schema
+# behaviour, evidence-sentence grounding, and invalid / citation_warning /
+# no_candidate semantics.
 # =============================================================================
 
 smoking_concept_spec <- function() {
@@ -32,8 +33,8 @@ smoking_concept_spec <- function() {
 
 # Peri-operative documented smoking status (the D0840 `tabac_statut` shape):
 # the status documented in [anchor - 365d, anchor + 7d]. Concept-specific
-# quickstart -- "documented status" lives here (extractor + categorical output +
-# documented_status collapse), not in the neutral concept.
+# quickstart -- "documented status" lives here (extractor + categorical output;
+# single channel, so combine = NULL), not in the neutral concept.
 documented_smoking_status_periop_template <- function(concept = smoking_concept_spec()) {
     variable_template(
         name = "documented_smoking_status_periop_template",
@@ -43,7 +44,6 @@ documented_smoking_status_periop_template <- function(concept = smoking_concept_
             channels = c("text_smoking_mentions"),
             text_method = llm_after_lucene(),
             text_extractor = smoking_definition(),   # categorical answer schema (types/smoking.R)
-            output = categorical_output(SMOKING_STATUSES),
-            combine = documented_status(),
-            absence_policy = open_world()))   # build = .default_template_build(concept)
+            output = categorical_output(SMOKING_STATUSES),  # single channel -> combine = NULL;
+            absence_policy = open_world()))   # output drives assembly (build = .default_template_build)
 }

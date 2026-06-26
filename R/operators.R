@@ -28,26 +28,19 @@ max_value <- function() {
     .experimental_spec(list(kind = "max_value"), "ee_reducer")
 }
 
-# --- cross-channel combiners / collapses --------------------------------------
+# --- cross-channel combiner ---------------------------------------------------
+# The ONLY cross-channel combine is hit-set algebra (hit_set_expr); a single
+# channel has no hit-algebra, so it carries combine = NULL and its value is shaped
+# by output() (documented status, multi-field, numeric, or membership). There is no
+# documented_status()/collect_fields() combiner: those were single-channel OUTPUT
+# assembly mislabelled as combines, now reached via output = categorical_output()/
+# fields_output() with combine = NULL (see run_variable()'s output dispatch).
+#
+# any_positive() is sugar: at variable_spec() build it LOWERS to the raw hit-set
+# expression "a | b | ..." over the activated channels (>=2). It is not a distinct
+# evaluator -- it produces a hit_set_expr like any other boolean combine.
 any_positive <- function() {
     .experimental_spec(list(kind = "any_positive"), "ee_combiner")
-}
-
-# Non-`any` collapse for a categorical documented status: take the activated
-# channel's documented status as the value, keeping `indetermine` (model judged
-# the evidence inconclusive) distinct from `no_candidate` (nothing retrieved) and
-# from `invalid` (definitive status without grounding -> needs_review). For one
-# channel it is a passthrough; the slot is ready for a categorical reconcile if a
-# second channel is ever activated.
-documented_status <- function() {
-    .experimental_spec(list(kind = "documented_status"), "ee_combiner")
-}
-
-# Collect one extraction task's several fields, keeping field-level acceptance: a
-# valid grounded field survives an invalid sibling, and the task is flagged for
-# review iff any field is invalid (or the call failed). Not a binary collapse.
-collect_fields <- function() {
-    .experimental_spec(list(kind = "collect_fields"), "ee_combiner")
 }
 
 # String boolean hit-set expression -- the public boolean-combine surface:

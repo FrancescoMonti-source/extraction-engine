@@ -94,7 +94,9 @@ test_that("variable_template build= defaults to the shared builder and still acc
     spec <- variable_spec(template = tmpl, name = "diabete_pre_greffe",
                           unit = "transplant", anchor = "anchor_date")
     expect_s3_class(spec, "ee_variable_spec")
-    expect_equal(spec$combine$kind, "any_positive")
+    # any_positive() lowers to a raw hit-set expression over the activated channels.
+    expect_equal(spec$combine$kind, "hit_set_expr")
+    expect_equal(spec$combine$expr, "pmsi_diag_e10_e14 | text_diabetes_mentions")
     expect_setequal(names(spec$channels),
                     c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
 
@@ -131,9 +133,10 @@ test_that("baseline diabetes variable from template returns traceable output", {
     channel_coverage <- setNames(run$values$channel_coverage, run$values$task_id)
     expect_equal(values[["P1::t"]], 1L)       # text channel
     expect_equal(values[["P2::t"]], 1L)       # PMSI channel
-    expect_true(is.na(values[["P3::t"]]))     # text no_candidate remains partial
+    expect_equal(values[["P3::t"]], 0L)       # no observed hit -> 0; uncertainty rides on coverage
     expect_equal(channel_coverage[["P1::t"]], "complete")
     expect_equal(channel_coverage[["P2::t"]], "partial")
+    expect_equal(channel_coverage[["P3::t"]], "partial")   # text no_candidate -> not ascertained
 
     p1_text <- run$channel_status[
         run$channel_status$task_id == "P1::t" &
@@ -207,7 +210,7 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = list(esrd_code = use_channel()),
-        output = binary_output(), combine = any_positive(),
+        output = binary_output(),       # single channel -> combine = NULL (membership)
         absence_policy = open_world())
 
     tasks <- tibble::tibble(
@@ -289,7 +292,7 @@ test_that("any_positive combine is wired through run_variable across the gap cas
 
     expect_equal(values[["Q1::t"]], 1L)        # PMSI + text both positive
     expect_equal(values[["Q2::t"]], 1L)        # PMSI positive + text no_candidate
-    expect_true(is.na(values[["Q3::t"]]))      # PMSI negative + text no_candidate -> not absence
+    expect_equal(values[["Q3::t"]], 0L)        # no observed hit -> 0 (coverage flags the silent text)
     expect_equal(values[["Q4::t"]], 0L)        # both complete, no positive -> documented negative
 
     expect_equal(cov[["Q1::t"]], "complete")
@@ -371,7 +374,8 @@ test_that("any_positive survives a text-channel model error and keeps code prove
     cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(value[["R1::t"]], 1L)         # code positive survives the text error
-    expect_equal(cov[["R1::t"]], "partial")    # ...and coverage flags the unevaluable text
+    expect_equal(cov[["R1::t"]], "failed")     # a channel ERRORED -> failed (distinct from a
+                                               # merely-silent channel's partial)
 
     ss <- run$channel_status
     text_status <- ss$status[ss$task_id == "R1::t" &
@@ -391,8 +395,9 @@ test_that("out-of-window code does not count as a positive through the spine", {
                         caller = ms_fake, model_name = "fake")
     value <- setNames(run$values$value, run$values$task_id)
 
-    # R2: E11 dated 2015 is out of the 5-year window + text no_candidate -> not a hit
-    expect_true(is.na(value[["R2::t"]]))
+    # R2: E11 dated 2015 is out of the 5-year window + text no_candidate -> no observed
+    # hit, so value 0 (the out-of-window code is an ascertained negative, see below).
+    expect_equal(value[["R2::t"]], 0L)
     code_contrib <- run$channel_status$contribution[
         run$channel_status$task_id == "R2::t" &
         run$channel_status$channel == "pmsi_diag_e10_e14"]

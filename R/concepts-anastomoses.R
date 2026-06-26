@@ -10,7 +10,8 @@
 # Like smoking, the concept is neutral (it declares the operative-report text
 # route); the multi-field answer schema (anastomoses_definition, from
 # types/anastomoses.R) is supplied at the template/activation layer, and the output
-# is a SET of cohort columns (fields_output) collapsed with collect_fields().
+# is a SET of cohort columns (fields_output). It is single-channel, so combine =
+# NULL and the fields output drives the multi-field assembly.
 # =============================================================================
 
 anastomoses_concept_spec <- function() {
@@ -35,7 +36,6 @@ recipient_anastomoses_template <- function(concept = anastomoses_concept_spec())
             channels = c("text_operative_report"),
             text_method = llm_after_lucene(),
             text_extractor = anastomoses_definition(),        # multi-field answer schema
-            output = fields_output(names(ANASTOMOSES_FIELDS)),
-            combine = collect_fields(),
-            absence_policy = open_world()))   # build = .default_template_build(concept)
+            output = fields_output(names(ANASTOMOSES_FIELDS)),  # single channel -> combine = NULL;
+            absence_policy = open_world()))   # output drives assembly (build = .default_template_build)
 }

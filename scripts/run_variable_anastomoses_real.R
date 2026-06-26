@@ -3,7 +3,7 @@
 # Real end-to-end run of the EVENT-scoped multi-field variable against a real
 # local model -- the last spine path never run with a model (was fixtures-only).
 # -----------------------------------------------------------------------------
-# Drives `recipient_anastomoses` (recipient_anastomoses_template, collect_fields)
+# Drives `recipient_anastomoses` (recipient_anastomoses_template, fields_output)
 # over the real D0840 cohort. The text channel is EVENT-scoped: eligibility is the
 # recipient's documents from the SAME surgical event (PATID + EVTID), NOT a date
 # window. run_variable() resolves that from raw documents:

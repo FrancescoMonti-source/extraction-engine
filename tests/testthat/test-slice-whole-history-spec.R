@@ -29,8 +29,7 @@ wh_variable <- function() {
         anchor = NULL,                 # no anchor
         window = NULL,                 # whole history
         channels = list(pmsi_diag_e10_e14 = use_channel()),
-        output = binary_output(),
-        combine = any_positive(),
+        output = binary_output(),      # single channel -> combine = NULL (membership)
         absence_policy = open_world())
 }
 
@@ -49,7 +48,7 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
 
     expect_equal(value[["Q1"]], 1L)        # diabetes code present
     expect_equal(value[["Q2"]], 0L)        # only a non-diabetes code -> negative
-    expect_true(is.na(value[["Q3"]]))      # no diagnosis rows -> not ascertained
+    expect_equal(value[["Q3"]], 0L)        # no diagnosis rows -> no observed hit -> 0 (coverage partial)
     expect_equal(value[["Q4"]], 1L)        # 2005 code still counts (no window)
 
     expect_equal(cov[["Q1"]], "complete")
@@ -69,7 +68,8 @@ test_that("diabetes_ever preserves source contribution", {
     expect_equal(get("Q2", "contribution"), "negative")
     expect_equal(get("Q3", "contribution"), "silent")
     expect_equal(get("Q3", "processing_state"), "no_eligible_source")
-    expect_equal(run$combine_rule, "any_positive")
+    # Single channel -> no cross-channel combine; the membership value comes from output().
+    expect_true(is.na(run$combine_rule))
 
     # The positive is grounded by its diagnosis row; the 2005 code grounds Q4.
     expect_equal(run$evidence$evidence_ref[run$evidence$task_id == "Q1"], "diag:001")

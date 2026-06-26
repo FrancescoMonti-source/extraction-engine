@@ -57,7 +57,7 @@ anastomoses_var <- function() {
 }
 
 # Why: a multi-field concept must be expressible with no date window (it is
-# event-scoped). The output is a SET of cohort columns collapsed by collect_fields.
+# event-scoped). The output is a SET of cohort columns (fields_output, combine = NULL).
 test_that("anastomoses concept is multi-field, event-scoped, with no date window", {
     concept <- anastomoses_concept_spec()
     expect_equal(concept$name, "transplant_anastomoses")
@@ -66,7 +66,7 @@ test_that("anastomoses concept is multi-field, event-scoped, with no date window
 
     var <- anastomoses_var()
     expect_null(var$window)                       # event scope, not a date window
-    expect_equal(var$combine$kind, "collect_fields")
+    expect_null(var$combine)                      # single channel: fields output drives assembly
     expect_equal(var$output$kind, "fields")
     expect_setequal(var$output$fields, names(ANASTOMOSES_FIELDS))
 })
@@ -74,7 +74,7 @@ test_that("anastomoses concept is multi-field, event-scoped, with no date window
 # Why: one task yields several fields, and acceptance is FIELD-LEVEL -- a valid
 # grounded field keeps its value even when a sibling field is invalid, while the
 # task is still flagged for review.
-test_that("collect_fields keeps valid fields and flags the task on an invalid sibling", {
+test_that("fields output keeps valid fields and flags the task on an invalid sibling", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
                         caller = ana_fake, model_name = "fake")
 
@@ -108,7 +108,7 @@ test_that("collect_fields keeps valid fields and flags the task on an invalid si
 
 # Why: no_candidate and a failed call must stay distinct from extracted fields, and
 # a failed task must be flagged for review (not silently absent).
-test_that("collect_fields distinguishes no_candidate and a failed call", {
+test_that("fields output distinguishes no_candidate and a failed call", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
                         caller = ana_fake, model_name = "fake")
 
@@ -129,7 +129,7 @@ test_that("collect_fields distinguishes no_candidate and a failed call", {
 # cites an unsupplied id -- no longer failed closed (the pre-#3 behaviour). The flag
 # surfaces in the envelope: per-field on values, per-task on the channel status. The
 # invented id never materializes as evidence.
-test_that("collect_fields keeps-and-flags an invented citation (no longer fail-closed)", {
+test_that("fields output keeps-and-flags an invented citation (no longer fail-closed)", {
     cw_fake <- function(prompt, type, system_prompt) {
         res <- setNames(
             lapply(names(ANASTOMOSES_FIELDS),

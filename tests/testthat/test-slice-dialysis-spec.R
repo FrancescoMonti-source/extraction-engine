@@ -64,14 +64,16 @@ test_that("dialysis multi-source OR yields the expected values and channel cover
 
     expect_equal(value[["DG1::t"]], 1L)        # ICD-10 only
     expect_equal(value[["DG2::t"]], 1L)        # text only
-    expect_true(is.na(value[["DG3::t"]]))      # both silent -> not ascertained
+    expect_equal(value[["DG3::t"]], 0L)        # both silent -> no observed hit -> 0 (coverage partial)
     expect_equal(value[["DG4::t"]], 0L)        # both ascertained negative
 
     expect_equal(cov[["DG1::t"]], "partial")   # text was silent
     expect_equal(cov[["DG2::t"]], "complete")
+    expect_equal(cov[["DG3::t"]], "partial")   # neither channel evaluable -> uncertainty here, not in value
     expect_equal(cov[["DG4::t"]], "complete")
 
-    expect_equal(run$combine_rule, "any_positive")   # researcher-selected rule, exposed
+    # any_positive() lowered to a hit-set expression; the boolean combine is exposed as such.
+    expect_equal(run$combine_rule, "hit_set_expr")
     expect_equal(run$selected_channels$channel,
                  c("pmsi_diag_dialysis", "text_dialysis_mentions"))
 })
@@ -127,7 +129,7 @@ test_that("multi-source OR is warning-clean when the text channel is entirely si
 
     value <- setNames(run$values$value, run$values$task_id)
     expect_equal(value[["DG1::t"]], 1L)        # ICD-10 carries it; text silent
-    expect_true(is.na(value[["DG3::t"]]))      # no code rows + text silent -> NA
+    expect_equal(value[["DG3::t"]], 0L)        # no code rows + text silent -> no observed hit -> 0
     txt <- run$channel_status[run$channel_status$channel == "text_dialysis_mentions", ]
     expect_true(all(txt$contribution == "silent"))
     expect_true(all(txt$processing_state == "no_candidate"))

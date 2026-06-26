@@ -42,6 +42,53 @@ suppressWarnings(suppressMessages(library(dplyr)))
          call. = FALSE)
 }
 
+# Lower any_positive() to a raw hit-set expression and enforce the combine / channel
+# / output validity matrix (design note §8). The PRESENCE of a combine encodes
+# multi-channel hit-set algebra: with >=2 channels combine MUST be an expression
+# (any_positive() is sugar that lowers to "a | b | ..."); with a single channel
+# there is no hit-algebra, so combine MUST be NULL and the value is shaped by
+# output(). All cross-channel combine is hit-set algebra -- there is no reconcile
+# rule, so combine = NULL over >=2 channels is an error.
+.resolve_variable_combine <- function(combine, channel_names, output) {
+    n <- length(channel_names)
+    if (inherits(combine, "ee_combiner") && identical(combine$kind, "any_positive")) {
+        if (n < 2L) {
+            stop("any_positive() needs >=2 channels; for a single channel drop ",
+                 "combine (combine = NULL) and let output() shape the value.",
+                 call. = FALSE)
+        }
+        combine <- hit_set_expr(paste(channel_names, collapse = " | "))
+    }
+    if (inherits(combine, "ee_combiner") && identical(combine$kind, "hit_set_expr")) {
+        if (n < 2L) {
+            stop("A combine expression needs >=2 channels; a single channel must ",
+                 "use combine = NULL.", call. = FALSE)
+        }
+        if (!is.null(output) && !identical(output$kind, "binary")) {
+            stop("A hit-set expression only produces a 0/1 membership value; output ",
+                 "must be binary_output() (or omitted), not '", output$kind, "'.",
+                 call. = FALSE)
+        }
+        return(combine)
+    }
+    if (inherits(combine, "ee_combiner")) {
+        stop("Unsupported combiner '", combine$kind, "'. Cross-channel combine is ",
+             "hit-set algebra only; single-channel assembly is driven by output(), ",
+             "not combine.", call. = FALSE)
+    }
+    # combine is NULL from here.
+    if (n >= 2L) {
+        stop("combine = NULL requires a single channel; supply a combine ",
+             "expression (hit-set algebra) for >=2 channels -- there is no ",
+             "reconcile rule otherwise.", call. = FALSE)
+    }
+    if (n == 1L && is.null(output)) {
+        stop("A single-channel variable needs an output() ",
+             "(binary/number/categorical/fields) to shape its value.", call. = FALSE)
+    }
+    combine
+}
+
 # A hit-set expression's referenced channels must be exactly the variable's
 # activated channels: a referenced channel that is not activated is an unknown
 # symbol; an activated channel absent from the expression is dead weight. Both are
@@ -198,6 +245,7 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
     }
 
     combine <- .as_combiner(combine)            # bare string -> hit_set_expr()
+    combine <- .resolve_variable_combine(combine, names(channels), output)
     .check_expr_channels(combine, names(channels))
 
     .experimental_spec(
