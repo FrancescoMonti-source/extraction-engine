@@ -582,11 +582,28 @@ The contract above is the **settled target** (2026-06-26). A few parts are not y
 - **`documented_status()` and `collect_fields()` are NOT combines.** They are single-channel **output assembly** (categorical passthrough / field fan-out), like `max_value`. They run with `combine = NULL` and are dispatched by `output` shape; for them `combine_rule = NA`. (`documented_status` is a trivial passthrough and likely disappears as a named operator.) This makes `output` load-bearing — today the runner dispatches only on `combine$kind` and never reads `output`.
 - **`value` is always `0`/`1` for a boolean hit-algebra variable; the absence-policy knob is reconciled, not assumed dead.** Lowering `any_positive` to determined hit-set algebra removes its NA-on-incomplete path — the boolean variable's only use of `open_world()` / `missing_if_no_measurement()` / `absence_policy=`. That vocabulary is **reconciled or removed where it duplicates the observed hit-set contract**; whether it still expresses real output-assembly policy (e.g. a numeric variable's value when no measurement exists) is checked against consumers before any deletion.
 
+**Dispatch & validity (channel count × `combine` × `output`).** `combine`'s presence is exactly the multi-channel signal: **1 selected channel ⟹ `combine = NULL`** (a single-channel expression like `"a"` / `"!a"` is an error — redundant with NULL; the only cost is that single-channel complement `!a` is not expressible, read it off the variable's `0`s); **≥2 channels ⟹ a `combine` expression** → `bin_output()`. On the `combine = NULL` side the **`output` shape** drives assembly. Full validity matrix (enforced at build time in `variable_spec()`, not in tests):
+
+```text
+channels  combine      output                       valid?
+>=1       expression   bin_output()                 yes   (hit-algebra -> 0/1)
+1         NULL         bin_output()                 yes   (value = that channel's hit)
+1         NULL         num/str/cat/struct_output()  yes   (single-channel output assembly)
+>=2       NULL         any                          no    (no reconcile rule)
+any       expression   non-binary output            no    (hit-algebra only makes 0/1)
+1         expression   any                          no    (use NULL)
+any       any          missing (not inferable)      no    (cannot validate shape)
+```
+
+**What `hit` means.** A channel's `hit` is "**its selector matched ≥1 in-scope row**" — uniform across code / text / lab. So an **unthresholded lab channel hits for every task that has a measurement** ("has a glucose value"); a threshold, when wanted, is a *selector* refinement narrowing which rows count. A lab channel therefore has two faces at once: a membership `hit` (usable in `combine`) and an optional numeric value (usable by `num_output`). (Today the code returns `hit = FALSE` for an unthresholded measured lab — this definition changes that.)
+
+**Output types & inference.** Five shapes: `bin_output` (membership 0/1), `num_output` (numeric), `str_output` (unconstrained string), `cat_output` (categorical), `struct_output` (a fixed-schema multi-field record — one task → one record; renames `fields_output`). The value's **data type is inferred from the channel**, not hand-written: structured lab (`NUMRES`) → `num`, structured code (ICD-10 / CCAM) → `str`, and a **text channel's shape *and* any category levels come entirely from its `answer_spec`** — so `output` is essentially never spelled out for text. `cat_output` carries **no levels of its own**: the level set is the `enum` in the `answer_spec`, enforced at the LLM by the grammar gate (`scripts/check_grammar_enforcement.R`, `gemma3:4b` only); reporting reads those levels rather than re-declaring them. Explicit `output =` survives only as an override — chiefly `bin_output()` to ask for membership instead of a single structured channel's inferred value. So "output is always required" relaxes to "required only when it can't be inferred".
+
 **Per-channel `processing_state`** is exported as one normalised column — `evaluated` · `no_candidate` · `no_input_rows` · `not_called` · `invalid` · `execution_error` — with the raw executor-specific states (`valid`/`measured`, `no_eligible_document`/`no_eligible_source`, `model_error`/`processing_error`) kept internal where they are needed to derive `hit = FALSE` vs `NA`.
 
-**Naming.** `answer_spec` = the passive answer bundle (schema + prompt builder + parser + system prompt; joins the passive `_spec` family). `method` = extraction strategy. `extractor` = reserved for a future executable component. Retrieval-level Lucene material is `match_*` (`match_ref`, `match_text`); `hit` is reserved for channel-level observed set membership.
+**Naming.** `answer_spec` = the passive answer bundle (schema + prompt builder + parser + system prompt; joins the passive `_spec` family). `method` = extraction strategy. `extractor` = reserved for a future executable component. Retrieval-level Lucene material is `match_*` (`match_ref`, `match_text`); `hit` is reserved for channel-level observed set membership. Output types rename to `bin_output` / `num_output` / `str_output` / `cat_output` / `struct_output` (from `binary_` / `number_` / `categorical_` / `fields_output`).
 
-**Migration slices:** (1) this note · (2) promote `output` to dispatch + `documented_status`/`collect_fields` → assembly · (3) `combine_rule` = raw expression · (4) drop public `role`/`polarity` · (5) drop `decision`/`decision_state` · (6) normalise `processing_state` + unify `channel_coverage` · (7) lower `any_positive()` + reconcile/remove `absence_policy` where it duplicates the hit-set contract · (8) `hit_*` → `match_*` · (9) `answer_spec` / `method`.
+**Migration slices:** (1) this note · (2) **[non-transitional]** promote `output` to the dispatch key + `documented_status`/`collect_fields` → output assembly, **absorbing** the `any_positive`→raw-expression lowering and the template `combine`-removal so `is.null(combine)` holds directly (no legacy-combiner tolerance) · (3) `combine_rule` = raw expression · (4) drop public `role`/`polarity` · (5) drop `decision`/`decision_state` · (6) normalise `processing_state` + unify `channel_coverage` · (7) reconcile/remove `absence_policy` where it duplicates the hit-set contract (the `any_positive` lowering itself moved into slice 2) · (8) `hit_*` → `match_*` · (9) `answer_spec` / `method` / output-type renames.
 
 ---
 
@@ -636,6 +653,8 @@ The `variable_spec` decides which unit to use and how to anchor/window the evide
 The engine checks whether selected channels can be mechanically linked to the requested unit/window.
 
 Some variables are event-scoped rather than date-windowed. For example, operative-report anastomoses may be linked by subject + surgical event and declare `window = NULL`. The runner should not force a misleading placeholder date window onto event-scoped variables.
+
+**Grain is the `unit`; `combine` is grain-agnostic.** `PATID` (patient) and `EVTID` (hospital stay) are structurally guaranteed on every warehouse row — rows without both do not exist in the HDW datamarts — so either grain is always available and no missing-id handling is needed. The variable's `unit` picks the grain, and that is what makes a hit-set intersection mean "**anytime**" (PATID grain) versus "**same stay**" (EVTID grain): the *same* expression `text_diabet & glucose` reads as "has a diabetes note and a glucose result *ever*" at patient grain, and "…*in the same stay*" at stay grain. `combine` never takes a grain parameter — it is set algebra over whatever the task universe is, and the `unit` sets that universe. (Current gap: only the text path resolves event-grain eligibility; extending the structured code/lab executors to event linkage is additive, since `EVTID` is already present on every row.)
 
 ---
 
