@@ -5,6 +5,8 @@
 source("config/paths.R")
 source("R/data.R")
 source("R/structured.R")
+source("R/concepts-diabetes.R")       # measure_diabetes (clinical caller of the neutral core)
+source("R/concepts-hyperkalaemia.R")  # measure_hyperkalaemia (clinical caller of the neutral core)
 source("R/adapter_anastomoses.R")   # recipient-surgery tasks (task_id, PATID, anchor_date)
 
 tasks <- anastomoses_load_tasks(path_data("D0840", "chirurgie.xlsx"))

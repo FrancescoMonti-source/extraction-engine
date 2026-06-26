@@ -4736,3 +4736,34 @@ concept's text answer schema).
 **Still queued from the review:** clinical examples out of generic engine files (slice
 D); the `source`-vs-`channel` naming blur in the spike layer (slice E reorg of
 `multisource.R`).
+
+---
+
+## Move clinical wrappers out of generic engine files (slice D) — Claude (2026-06-25)
+
+Mechanical move, no behavior change. The generic engine files now hold only neutral
+execution machinery; the clinically-named wrappers live beside their concepts.
+
+- `measure_diabetes` + `DIABETES_CODES`: `R/structured.R` -> `R/concepts-diabetes.R`.
+- `diabetes_text_definition`: `R/multisource.R` -> `R/concepts-diabetes.R` (it is the
+  diabetes concept's text answer schema).
+- `measure_hyperkalaemia` + `POTASSIUM_CODES`: `R/structured.R` -> new
+  `R/concepts-hyperkalaemia.R` (hyperkalaemia has no spec-layer concept; it is a direct
+  measure_analyte_value() example, so the file documents that).
+
+Kept neutral in the engine files (unchanged): `measure_code_presence[_ever]`,
+`measure_analyte_value`, `build_structured_review_view` (structured.R);
+`combine_any_source_hit`, `.reduce_source`, `.source_status_from_state` (multisource.R);
+`binary_presence_text_definition`, `run_extraction`, `resolve_cited_ids` (extract.R);
+the hit-set expression machinery (hitset.R). `dialysis_text_definition` was already in
+`R/concepts-dialysis.R`; the smoking/anastomoses type/prompt/parse helpers were already
+in `R/types/`.
+
+Loading is explicit (no globbing): added `source("R/concepts-hyperkalaemia.R")` to
+`tests/testthat.R`, and `concepts-diabetes.R` + `concepts-hyperkalaemia.R` to
+`scripts/run_structured.R` (its only consumers of the moved wrappers). The diabetes
+real-run script already sourced `concepts-diabetes.R`. **Suite:** 395 tests, 0 warnings.
+
+**Next:** slice E -- rehome/rename `multisource.R` and fix the source-vs-channel
+vocabulary in `combine_any_source_hit` (the surviving OR combiner calls a channel a
+"source").

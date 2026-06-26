@@ -114,8 +114,7 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
 
 # =============================================================================
 # Per-source reduction to the {status, hit, evidence} contract that
-# combine_any_source_hit() consumes (via run_variable()'s any_positive path), plus
-# the diabetes concept's text answer schema.
+# combine_any_source_hit() consumes (via run_variable()'s any_positive path).
 #
 # The pre-spine diabetes multi-source orchestration helpers
 # (measure_diabetes_glucose / reduce_structured_source / reduce_text_source /
@@ -123,20 +122,6 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
 # is now driven by variable_spec activations + combine = any_positive() and exercised
 # at the spine level (see test-slice-diabetes-spec.R, test-slice-dialysis-spec.R).
 # =============================================================================
-
-# Minimal diabetes TEXT definition for the documents source: the diabetes concept's
-# answer schema (one evidenced field -- documented => diabetes mentioned (needs
-# evidence) -> hit; not_documented => none). Thin wrapper over the shared
-# binary_presence_text_definition() (R/extract.R).
-diabetes_text_definition <- function() {
-    binary_presence_text_definition(
-        name = "diabetes_text",
-        status_key = "diabetes_status",
-        field = "diabetes_mention",
-        system_prompt = paste(
-            "Identify only explicitly documented diabetes in the supplied snippets.",
-            "Do not infer absence from silence."))
-}
 
 # Map an engine processing_state (text OR structured vocabulary) + the source's
 # accepted value into the {status, hit} the combiner expects. These mappings are

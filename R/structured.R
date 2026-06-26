@@ -2,10 +2,11 @@
 # structured.R — deterministic (non-LLM) extraction path for STRUCTURED sources
 # -----------------------------------------------------------------------------
 # Mirrors the text path's four views but: evidence = selected source rows,
-# measurement = a deterministic rule, NO corpus and NO model. Concrete helpers
-# for the two contracted variables (diabetes / hyperkalaemia), not a generic
-# framework. Coverage census is kept over ALL tasks, same discipline as the text
-# path. Provenance points at the exact source rows.
+# measurement = a deterministic rule, NO corpus and NO model. NEUTRAL execution
+# machinery only (measure_code_presence[_ever] / measure_analyte_value); the
+# clinically-named callers (measure_diabetes, measure_hyperkalaemia) live beside
+# their concepts. Coverage census is kept over ALL tasks, same discipline as the
+# text path. Provenance points at the exact source rows.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
@@ -394,21 +395,6 @@ measure_code_presence_ever <- function(diag, tasks, codes,
          observations = observations, derivation = derivation)
 }
 
-# --- diabetes: thin clinically-named caller of measure_code_presence() --------
-# ICD-10 E10-E14 over the diagnosis source, default 5-year lookback. Kept for backward
-# compatibility (existing callers/tests/scripts); the generic run_variable() code branch
-# calls the neutral measure_code_presence() core directly.
-DIABETES_CODES <- c("E10", "E11", "E12", "E13", "E14")
-
-measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
-                             from_days = -1825L, to_days = 7L,
-                             missing_datsort = c("use_start", "exclude")) {
-    measure_code_presence(
-        diag, tasks, codes = codes, from_days = from_days, to_days = to_days,
-        missing_datsort = missing_datsort,
-        field = "diabetes_status", source = "diagnosis")
-}
-
 # --- generic analyte value: max usable value in a point-window over biol --------
 # Neutral lab/analyte executor: the generic core behind the clinically-named callers
 # (hyperkalaemia, diabetes glucose) and the run_variable() lab branch. Per task it
@@ -586,21 +572,6 @@ measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
         evidence = evidence,
         observations = observations,
         derivation = derivation)
-}
-
-# --- hyperkalaemia: thin clinically-named caller of measure_analyte_value() ----
-# In this warehouse the analyte code fixes the interpretation; unit is not a
-# measurement dimension. Concept selection belongs here, not in the loader. Kept for
-# backward compatibility (existing callers/tests); the generic run_variable() lab
-# branch calls the neutral measure_analyte_value() core directly.
-POTASSIUM_CODES <- "K.K"
-
-measure_hyperkalaemia <- function(biol, tasks, analytes = POTASSIUM_CODES,
-                                  threshold = 5.0, from_days = -7L, to_days = 7L) {
-    measure_analyte_value(
-        biol, tasks, analytes = analytes, threshold = threshold,
-        from_days = from_days, to_days = to_days,
-        field = "hyperkalaemia", source = "biology")
 }
 
 # One row per task/field with selected evidence collapsed for physician review.
