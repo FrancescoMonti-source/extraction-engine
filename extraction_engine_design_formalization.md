@@ -552,24 +552,41 @@ A & !B   with A = TRUE (hit), B = NA (unavailable)
 
 The reasoning: `A NOT B` is `A` minus the **observed** B hits. If B produced no hit, the task stays in `A`. The uncertainty about B belongs in the audit (`channel_coverage`, membership), **not** in the final set operation. NA must not silently flip the decision. (A strict epistemic mode that *does* propagate NA into the decision is a deliberate future extension, gated behind an explicit flag — it is not the default.)
 
-The envelope therefore carries three separate fields, resolving an earlier conflation where one `ascertainment` field meant both "is the decision determined" and "were the channels evaluable":
+The public envelope carries **`value` + `channel_coverage`** — no `decision`/`decision_state` (settled 2026-06-26, superseding an earlier `ascertainment` field that conflated "is the decision determined" with "were the channels evaluable"):
 
 ```text
-decision          included / excluded   (observed set-algebra result; binary, determined)
-decision_state    determined            (always, in the default observed mode)
+value             0 / 1                 (the observed set-algebra result)
 channel_coverage  complete / partial / failed
                     complete = every selected channel was evaluable (TRUE/FALSE)
                     partial  = a selected channel was unavailable / unusable (NA)
                     failed   = a selected channel errored
 ```
 
-`value` is therefore always `0` / `1` for a boolean variable; the "some channel was unavailable" caveat lives in `channel_coverage`, not in a missing value. The engine still keeps two things distinct (invariants #13/#14 — never infer clinical absence from silence): an **observed non-hit** (`FALSE`, the selected definition was evaluated and not matched) versus an **unavailable source** (`NA`). The closed-world clinical label ("patients with the act and no dialysis") is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for it; otherwise the result is "patients with the act and **no dialysis hit**, coverage permitting".
+`value` is always `0` / `1` for a boolean hit-algebra variable; the "some channel was unavailable" caveat lives in `channel_coverage`, never in a missing value or a separate `decision` column. `decision` (included / excluded) and `decision_state` (determined / undetermined) are **dropped from the public surface**: the observed algebra is always determined, so `decision_state` was a constant column, and `included`/`excluded` is a presentation recoding of `value` for a cohort-selection layer, not the generic engine (`decision_state` returns only with the future strict NA-propagating mode that needs it). The engine still keeps two things distinct (invariants #13/#14 — never infer clinical absence from silence): an **observed non-hit** (`FALSE`, the selected definition was evaluated and not matched) versus an **unavailable source** (`NA`). The closed-world clinical label ("patients with the act and no dialysis") is only honest if the `variable_spec` explicitly declares the selected exclusion definition sufficient for it; otherwise the result is "patients with the act and **no dialysis hit**, coverage permitting".
 
-**Overlap audit (Venn / UpSet).** The audit is not reduced to in/out. Alongside `values` it emits a **membership long-form** (`task_id`, `channel`, `role` in the expression = asserted/negated/mixed, `hit` = TRUE/FALSE/NA preserved, `processing_state`, `evidence_refs` for hits) and an **overlap summary** that groups tasks by their membership pattern across the expression channels (per-channel state columns with NA preserved + `pattern` + count + the pattern-determined `decision`, `decision_state`, and `channel_coverage`). The overlap summary is directly consumable by ggupset / UpSetR; the scientifically useful part is how the source hit sets overlap or fail to overlap, not just the final flag.
+**Downstream contract.** `value` carries the declared algebra's result only; `channel_coverage` carries evaluability and is part of variable provenance. An analyst computing `mean(value)` will therefore include `0`s from coverage-incomplete tasks — this is intended; the engine must not fold epistemic uncertainty into `value`. Summaries that must exclude incompletely-ascertained tasks filter on `channel_coverage`.
 
-`R/hitset.R` is the pure core (parser, grammar check, role derivation, Kleene evaluator, overlap); `R/run_variable.R` attaches per-channel status + evidence provenance.
+**No review-routing fields (yet).** The generic envelope does **not** carry `needs_review` / `citation_warning` / `review_reason`. Operational failures surface through `processing_state` (`invalid`, `execution_error`); a richer review artifact can come later if a real review workflow needs one. (`citation_warning` still exists at the LLM-extraction boundary — the §11 keep-and-flag — it is simply not promoted into the generic `values` envelope.)
+
+**Overlap audit (Venn / UpSet).** The audit is not reduced to in/out. Alongside `values` it emits a **membership long-form** (`task_id`, `channel`, `hit` = TRUE/FALSE/NA preserved, `processing_state`, `evidence_refs` for hits) and an **overlap summary** that groups tasks by their membership pattern across the expression channels (per-channel state columns with NA preserved + `pattern` + count + the pattern-determined `value` and `channel_coverage`). No `role`/`polarity` column — a channel's logical position lives in the `combine_rule` expression, not stamped onto each row (a channel observes only its own hit). The overlap summary is directly consumable by ggupset / UpSetR; the scientifically useful part is how the source hit sets overlap or fail to overlap, not just the final flag.
+
+`R/hitset.R` is the pure core (parser, grammar check, observed-membership evaluator, overlap); `R/run_variable.R` attaches per-channel status + evidence provenance. (Expression polarity is derived internally only — e.g. to lower `hit_set_difference()` sugar — and is not exposed publicly.)
 
 **`hit_set_difference()` is sugar, not a parallel system.** `hit_set_difference(include = a, exclude = b)` lowers to the string expression `a & !b` (with OR-within-role unions for multiple channels) and is evaluated by the same machinery. It exists only as a convenience for the common "include minus exclude" case; the string expression is the primary, documented API. There is one boolean mental model, not two.
+
+### Settled-contract status (target vs shipped) and combine taxonomy
+
+The contract above is the **settled target** (2026-06-26). A few parts are not yet realised in code; until their slices land the running engine keeps the older behaviour, and the §6 / §16 examples still show the shipped surface (`combine = any_positive()`, `absence_policy = ...`).
+
+- **`combine` = hit-algebra over channel hit sets, and nothing else** (produces `0`/`1`). `any_positive()` is **syntax sugar** that lowers to a raw expression: `any_positive(a, b)` → stored `combine_rule = "a | b"` (not `"any_positive"`, not `"hit_set_expr"`). The shipped code stores `combine$kind`.
+- **`documented_status()` and `collect_fields()` are NOT combines.** They are single-channel **output assembly** (categorical passthrough / field fan-out), like `max_value`. They run with `combine = NULL` and are dispatched by `output` shape; for them `combine_rule = NA`. (`documented_status` is a trivial passthrough and likely disappears as a named operator.) This makes `output` load-bearing — today the runner dispatches only on `combine$kind` and never reads `output`.
+- **`value` is always `0`/`1` for a boolean hit-algebra variable; the absence-policy knob is reconciled, not assumed dead.** Lowering `any_positive` to determined hit-set algebra removes its NA-on-incomplete path — the boolean variable's only use of `open_world()` / `missing_if_no_measurement()` / `absence_policy=`. That vocabulary is **reconciled or removed where it duplicates the observed hit-set contract**; whether it still expresses real output-assembly policy (e.g. a numeric variable's value when no measurement exists) is checked against consumers before any deletion.
+
+**Per-channel `processing_state`** is exported as one normalised column — `evaluated` · `no_candidate` · `no_input_rows` · `not_called` · `invalid` · `execution_error` — with the raw executor-specific states (`valid`/`measured`, `no_eligible_document`/`no_eligible_source`, `model_error`/`processing_error`) kept internal where they are needed to derive `hit = FALSE` vs `NA`.
+
+**Naming.** `answer_spec` = the passive answer bundle (schema + prompt builder + parser + system prompt; joins the passive `_spec` family). `method` = extraction strategy. `extractor` = reserved for a future executable component. Retrieval-level Lucene material is `match_*` (`match_ref`, `match_text`); `hit` is reserved for channel-level observed set membership.
+
+**Migration slices:** (1) this note · (2) promote `output` to dispatch + `documented_status`/`collect_fields` → assembly · (3) `combine_rule` = raw expression · (4) drop public `role`/`polarity` · (5) drop `decision`/`decision_state` · (6) normalise `processing_state` + unify `channel_coverage` · (7) lower `any_positive()` + reconcile/remove `absence_policy` where it duplicates the hit-set contract · (8) `hit_*` → `match_*` · (9) `answer_spec` / `method`.
 
 ---
 
@@ -657,6 +674,8 @@ Example principle:
 The engine reports no_candidate.
 The variable_spec decides whether no_candidate means FALSE, NA, unknown, or needs_review.
 ```
+
+**Update (settled contract).** For a **boolean** variable this freedom is now fixed by the observed set algebra: `no_candidate` is simply "no observed hit" (a non-member), `value` stays `0`/`1`, and unevaluability is reported through `channel_coverage` — not by turning `no_candidate` into `NA`/`unknown` in the value. The per-variable `absence_policy` / `open_world()` knob no longer drives the boolean value (its only consumer was the old `any_positive` NA-on-incomplete path); it is **reconciled or removed where it duplicates the observed hit-set contract**, after checking whether it still expresses real output-assembly absence policy for non-boolean variables. The status-preservation and source-contribution principles in the rest of this section stand unchanged.
 
 Silence from one channel must never be interpreted as contradiction with another channel unless the variable definition explicitly requests such logic.
 
@@ -906,7 +925,11 @@ These are the core principles future agents should not violate.
 
 18. The framework should optimize for explicitness, reuse, source contribution reporting, and reviewability, not for hiding protocol choices.
 
-19. The boolean combine surface is a string hit-set expression (`|` `&` `!` over channel names) evaluated as **observed** set algebra over explicit hit sets, not clinical ontology and not Kleene truth logic. A task is in a channel's set iff its hit is observed (`TRUE`); `FALSE` and `NA` are both non-members, and `!A` is complement within the task universe, not clinical negation. The final decision is always determined (included / excluded); an unavailable channel lowers `channel_coverage` (complete / partial / failed) and is preserved in the membership/overlap audit, but does **not** propagate into the decision (a strict NA-propagating mode is a future opt-in). Keep three fields separate: `decision` (the combine result), `decision_state` (determined / undetermined), `channel_coverage` (were the selected channels evaluable). Distinguish an observed non-hit from an unavailable source; never read silence as a closed-world clinical absence. `hit_set_difference()` is sugar that lowers to `a & !b`, not a parallel system.
+19. The boolean combine surface is a string hit-set expression (`|` `&` `!` over channel names) evaluated as **observed** set algebra over explicit hit sets, not clinical ontology and not Kleene truth logic. A task is in a channel's set iff its hit is observed (`TRUE`); `FALSE` and `NA` are both non-members, and `!A` is complement within the task universe, not clinical negation. For a boolean hit-algebra variable the final value is always determined (`0`/`1`); an unavailable channel lowers `channel_coverage` (complete / partial / failed) and is preserved in the membership/overlap audit, but does **not** propagate into the value (a strict NA-propagating mode is a future opt-in). The public envelope is `value` + `channel_coverage`; `decision` and `decision_state` are dropped from the public surface (the observed algebra is always determined, and `decision_state` returns only with the future strict mode), and there is no public `role`/`polarity` — a channel's logical position lives in the `combine_rule` expression. Distinguish an observed non-hit from an unavailable source; never read silence as a closed-world clinical absence. `hit_set_difference()` is sugar that lowers to `a & !b`, not a parallel system.
+
+20. Channels observe, combiners calculate, researchers interpret. A channel observes only whether its selector hit (`TRUE`/`FALSE`/`NA`); a channel's logical position lives in the combine expression; clinical and cohort interpretation are the researcher's, performed downstream from `value` and its provenance.
+
+21. `combine` means hit-algebra over channel hit sets only — a raw `|` `&` `!` expression producing `0`/`1`; `any_positive()` is sugar that lowers to such an expression, and `combine_rule` stores the raw string. Single-channel non-boolean shaping (`documented_status`, `collect_fields`, `max_value`) is output assembly with `combine = NULL`, dispatched by `output` — not a combiner.
 ```
 
 ---
