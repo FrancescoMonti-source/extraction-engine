@@ -578,7 +578,10 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         stop("Unsupported combine; expected a hit-set expression (>=2 channels) ",
              "or NULL (single channel).", call. = FALSE)
     }
-    combine_rule <- if (inherits(combine, "ee_combiner")) combine$kind else NA_character_
+    # combine_rule = the raw hit-set expression ("a | b", "a & !b") -- the same string
+    # whether written directly or lowered from any_positive(); NA for a single-channel
+    # variable, which has no cross-channel combine (its value comes from output()).
+    combine_rule <- if (inherits(combine, "ee_combiner")) combine$expr else NA_character_
     c(list(spec = variable, selected_channels = selected,
            combine_rule = combine_rule, channel_results = channel_results), out)
 }

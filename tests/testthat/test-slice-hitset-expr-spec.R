@@ -122,7 +122,7 @@ test_that("a bare string combine evaluates as observed boolean set algebra", {
 
     # the decision is always determined in observed mode
     expect_true(all(ds == "determined"))
-    expect_equal(run$combine_rule, "hit_set_expr")
+    expect_equal(run$combine_rule, HX_EXPR)   # the raw expression is surfaced verbatim
 })
 
 # Why: don't reduce the audit to included/excluded. The membership long-form carries

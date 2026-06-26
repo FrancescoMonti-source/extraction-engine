@@ -92,7 +92,8 @@ test_that("hit_set_difference(a, b) is exactly combine = 'a & !b' end-to-end", {
     expect_equal(run_sugar$membership, run_str$membership)
     expect_equal(run_sugar$overlap, run_str$overlap)
     expect_equal(run_sugar$evidence, run_str$evidence)
-    expect_equal(run_sugar$combine_rule, "hit_set_expr")
+    # combine_rule is the raw expression -- identical for the sugar and the string.
+    expect_equal(run_sugar$combine_rule, "act_present & !signal_present")
 })
 
 # Why: document the lowered OBSERVED semantics of "act & !signal" on real-ish data --

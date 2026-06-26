@@ -72,8 +72,8 @@ test_that("dialysis multi-source OR yields the expected values and channel cover
     expect_equal(cov[["DG3::t"]], "partial")   # neither channel evaluable -> uncertainty here, not in value
     expect_equal(cov[["DG4::t"]], "complete")
 
-    # any_positive() lowered to a hit-set expression; the boolean combine is exposed as such.
-    expect_equal(run$combine_rule, "hit_set_expr")
+    # any_positive() lowered to a hit-set expression; combine_rule exposes the raw rule.
+    expect_equal(run$combine_rule, "pmsi_diag_dialysis | text_dialysis_mentions")
     expect_equal(run$selected_channels$channel,
                  c("pmsi_diag_dialysis", "text_dialysis_mentions"))
 })
