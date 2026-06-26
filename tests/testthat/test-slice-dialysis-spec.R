@@ -83,7 +83,7 @@ test_that("dialysis multi-source OR yields the expected values and channel cover
 test_that("source contribution is transparent per channel", {
     run <- run_variable(dia_var(), dia_tasks, dia_sources,
                         caller = dia_fake, model_name = "fake")
-    ss <- run$source_status
+    ss <- run$channel_status
     get <- function(tid, ch, col) ss[[col]][ss$task_id == tid & ss$channel == ch]
 
     # DG1: the `1` came ONLY from ICD-10; documents were silent (nothing retrieved).
@@ -128,7 +128,7 @@ test_that("multi-source OR is warning-clean when the text channel is entirely si
     value <- setNames(run$values$value, run$values$task_id)
     expect_equal(value[["DG1::t"]], 1L)        # ICD-10 carries it; text silent
     expect_true(is.na(value[["DG3::t"]]))      # no code rows + text silent -> NA
-    txt <- run$source_status[run$source_status$channel == "text_dialysis_mentions", ]
+    txt <- run$channel_status[run$channel_status$channel == "text_dialysis_mentions", ]
     expect_true(all(txt$contribution == "silent"))
     expect_true(all(txt$processing_state == "no_candidate"))
 })

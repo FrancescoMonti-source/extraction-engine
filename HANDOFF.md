@@ -4767,3 +4767,55 @@ real-run script already sourced `concepts-diabetes.R`. **Suite:** 395 tests, 0 w
 **Next:** slice E -- rehome/rename `multisource.R` and fix the source-vs-channel
 vocabulary in `combine_any_source_hit` (the surviving OR combiner calls a channel a
 "source").
+
+---
+
+## Rename OR combiner vocabulary from source to channel (slice E) — Claude (2026-06-26)
+
+Vocabulary cleanup, no behavior change and no combine-semantics change (suite stayed at
+395/0 across the rename). The OR-combine layer is keyed by the selected signal route, so
+it now says **channel** consistently; **source** is reserved for the warehouse/raw data
+source a channel reads FROM. The only raw-source field that survives in the combiner is
+the durable evidence row key `source_row_id` (genuine warehouse metadata, unchanged).
+
+**Rehome:** `R/multisource.R` -> `R/channel-combine.R` (git mv; header rewritten from
+"cross-source derivation contract" to "cross-channel OR-combine + per-channel reduction").
+
+**Renames inside the combine layer:**
+- `combine_any_source_hit()` -> `combine_any_channel_hit()`; param `source_results` ->
+  `channel_results`; locals `sources`/`source` -> `channels`/`channel`; its returned
+  `source_status` table -> `channel_status`, and that table's `source` column (which held
+  the channel name) -> `channel`. Its evidence `source` column (also the channel) ->
+  `channel`. Validation messages reworded source->channel.
+- `.reduce_source()` -> `.reduce_channel_result()` (the real impl now lives in
+  `channel-combine.R`; the thin same-named wrapper that used to sit in `run_variable.R`
+  was removed -- callers already used `.reduce_channel_result`).
+- `.source_status_from_state()` -> `.channel_status_from_state()`.
+
+**run_variable envelope:** the per-(task x channel) status table is renamed
+`source_status` -> **`channel_status`** on EVERY branch (any_positive, documented_status,
+collect_fields, max_value, hit_set_expr) and in `membership`'s derivation. The `channel`
+and warehouse-`source` COLUMNS inside that table are unchanged (a channel reads from a
+source; both are shown). The two `rename(channel = source)` shims in `.combine_any_variable`
+are gone now that the combiner emits a `channel` column directly.
+
+**Callers updated:** `tests/testthat.R` + `scripts/run_variable_{diabetes,smoking}_real.R`
+source `R/channel-combine.R` (anastomoses real-run never sourced it -- text-only path).
+`run$source_status` -> `run$channel_status` in the three real-run scripts and in every
+spec test that read the field (anastomoses, diabetes, dialysis, retrieval-wiring, smoking,
+whole-history, hitset). `test-multisource.R` rewritten to the channel vocabulary (helper
+`source_result` -> `channel_result`; asserts `channel_status`/`evidence$channel`). Warehouse
+`$source`/`source_row_id` column assertions (e.g. `ev$source == "biology"`) were left as-is.
+Design note §"expose" example: `source_status` -> `channel_status`.
+
+No back-compat alias was needed (sourced project, no external consumers).
+
+**Out of scope (noted, not touched):** `run_variable_{diabetes,smoking}_real.R` still read
+`val$ascertainment` on the values envelope, which slice C renamed to `channel_coverage`
+there -- a pre-existing slice-C miss in untested scripts, left for a separate fix.
+
+**Suite:** 395 tests, 0 warnings. **Files:** `R/channel-combine.R` (was `R/multisource.R`),
+`R/run_variable.R`, `tests/testthat.R`, `tests/testthat/test-multisource.R`,
+`tests/testthat/test-slice-{anastomoses,diabetes,dialysis,retrieval-wiring,smoking,whole-history,hitset}-spec.R`,
+`scripts/run_variable_{diabetes,smoking,anastomoses}_real.R`,
+`extraction_engine_design_formalization.md`, `HANDOFF.md`.

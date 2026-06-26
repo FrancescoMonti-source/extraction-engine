@@ -78,7 +78,7 @@ test_that("pre-retrieved fixtures remain supported alongside real retrieval", {
                         list(documents = fixture_docs),
                         caller = rw_fake, model_name = "fake")
     expect_true(is.na(run$values$value[run$values$task_id == "P1::s"]))
-    expect_equal(run$source_status$status[run$source_status$task_id == "P1::s"],
+    expect_equal(run$channel_status$status[run$channel_status$task_id == "P1::s"],
                  "unavailable")
 })
 

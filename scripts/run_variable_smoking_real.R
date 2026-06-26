@@ -7,7 +7,7 @@
 # of a `fake` caller. It drives `documented_smoking_status_periop` over the real
 # de-identified smoking pool: raw note text -> create_tcorpus -> Lucene retrieval
 # + date-window eligibility -> gemma3:4b structured extraction -> categorical
-# values + the audit envelope (source_status, evidence, citation_warning).
+# values + the audit envelope (channel_status, evidence, citation_warning).
 #
 # MODEL: gemma3:4b only -- it passes scripts/check_grammar_enforcement.R (the
 # JSON schema is grammar-enforced). Reasoning models (gpt-oss, gemma4) escape to
@@ -31,7 +31,7 @@ suppressWarnings(suppressMessages({
 
 # ---- engine (same chain as tests/testthat.R, no test-only files) -------------
 for (f in c("R/retrieval.R", "R/extract.R", "R/data.R", "R/structured.R",
-            "R/multisource.R", "R/spec.R", "R/channels.R", "R/operators.R",
+            "R/channel-combine.R", "R/spec.R", "R/channels.R", "R/operators.R",
             "R/run_variable.R", "R/concepts-smoking.R", "R/adapter_smoking.R",
             "R/types/smoking.R")) {
     source(f)
@@ -96,7 +96,7 @@ run <- run_variable(spec, tasks, sources, caller = caller, model_name = MODEL)
 secs <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
 # ---- per-row detail (PHI) -> outputs/ only ----------------------------------
-detail <- merge(run$values, run$source_status[, c("task_id", "status")],
+detail <- merge(run$values, run$channel_status[, c("task_id", "status")],
                 by = "task_id", all.x = TRUE)
 ev <- run$evidence
 detail$evidence_text <- vapply(detail$task_id, function(tid) {
@@ -120,8 +120,8 @@ cat("ascertainment ........... ")
 cat(paste(sprintf("%s=%d", names(table(val$ascertainment)), table(val$ascertainment)),
           collapse = "  "), "\n")
 cat(sprintf("channel status .......... %s\n",
-            paste(sprintf("%s=%d", names(table(run$source_status$status)),
-                          table(run$source_status$status)), collapse = "  ")))
+            paste(sprintf("%s=%d", names(table(run$channel_status$status)),
+                          table(run$channel_status$status)), collapse = "  ")))
 cat(sprintf("needs_review ............ %d\n", sum(val$needs_review, na.rm = TRUE)))
 cat(sprintf("citation_warning ........ %d\n", sum(val$citation_warning, na.rm = TRUE)))
 cat(sprintf("grounded (have evidence)  %d / %d\n",

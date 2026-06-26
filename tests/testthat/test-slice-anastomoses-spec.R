@@ -92,7 +92,7 @@ test_that("collect_fields keeps valid fields and flags the task on an invalid si
     expect_true(is.na(val[["transplantation_duree_anastomose_arterielle"]]))
 
     # Per-task channel status: the call produced fields; one invalid -> needs_review.
-    ss1 <- run$source_status[run$source_status$task_id == "A1::t", ]
+    ss1 <- run$channel_status[run$channel_status$task_id == "A1::t", ]
     expect_equal(ss1$status, "complete")
     expect_equal(ss1$n_fields, 5L)
     expect_equal(ss1$n_valid, 4L)
@@ -113,7 +113,7 @@ test_that("collect_fields distinguishes no_candidate and a failed call", {
                         caller = ana_fake, model_name = "fake")
 
     expect_equal(nrow(run$values[run$values$task_id == "A2::t", ]), 0L)  # no fields
-    ss <- run$source_status
+    ss <- run$channel_status
     a2 <- ss[ss$task_id == "A2::t", ]
     expect_equal(a2$status, "unavailable")        # no_candidate
     expect_false(a2$needs_review)
@@ -150,7 +150,7 @@ test_that("collect_fields keeps-and-flags an invented citation (no longer fail-c
     expect_equal(art$field_validity, "valid")
     expect_true(art$citation_warning)              # flagged per field
 
-    ss1 <- run$source_status[run$source_status$task_id == "A1::t", ]
+    ss1 <- run$channel_status[run$channel_status$task_id == "A1::t", ]
     expect_true(ss1$citation_warning)              # per-task flag surfaces in channel status
     expect_false(ss1$needs_review)                 # a flagged-but-valid field is not a review trigger
 

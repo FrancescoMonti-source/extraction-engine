@@ -61,7 +61,7 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
 # OR path -- signal/negative/silent per channel, evidence for the positive.
 test_that("diabetes_ever preserves source contribution", {
     run <- run_variable(wh_variable(), wh_tasks, wh_sources)
-    ss <- run$source_status
+    ss <- run$channel_status
     get <- function(tid, col) ss[[col]][ss$task_id == tid]
 
     expect_equal(get("Q1", "contribution"), "signal")

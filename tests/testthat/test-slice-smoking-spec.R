@@ -99,7 +99,7 @@ test_that("documented_status returns the categorical status and distinct absence
     expect_true(is.na(value[["T4::t"]]))            # definitive without evidence -> invalid
     expect_true(nr[["T4::t"]])
 
-    ss <- run$source_status
+    ss <- run$channel_status
     expect_equal(ss$status[ss$task_id == "T1::t"], "complete")
     expect_equal(ss$status[ss$task_id == "T3::t"], "unavailable")
     expect_equal(ss$status[ss$task_id == "T4::t"], "invalid")

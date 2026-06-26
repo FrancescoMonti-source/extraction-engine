@@ -3,13 +3,14 @@
 # -----------------------------------------------------------------------------
 # Executes one variable_spec over supplied input rows and a named list of source
 # data, then assembles a reviewable audit envelope (final value, selected
-# channels, per-channel/source status, evidence refs, channel coverage/absence).
+# channels, per-channel status (channel_status), evidence refs, channel
+# coverage/absence).
 #
 # Channel execution dispatches on the channel TYPE (code / text / lab), NOT on the
 # channel name -- the runner must stay free of any one concept's vocabulary. The
 # existing measure_*() / run_extraction() functions are reused as TEMPORARY
 # adapters (they are generic over their parameters); they are not the public
-# architecture. Cross-channel combination reuses combine_any_source_hit().
+# architecture. Cross-channel combination reuses combine_any_channel_hit().
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
@@ -144,14 +145,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
              call. = FALSE))
 }
 
-# Reduce one channel's full result to the per-task {status, hit, evidence}
-# contract combine_any_source_hit() consumes.
-.reduce_channel_result <- function(result, task_ids, id_col,
-                                   no_candidate_status = "complete") {
-    .reduce_source(result, task_ids, id_col,
-                   no_candidate_status = no_candidate_status)
-}
-
 # Raw per-channel state for one task, BEFORE the {complete/unavailable/invalid/
 # error} collapse -- so the source-contribution view can show WHY a channel was
 # silent (no_candidate vs no rows for the subject vs no source), not just "silent".
@@ -179,8 +172,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # channel TYPE, not source name. The text default (no_candidate -> unavailable)
 # keeps "no text retrieved" distinct from a documented negative, honouring the
 # open-world absence policy; the incomplete_value comes from that policy. The
-# per-channel source_status carries the RAW processing_state and a contribution
-# class so source contribution is fully transparent.
+# per-channel channel_status carries the RAW processing_state and a contribution
+# class so each channel's contribution is fully transparent.
 .combine_any_variable <- function(variable, tasks, channel_results) {
     var_name <- variable$name
     spec_obj <- variable   # alias: `variable` is also a mutate() column name below
@@ -199,14 +192,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
                                    no_candidate)[[tid]]
         })
         names(reduced) <- names(channel_results)
-        combined <- combine_any_source_hit(reduced, incomplete_value = absence_value)
+        combined <- combine_any_channel_hit(reduced, incomplete_value = absence_value)
         values[[i]] <- tibble::tibble(
             task_id = tid, variable = var_name, value = combined$value,
-            # combine_any_source_hit's "ascertainment" is the channel-coverage notion
+            # combine_any_channel_hit's "ascertainment" is the channel-coverage notion
             # (were all selected channels evaluable); the public envelope names it so.
             channel_coverage = combined$ascertainment)
-        status_l[[i]] <- combined$source_status %>%
-            rename(channel = source) %>%
+        status_l[[i]] <- combined$channel_status %>%
             mutate(
                 task_id = tid,
                 variable = var_name,
@@ -220,7 +212,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 .before = 1L)
         if (nrow(combined$evidence)) {
             evidence_l[[length(evidence_l) + 1L]] <- combined$evidence %>%
-                rename(channel = source) %>%
                 mutate(
                     task_id = tid,
                     variable = var_name,
@@ -232,7 +223,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }
     list(
         values = bind_rows(values),
-        source_status = bind_rows(status_l),
+        channel_status = bind_rows(status_l),
         evidence = if (length(evidence_l)) bind_rows(evidence_l) else
             tibble::tibble(task_id = character(), variable = character(),
                            channel = character(), source = character(),
@@ -265,7 +256,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
     evidence <- result$evidence %>%
         transmute(task_id, variable = var_name, channel = channel_name,
                   source, source_row_id, evidence_ref)
-    list(values = values, source_status = status, evidence = evidence)
+    list(values = values, channel_status = status, evidence = evidence)
 }
 
 # documented_status(): a single text channel whose accepted categorical status
@@ -312,7 +303,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
     values <- rows %>%
         transmute(task_id, variable = var_name, value, channel_coverage,
                   needs_review, citation_warning, review_reason)
-    source_status <- rows %>%
+    channel_status <- rows %>%
         transmute(task_id, variable = var_name, channel = channel_name,
                   source = source_name, status, value, citation_warning, needs_review)
     evidence <- if (nrow(ev)) {
@@ -325,7 +316,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
                        source_row_id = character(), evidence_ref = character(),
                        hit_text = character())
     }
-    list(values = values, source_status = source_status, evidence = evidence)
+    list(values = values, channel_status = channel_status, evidence = evidence)
 }
 
 # collect_fields(): one text task -> several fields. Emits one value row per
@@ -368,7 +359,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
                        n_valid = integer(), n_invalid = integer(),
                        citation_warning = logical())
     }
-    source_status <- tibble::tibble(task_id = task_ids) %>%
+    channel_status <- tibble::tibble(task_id = task_ids) %>%
         left_join(distinct(cov, task_id, processing_state), by = "task_id") %>%
         left_join(field_counts, by = "task_id") %>%
         mutate(
@@ -394,7 +385,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
                        field = character(), source_row_id = character(),
                        evidence_ref = character(), hit_text = character())
     }
-    list(values = values, source_status = source_status, evidence = evidence)
+    list(values = values, channel_status = channel_status, evidence = evidence)
 }
 
 # hit_set_expr(): the string boolean operator. The final cohort decision is
@@ -410,7 +401,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # extension, not the default.)
 #   values        per task: value (1/0), decision (included/excluded),
 #                 decision_state (determined), channel_coverage (complete/partial/failed).
-#   source_status per task x channel: role (asserted/negated/mixed), status, hit
+#   channel_status per task x channel: role (asserted/negated/mixed), status, hit
 #                 (TRUE/FALSE/NA), processing_state, contribution, evidence_refs.
 #   evidence      per hit ref, role-tagged.
 #   membership    long-form for analysis: task_id, channel, role, hit (TRUE/FALSE/NA),
@@ -497,7 +488,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             }
         }
     }
-    source_status <- bind_rows(status_l)
+    channel_status <- bind_rows(status_l)
 
     wide <- tibble::tibble(task_id = task_ids)
     for (ch in referenced) wide[[ch]] <- vectors[[ch]]
@@ -506,13 +497,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
     list(
         values = values,
-        source_status = source_status,
+        channel_status = channel_status,
         evidence = if (length(evidence_l)) bind_rows(evidence_l) else
             tibble::tibble(task_id = character(), variable = character(),
                            channel = character(), source = character(),
                            role = character(), source_row_id = character(),
                            evidence_ref = character()),
-        membership = source_status %>%
+        membership = channel_status %>%
             transmute(task_id, channel, role, hit, processing_state, evidence_refs),
         overlap = overlap)
 }

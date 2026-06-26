@@ -107,7 +107,7 @@ saveRDS(list(spec = spec, run = run, native_eltid = raw[, c("ELTID", "native_elt
         file.path(OUT_DIR, sprintf("anastomoses_realrun_%s.rds", stamp)))
 
 # ---- aggregate report (SAFE: counts/rates only, no PHI) ---------------------
-val <- run$values; ss <- run$source_status
+val <- run$values; ss <- run$channel_status
 cat("================ REAL-RUN REPORT (aggregates only) ================\n")
 cat(sprintf("events processed ........ %d\n", nrow(ss)))
 cat(sprintf("channel status .......... %s\n",

@@ -88,7 +88,7 @@ test_that("hit_set_difference(a, b) is exactly combine = 'a & !b' end-to-end", {
         hs_tasks, hs_sources)
 
     expect_equal(run_sugar$values, run_str$values)
-    expect_equal(run_sugar$source_status, run_str$source_status)
+    expect_equal(run_sugar$channel_status, run_str$channel_status)
     expect_equal(run_sugar$membership, run_str$membership)
     expect_equal(run_sugar$overlap, run_str$overlap)
     expect_equal(run_sugar$evidence, run_str$evidence)

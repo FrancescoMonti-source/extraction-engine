@@ -1,40 +1,48 @@
 # =============================================================================
-# multisource.R — experimental cross-source derivation contract
+# channel-combine.R — cross-channel OR-combine + per-channel reduction
 # -----------------------------------------------------------------------------
-# This is deliberately not a concept_spec / variable_spec framework. It tests
-# the smallest runtime seam required by a study variable that accepts evidence
-# from several sources.
+# The generic combine layer for run_variable()'s any_positive path. It is keyed
+# by CHANNEL (the selected signal route): the caller passes a named list of
+# per-channel {status, hit, evidence} results and gets back one OR decision plus
+# a per-channel status table. "source" is reserved for the warehouse/raw data
+# source (e.g. pmsi_diag, documents, biology); a channel reads FROM a source but
+# is not the source. The only raw-source field that survives here is the durable
+# evidence row key (source_row_id), which is genuine warehouse metadata.
+#
+# Deliberately not a concept_spec / variable_spec framework — it is the smallest
+# runtime seam required by a study variable that accepts evidence from several
+# channels.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
 
-combine_any_source_hit <- function(source_results, incomplete_value) {
+combine_any_channel_hit <- function(channel_results, incomplete_value) {
     if (missing(incomplete_value) || length(incomplete_value) != 1L) {
         stop("incomplete_value must be an explicit scalar", call. = FALSE)
     }
-    if (!is.list(source_results) || !length(source_results)) {
-        stop("source_results must be a non-empty named list", call. = FALSE)
+    if (!is.list(channel_results) || !length(channel_results)) {
+        stop("channel_results must be a non-empty named list", call. = FALSE)
     }
 
-    sources <- names(source_results)
-    if (is.null(sources) || anyNA(sources) || any(!nzchar(sources)) ||
-        anyDuplicated(sources)) {
-        stop("source_results must have unique non-empty source names",
+    channels <- names(channel_results)
+    if (is.null(channels) || anyNA(channels) || any(!nzchar(channels)) ||
+        anyDuplicated(channels)) {
+        stop("channel_results must have unique non-empty channel names",
              call. = FALSE)
     }
 
     allowed_status <- c("complete", "unavailable", "invalid", "error")
-    source_status <- vector("list", length(source_results))
+    channel_status <- vector("list", length(channel_results))
     positive_evidence <- list()
 
-    for (i in seq_along(source_results)) {
-        source <- sources[[i]]
-        result <- source_results[[i]]
+    for (i in seq_along(channel_results)) {
+        channel <- channels[[i]]
+        result <- channel_results[[i]]
         required <- c("status", "hit", "evidence")
         missing_fields <- setdiff(required, names(result))
         if (length(missing_fields)) {
             stop(
-                source, " result requires: ",
+                channel, " result requires: ",
                 paste(required, collapse = ", "),
                 "; missing: ", paste(missing_fields, collapse = ", "),
                 call. = FALSE)
@@ -50,48 +58,48 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
         }
 
         if (length(status) != 1L || !status %in% allowed_status) {
-            stop(source, " has an unknown source status", call. = FALSE)
+            stop(channel, " has an unknown channel status", call. = FALSE)
         }
         if (length(hit) != 1L || !is.logical(hit)) {
-            stop(source, "$hit must be one logical value", call. = FALSE)
+            stop(channel, "$hit must be one logical value", call. = FALSE)
         }
         if (identical(status, "complete") && is.na(hit)) {
-            stop(source, " complete result requires TRUE or FALSE hit",
+            stop(channel, " complete result requires TRUE or FALSE hit",
                  call. = FALSE)
         }
         if (!identical(status, "complete") && isTRUE(hit)) {
-            stop(source, " cannot report a positive hit unless complete",
+            stop(channel, " cannot report a positive hit unless complete",
                  call. = FALSE)
         }
         if (!"source_row_id" %in% names(evidence)) {
-            stop(source, "$evidence requires source_row_id", call. = FALSE)
+            stop(channel, "$evidence requires source_row_id", call. = FALSE)
         }
         evidence$source_row_id <- as.character(evidence$source_row_id)
         if (anyNA(evidence$source_row_id) ||
             any(!nzchar(evidence$source_row_id)) ||
             anyDuplicated(evidence$source_row_id)) {
-            stop(source, " evidence IDs must be non-missing and unique",
+            stop(channel, " evidence IDs must be non-missing and unique",
                  call. = FALSE)
         }
         if (isTRUE(hit) && !nrow(evidence)) {
-            stop(source, " positive hit requires evidence", call. = FALSE)
+            stop(channel, " positive hit requires evidence", call. = FALSE)
         }
 
-        source_status[[i]] <- tibble::tibble(
-            source = source,
+        channel_status[[i]] <- tibble::tibble(
+            channel = channel,
             status = status,
             hit = hit,
             error = error)
 
         if (isTRUE(hit)) {
             positive_evidence[[length(positive_evidence) + 1L]] <- evidence %>%
-                mutate(source = source, .before = 1L)
+                mutate(channel = channel, .before = 1L)
         }
     }
 
-    source_status <- bind_rows(source_status)
-    any_positive <- any(source_status$hit %in% TRUE)
-    all_complete <- all(source_status$status == "complete")
+    channel_status <- bind_rows(channel_status)
+    any_positive <- any(channel_status$hit %in% TRUE)
+    all_complete <- all(channel_status$status == "complete")
 
     value <- if (any_positive) {
         1L
@@ -104,17 +112,17 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
     list(
         value = value,
         ascertainment = if (all_complete) "complete" else "partial",
-        source_status = source_status,
+        channel_status = channel_status,
         evidence = if (length(positive_evidence)) {
             bind_rows(positive_evidence)
         } else {
-            tibble::tibble(source = character(), source_row_id = character())
+            tibble::tibble(channel = character(), source_row_id = character())
         })
 }
 
 # =============================================================================
-# Per-source reduction to the {status, hit, evidence} contract that
-# combine_any_source_hit() consumes (via run_variable()'s any_positive path).
+# Per-channel reduction to the {status, hit, evidence} contract that
+# combine_any_channel_hit() consumes (via run_variable()'s any_positive path).
 #
 # The pre-spine diabetes multi-source orchestration helpers
 # (measure_diabetes_glucose / reduce_structured_source / reduce_text_source /
@@ -123,14 +131,14 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
 # at the spine level (see test-slice-diabetes-spec.R, test-slice-dialysis-spec.R).
 # =============================================================================
 
-# Map an engine processing_state (text OR structured vocabulary) + the source's
+# Map an engine processing_state (text OR structured vocabulary) + the channel's
 # accepted value into the {status, hit} the combiner expects. These mappings are
 # RECIPE decisions, surfaced deliberately rather than hidden:
 #   - no_candidate                          -> caller-selected complete/unavailable
 #   - no data for the subject at all        -> UNAVAILABLE (neither + nor -; partial)
 #   - rows present but unusable             -> INVALID (not a negative)
 #   - model/processing failure              -> ERROR
-.source_status_from_state <- function(
+.channel_status_from_state <- function(
     processing_state,
     accepted_value,
     no_candidate_status = c("complete", "unavailable")) {
@@ -151,10 +159,10 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
         list(status = "unavailable", hit = NA))
 }
 
-# Reduce one source's full result (the engine's coverage/values/evidence views) to
+# Reduce one channel's full result (the engine's coverage/values/evidence views) to
 # a per-task {status, hit, evidence} list keyed by task_id. `id_col` is the durable
-# row key in that source's evidence: source_row_id (structured) or hit_ref (text).
-.reduce_source <- function(
+# row key in that channel's evidence: source_row_id (structured) or hit_ref (text).
+.reduce_channel_result <- function(
     res,
     task_ids,
     id_col,
@@ -172,7 +180,7 @@ combine_any_source_hit <- function(source_results, incomplete_value) {
         state <- if (length(state)) state[[1]] else "no_eligible_source"
         av <- if (has_val) val$accepted_value[val$task_id == tid] else character()
         av <- if (length(av)) av[[1]] else NA_character_
-        sh <- .source_status_from_state(
+        sh <- .channel_status_from_state(
             state, av, no_candidate_status = no_candidate_status)
         tev <- if (has_ev) ev[ev$task_id == tid, , drop = FALSE] else ev[0, ]
         ids <- if (id_col %in% names(tev)) as.character(tev[[id_col]]) else character()

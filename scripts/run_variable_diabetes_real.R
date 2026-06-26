@@ -38,7 +38,7 @@ suppressWarnings(suppressMessages({
 
 source("config/paths.R")
 for (f in c("R/retrieval.R", "R/extract.R", "R/data.R", "R/structured.R",
-            "R/multisource.R", "R/spec.R", "R/channels.R", "R/operators.R",
+            "R/channel-combine.R", "R/spec.R", "R/channels.R", "R/operators.R",
             "R/run_variable.R", "R/concepts-diabetes.R")) {
     source(f)
 }
@@ -118,8 +118,8 @@ stamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
 saveRDS(list(spec = spec, run = run, native_eltid = raw[, c("ELTID", "native_eltid", "PATID")]),
         file.path(OUT_DIR, sprintf("diabetes_realrun_%s.rds", stamp)))
 
-# ---- aggregate report: source contribution is the headline ------------------
-val <- run$values; ss <- run$source_status
+# ---- aggregate report: channel contribution is the headline -----------------
+val <- run$values; ss <- run$channel_status
 CODE <- "pmsi_diag_e10_e14"; TEXT <- "text_diabetes_mentions"
 code_hit <- ss$task_id[ss$channel == CODE & ss$hit %in% TRUE]
 text_hit <- ss$task_id[ss$channel == TEXT & ss$hit %in% TRUE]
@@ -139,7 +139,7 @@ cat(sprintf("ascertainment ........... %s\n",
             paste(sprintf("%s=%d", names(table(val$ascertainment)), table(val$ascertainment)),
                   collapse = "  ")))
 cat(sprintf("combine_rule ............ %s\n", run$combine_rule))
-cat("\n-- source contribution (the OR transparency) --\n")
+cat("\n-- channel contribution (the OR transparency) --\n")
 cat(sprintf("  %-24s %s\n", CODE, chan_contrib(CODE)))
 cat(sprintf("  %-24s %s\n", TEXT, chan_contrib(TEXT)))
 cat(sprintf("\npositives attributed:  both=%d  code-only=%d  text-only=%d\n",

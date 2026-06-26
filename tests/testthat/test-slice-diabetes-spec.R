@@ -110,7 +110,7 @@ test_that("variable_template build= defaults to the shared builder and still acc
 
 # Why: the executable slice must preserve the formal boundary: selected channels
 # resurface source-specific signals, variable_spec combines them, and output keeps
-# final value, per-source status, and evidence refs instead of hiding judgment.
+# final value, per-channel status, and evidence refs instead of hiding judgment.
 test_that("baseline diabetes variable from template returns traceable output", {
     concept <- diabetes_concept_spec()
     baseline <- variable_spec(
@@ -135,9 +135,9 @@ test_that("baseline diabetes variable from template returns traceable output", {
     expect_equal(channel_coverage[["P1::t"]], "complete")
     expect_equal(channel_coverage[["P2::t"]], "partial")
 
-    p1_text <- run$source_status[
-        run$source_status$task_id == "P1::t" &
-            run$source_status$channel == "text_diabetes_mentions", ]
+    p1_text <- run$channel_status[
+        run$channel_status$task_id == "P1::t" &
+            run$channel_status$channel == "text_diabetes_mentions", ]
     expect_equal(p1_text$status, "complete")
     expect_true(p1_text$hit)
 
@@ -180,7 +180,7 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
     expect_equal(ev$source, "biology")
     expect_equal(ev$evidence_ref, "biol:002")
 
-    status <- run$source_status[run$source_status$task_id == "P1::t", ]
+    status <- run$channel_status[run$channel_status$task_id == "P1::t", ]
     expect_equal(status$status, "complete")
     expect_true(status$hit)
 })
@@ -309,10 +309,10 @@ test_that("any_positive combine is wired through run_variable across the gap cas
     expect_equal(nrow(run$evidence[run$evidence$task_id == "Q4::t", ]), 0L)
 
     # Per-channel status: Q1 both complete + positive; Q4 both complete + negative.
-    q1_status <- run$source_status[run$source_status$task_id == "Q1::t", ]
+    q1_status <- run$channel_status[run$channel_status$task_id == "Q1::t", ]
     expect_true(all(q1_status$status == "complete"))
     expect_true(all(q1_status$hit))
-    q4_status <- run$source_status[run$source_status$task_id == "Q4::t", ]
+    q4_status <- run$channel_status[run$channel_status$task_id == "Q4::t", ]
     expect_true(all(q4_status$status == "complete"))
     expect_true(all(!q4_status$hit))
 })
@@ -373,7 +373,7 @@ test_that("any_positive survives a text-channel model error and keeps code prove
     expect_equal(value[["R1::t"]], 1L)         # code positive survives the text error
     expect_equal(cov[["R1::t"]], "partial")    # ...and coverage flags the unevaluable text
 
-    ss <- run$source_status
+    ss <- run$channel_status
     text_status <- ss$status[ss$task_id == "R1::t" &
                              ss$channel == "text_diabetes_mentions"]
     expect_equal(text_status, "error")          # the failure is auditable, not hidden
@@ -393,8 +393,8 @@ test_that("out-of-window code does not count as a positive through the spine", {
 
     # R2: E11 dated 2015 is out of the 5-year window + text no_candidate -> not a hit
     expect_true(is.na(value[["R2::t"]]))
-    code_contrib <- run$source_status$contribution[
-        run$source_status$task_id == "R2::t" &
-        run$source_status$channel == "pmsi_diag_e10_e14"]
+    code_contrib <- run$channel_status$contribution[
+        run$channel_status$task_id == "R2::t" &
+        run$channel_status$channel == "pmsi_diag_e10_e14"]
     expect_equal(code_contrib, "negative")      # out-of-window -> ascertained negative
 })

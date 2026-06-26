@@ -674,7 +674,7 @@ final_value = value produced by the researcher-selected rule
 positive_sources = ICD10/CCAM channel
 silent_sources = documents
 evidence = coded row(s)
-source_status = documents no_candidate
+channel_status = documents no_candidate
 ```
 
 The engine should not automatically infer "uncorroborated", "weak yes", or "possible dialysis" unless the `variable_spec` explicitly defines such labels.
