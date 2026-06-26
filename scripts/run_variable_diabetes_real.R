@@ -135,8 +135,8 @@ cat("================ REAL-RUN REPORT (aggregates only) ================\n")
 cat(sprintf("subjects ................ %d\n", nrow(val)))
 cat(sprintf("value: 1=%d  0=%d  NA=%d\n",
             sum(val$value %in% 1L), sum(val$value %in% 0L), sum(is.na(val$value))))
-cat(sprintf("ascertainment ........... %s\n",
-            paste(sprintf("%s=%d", names(table(val$ascertainment)), table(val$ascertainment)),
+cat(sprintf("channel_coverage ........ %s\n",
+            paste(sprintf("%s=%d", names(table(val$channel_coverage)), table(val$channel_coverage)),
                   collapse = "  ")))
 cat(sprintf("combine_rule ............ %s\n", run$combine_rule))
 cat("\n-- channel contribution (the OR transparency) --\n")

@@ -4819,3 +4819,23 @@ there -- a pre-existing slice-C miss in untested scripts, left for a separate fi
 `tests/testthat/test-slice-{anastomoses,diabetes,dialysis,retrieval-wiring,smoking,whole-history,hitset}-spec.R`,
 `scripts/run_variable_{diabetes,smoking,anastomoses}_real.R`,
 `extraction_engine_design_formalization.md`, `HANDOFF.md`.
+
+## Real-run scripts: read channel_coverage off the values envelope (slice-C follow-up) -- Claude (2026-06-26)
+
+Resolves the out-of-scope item flagged above. `run_variable_{diabetes,smoking}_real.R`
+read `val$ascertainment` off the `run$values` envelope, but slice C renamed that field to
+`channel_coverage` (the combiner still returns `ascertainment`; `run_variable` maps it to
+`channel_coverage` at the boundary). On a real run `val$ascertainment` resolved to NULL, so
+the aggregate report's coverage line printed empty. Both scripts now read
+`val$channel_coverage` (label renamed to match). Also aligned the `any_positive` test
+comment in `test-slice-diabetes-spec.R` to say "channel_coverage" (the field it asserts via
+`cov`).
+
+**Deliberately left as `ascertainment` (these are NOT the values envelope):** the combiner's
+own return field (`R/channel-combine.R`, mapped in `R/run_variable.R`), the `R/operators.R`
+absence-policy comment describing that combiner field, and `test-multisource.R` which tests
+`combine_any_channel_hit()` directly. Historical/design/clinical-concept prose (HANDOFF,
+design note §envelope, `TECHNICAL_NOTES.md`, `R/concepts-dialysis.R`) also unchanged.
+
+**Suite:** 395 tests, 0 warnings. **Files:** `scripts/run_variable_{diabetes,smoking}_real.R`,
+`tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`.

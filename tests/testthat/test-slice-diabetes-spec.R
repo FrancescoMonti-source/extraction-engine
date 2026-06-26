@@ -276,7 +276,7 @@ cg_fake <- function(prompt, type, system_prompt) {
 
 # Why: any_positive() must be genuinely wired through run_variable() across the
 # four combine outcomes, evidence from EVERY positive channel must survive, and
-# ascertainment must stay complete-vs-partial (text no_candidate is not absence).
+# channel_coverage must stay complete-vs-partial (text no_candidate is not absence).
 test_that("any_positive combine is wired through run_variable across the gap cases", {
     baseline <- variable_spec(
         template = diabetes_baseline_status_template(),

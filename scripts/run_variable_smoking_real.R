@@ -116,8 +116,8 @@ cat(paste(sprintf("%s=%d", names(table(factor(val$value, levels = SMOKING_STATUS
                                        useNA = "ifany")),
                   table(factor(val$value, levels = SMOKING_STATUSES), useNA = "ifany")),
           collapse = "  "), "\n")
-cat("ascertainment ........... ")
-cat(paste(sprintf("%s=%d", names(table(val$ascertainment)), table(val$ascertainment)),
+cat("channel_coverage ........ ")
+cat(paste(sprintf("%s=%d", names(table(val$channel_coverage)), table(val$channel_coverage)),
           collapse = "  "), "\n")
 cat(sprintf("channel status .......... %s\n",
             paste(sprintf("%s=%d", names(table(run$channel_status$status)),
