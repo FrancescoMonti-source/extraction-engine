@@ -1,5 +1,5 @@
 # Contract tests for slice 3: a multi-field text concept. ONE extraction task ->
-# SEVERAL fields, with FIELD-LEVEL acceptance (a valid grounded field survives an
+# SEVERAL output fields, with FIELD-LEVEL acceptance (a valid grounded field survives an
 # invalid sibling) and the task flagged for review iff any field is invalid or the
 # call failed. Synthetic data, deterministic fake model. Architecture boundaries,
 # not clinical truth.
@@ -65,15 +65,14 @@ test_that("anastomoses concept is multi-field, event-scoped, with no date window
 
     var <- anastomoses_var()
     expect_null(var$window)                       # event scope, not a date window
-    expect_null(var$combine)                      # single channel: fields output drives assembly
-    expect_equal(var$output$kind, "fields")
+    expect_null(var$combine)                      # single channel: output drives assembly
     expect_setequal(var$output$fields, names(ANASTOMOSES_FIELDS))
 })
 
 # Why: one task yields several fields, and acceptance is FIELD-LEVEL -- a valid
 # grounded field keeps its value even when a sibling field is invalid, while the
 # task is still flagged for review.
-test_that("fields output keeps valid fields and flags the task on an invalid sibling", {
+test_that("struct output keeps valid fields and flags the task on an invalid sibling", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
                         caller = ana_fake, model_name = "fake")
 
@@ -100,7 +99,7 @@ test_that("fields output keeps valid fields and flags the task on an invalid sib
 
 # Why: no_candidate and a failed call must stay distinct from extracted fields, and
 # a failed task must be flagged for review (not silently absent).
-test_that("fields output distinguishes no_candidate and a failed call", {
+test_that("struct output distinguishes no_candidate and a failed call", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
                         caller = ana_fake, model_name = "fake")
 

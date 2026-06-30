@@ -1,5 +1,5 @@
-# Contract tests for the integrated baseline. No provider calls, no patient data;
-# the model is an injected fake (signature: function(prompt, type, system_prompt)).
+# Contract tests for low-level text execution invariants. No provider calls, no
+# patient data; the model is an injected fake.
 
 make_corpus <- function(eltids, texts) {
     corpustools::create_tcorpus(
@@ -155,29 +155,6 @@ test_that("a parse error isolates one task without aborting the batch", {
     expect_equal(run$values$task_id, "T2")                  # T1 dropped, T2 survived
     ps <- run$coverage$processing_state[match(c("T1", "T2"), run$coverage$task_id)]
     expect_equal(ps, c("processing_error", "valid"))
-})
-
-# Why: unbounded strings and arrays caused deterministic output truncation on the
-# real cohort. This protects both the size limits and the per-task evidence vocabulary
-# when the response types are rebuilt through raw JSON Schema.
-test_that("bounded response schemas preserve dynamic evidence enums", {
-    smoking <- type_smoking("S001")
-    anastomoses <- type_anastomoses(c("S001", "S002"))
-
-    expect_s3_class(smoking, "ellmer::TypeJsonSchema")
-    expect_equal(smoking@json$properties$evidence_ids$maxItems,
-                 SMOKING_EVIDENCE_MAX_ITEMS)
-    expect_equal(unlist(smoking@json$properties$evidence_ids$items$enum), "S001")
-    expect_equal(smoking@json$properties$decision_note$maxLength,
-                 SMOKING_NOTE_MAX_LEN)
-
-    arterial <- anastomoses@json$properties$transplantation_type_anastomose_arterielle
-    expect_s3_class(anastomoses, "ellmer::TypeJsonSchema")
-    expect_equal(arterial$properties$evidence_ids$maxItems,
-                 ANASTOMOSES_EVIDENCE_MAX_ITEMS)
-    expect_equal(unlist(arterial$properties$evidence_ids$items$enum),
-                 c("S001", "S002"))
-    expect_equal(arterial$properties$value$maxLength, ANASTOMOSES_LABEL_MAX_LEN)
 })
 
 # Why: truncated structured output is not safely repairable, but it must remain

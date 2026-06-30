@@ -6,7 +6,6 @@
 hx_concept <- function() {
     code_ch <- function(source, prefix) code_channel(
         source = source, selector = icd10(prefix),
-        native_grain = "diagnosis_row",
         required_roles = c("subject_id", "event_id", "event_start", "event_end",
                            "code", "source_item_id"),
         linkage = "subject")

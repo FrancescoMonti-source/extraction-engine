@@ -160,7 +160,6 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         channels = list(
             esrd_code = code_channel(
                 source = "pmsi_diag", selector = icd10("N18"),
-                native_grain = "diagnosis_row",
                 required_roles = c("subject_id", "event_id", "event_start",
                                    "event_end", "code", "source_item_id"),
                 linkage = "subject")))
