@@ -4916,7 +4916,7 @@ what another block owns) plus one block-level call.
 **Suite:** 12 `test_that` blocks, 64 assertions, 0 failures, 0 warnings. **Files:**
 `tests/testthat/test-slice-{diabetes,smoking}-spec.R`, `HANDOFF.md`.
 
-### OPEN (owner deciding): define the test floor
+### RATIFIED (2026-06-30): the test floor
 
 The deeper question the owner raised: does the suite still earn its keep, or is it mostly
 ceremony? Working synthesis -- in this phase a test earns its place only if it catches a
@@ -4931,10 +4931,15 @@ can't help there; loud failures self-surface on the next real run. That bar leav
 - `diabetes #4` -- concept-agnostic executor (replaced the fragile `deparse(body())` test;
   silent wrong-codes for every new concept if it regresses).
 - `smoking #3` -- D1 citation keep-and-flag (a decided policy with no other home).
-- candidates: `hitset-expr #2` (grammar fail-closed), `anastomoses #2` (field-level
-  acceptance) -- the §9 promise made concrete.
+- `hitset-expr #2` (grammar fail-closed) and `anastomoses #2` (field-level acceptance) --
+  the §9 promise made concrete; promoted from candidates to full floor members.
 
-Proposal under consideration: name that core the protected floor, declare everything else
-cuttable without ceremony (the suite's only remaining jobs are tripwires on decided silent
-regressions + a refactoring safety net; it is NOT the validation story). Not yet ratified --
-owner is deciding whether to adopt the floor.
+**Ratified.** The owner adopted the five-test floor; Codex (invoked via CLI) independently
+concurred that all five clear the bar and called the floor complete. Everything outside the
+floor is cuttable without ceremony -- the suite's only jobs are tripwires on decided silent
+regressions + a refactoring safety net; it is NOT the validation story. Recorded in DESIGN
+§12 "The protected test floor". One deferred candidate: a provenance/source-traceability
+tripwire, to be added only once a concrete produced-dataset provenance object is ratified
+(not a current gap). The §12 coverage matrix is a one-time design-freezing discipline at
+lock, not a standing per-shape test requirement -- so the declined thresholded-lab test is
+not a hole.

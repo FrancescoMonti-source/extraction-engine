@@ -1184,6 +1184,22 @@ A migration test may temporarily protect old spellings or transitional compatibi
 
 Before locking a validity matrix or public API rule, test it against at least one code channel, one text channel, one thresholded lab channel, one unthresholded lab channel, one patient-grain variable, and one event/stay-grain variable. This prevents the implementation from optimizing around a narrow current use case and freezing a local maximum.
 
+### The protected test floor (ratified 2026-06-30)
+
+After pruning ~400 tests down to a handful, the suite was re-derived from a single gate: in this phase a test earns its place only if the failure it catches is (a) **silent**, (b) on a deterministic invariant we have actually **decided**, and (c) **invisible to the real validation** — real-model-on-real-data runs reviewed by a physician. The LLM node carries the clinical risk and is human-reviewed by design, so tests cannot adjudicate its answers; loud failures self-surface on the next real run. The suite is therefore a set of tripwires on decided silent regressions plus a refactoring safety net — it is not the validation story.
+
+The **protected floor** (do not delete without re-opening this decision):
+
+- `hitset-expr #1` — observed hit-set algebra: `A & !B` with `B` unavailable resolves to included / value 1 / coverage partial (deliberate, non-Kleene; a regression silently flips cohort membership).
+- `hitset-expr #2` — combine grammar is fail-closed: function calls, non-activated channels, and activated-but-unused channels are rejected.
+- `diabetes #4` — the `run_variable()` spine is concept-agnostic: each channel's own selector drives a neutral executor (a hard-wired selector would silently mis-measure every new concept).
+- `smoking #3` — D1 citation keep-and-flag: a value grounded by ≥1 real id is kept and flagged when the model also cites an invented id; an only-invented citation is rejected.
+- `anastomoses #2` — field-level acceptance: a valid field survives an invalid sibling and routes to review (the §9 accept-only-grounded promise made concrete).
+
+Everything outside the floor is cuttable without ceremony. The coverage matrix above is a **design-freezing discipline applied once, when a validity-matrix or public-API rule is locked** — not a standing requirement that each shape keep a permanent test; by that reading the declined thresholded-lab test is not a gap. Provenance / source-traceability is the one open floor *candidate*: it becomes a floor test only once a concrete produced-dataset provenance object is ratified; until then evidence refs, `selected_channels`, and the source-role mapping cover the pieces that exist.
+
+Ratified by the owner with Claude and Codex independently concurring on this five-test core.
+
 ## 13. Variable templates
 
 A `variable_template` is a reusable concept-specific analytical pattern for a recurring variable family.
