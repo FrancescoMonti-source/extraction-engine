@@ -4893,3 +4893,48 @@ Green-after-cut is the confirmation the deleted coverage was redundant. **Files:
 `tests/testthat/test-contract.R` (del), `tests/testthat/test-slice-inspection-spec.R` (del),
 `tests/testthat/test-slice-{anastomoses,diabetes,smoking,source-spec-roles}-spec.R`,
 `HANDOFF.md`.
+
+## Pass 2: assertion-level dedup + diabetes #2 to strict purity -- Claude (2026-06-30)
+
+Second gate pass. Block level was exhausted by pass 1 -- the 12 survivors each remained the
+sole protector of an invariant. Remaining bloat was *inside* blocks (assertions re-proving
+what another block owns) plus one block-level call.
+
+- **diabetes #2 deleted** (was: code+text OR smoke test). Under the strict gate it protects
+  no invariant uniquely -- set algebra is owned by hitset-expr, text production by smoking,
+  code/lab evidence by whole-history/diabetes #3. It was only the end-to-end heterogeneous-
+  combine *integration*, which is coverage, not an invariant. Owner chose strict purity over
+  keeping it as a smoke test. The orphaned `spec_fake_docs` fake caller went with it;
+  `spec_diag`/`spec_docs` stay in `spec_sources` (still passed to #3, mirrors a full source
+  registry, not orphaned).
+- **smoking #2 trimmed:** dropped the `channel_status` status strings (`"unavailable"` re-
+  proven by anastomoses A2; `"invalid"` is vocabulary -- the behavior is in `value`/`cov`/
+  `needs_review`) and `t1_ev` (duplicates smoking #3's `D5::3`).
+- **Not added:** a thresholded-lab test. Owner's call: it equals "can the engine honor
+  `filter(value op threshold)`" -- a declarative no-op. The §12 floor lists it; we decline.
+
+**Suite:** 12 `test_that` blocks, 64 assertions, 0 failures, 0 warnings. **Files:**
+`tests/testthat/test-slice-{diabetes,smoking}-spec.R`, `HANDOFF.md`.
+
+### OPEN (owner deciding): define the test floor
+
+The deeper question the owner raised: does the suite still earn its keep, or is it mostly
+ceremony? Working synthesis -- in this phase a test earns its place only if it catches a
+failure that is (a) **silent**, (b) on a deterministic invariant we've actually **decided**,
+and (c) **invisible to the real validation** (real-model-on-real-data runs + physician
+review). The LLM node carries the clinical risk and is human-reviewed by design, so tests
+can't help there; loud failures self-surface on the next real run. That bar leaves a small
+**tripwire core** worth defending:
+
+- `hitset-expr #1` -- observed set algebra: `A & !B` with `B` unavailable -> included,
+  value=1, coverage=partial (deliberate, non-Kleene; silent cohort flip if it regresses).
+- `diabetes #4` -- concept-agnostic executor (replaced the fragile `deparse(body())` test;
+  silent wrong-codes for every new concept if it regresses).
+- `smoking #3` -- D1 citation keep-and-flag (a decided policy with no other home).
+- candidates: `hitset-expr #2` (grammar fail-closed), `anastomoses #2` (field-level
+  acceptance) -- the §9 promise made concrete.
+
+Proposal under consideration: name that core the protected floor, declare everything else
+cuttable without ceremony (the suite's only remaining jobs are tripwires on decided silent
+regressions + a refactoring safety net; it is NOT the validation story). Not yet ratified --
+owner is deciding whether to adopt the floor.

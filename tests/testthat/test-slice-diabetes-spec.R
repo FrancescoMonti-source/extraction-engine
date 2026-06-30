@@ -48,50 +48,6 @@ spec_sources <- list(
     pmsi_diag = spec_diag,
     biology = spec_biol)
 
-spec_fake_docs <- function(prompt, type, system_prompt) {
-    if (grepl("P1::t", prompt, fixed = TRUE)) {
-        return(list(diabetes_status = "documented", evidence_ids = list("S001")))
-    }
-    list(diabetes_status = "not_documented", evidence_ids = list())
-}
-
-# Why: the executable slice must preserve the formal boundary: selected channels
-# resurface source-specific signals, variable_spec combines them, and output keeps
-# final value, per-channel status, and evidence refs instead of hiding judgment.
-test_that("baseline diabetes variable from template returns traceable output", {
-    concept <- diabetes_concept_spec()
-    baseline <- variable_spec(
-        template = diabetes_baseline_status_template(concept),
-        name = "diabete_pre_greffe",
-        unit = "transplant",
-        anchor = "anchor_date")
-
-    run <- run_variable(
-        baseline, spec_tasks, spec_sources,
-        caller = spec_fake_docs, model_name = "fake")
-
-    expect_equal(
-        run$selected_channels$channel,
-        c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
-
-    values <- setNames(run$values$value, run$values$task_id)
-    expect_equal(values[["P1::t"]], 1L)       # text channel
-    expect_equal(values[["P2::t"]], 1L)       # PMSI channel
-    expect_equal(values[["P3::t"]], 0L)       # no observed hit -> 0; uncertainty rides on coverage
-
-    p1_text <- run$channel_status[
-        run$channel_status$task_id == "P1::t" &
-            run$channel_status$channel == "text_diabetes_mentions", ]
-    expect_equal(p1_text$status, "complete")
-    expect_true(p1_text$hit)
-
-    p2_ev <- run$evidence[
-        run$evidence$task_id == "P2::t" &
-            run$evidence$channel == "pmsi_diag_e10_e14", ]
-    expect_equal(p2_ev$source, "pmsi_diag")
-    expect_equal(p2_ev$evidence_ref, "diag:002")
-})
-
 # Why: variable_spec may be written directly when no concept-specific template is
 # justified. Generic helpers like max_value() are operators inside that spec, not
 # user-facing variable templates.

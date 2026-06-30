@@ -79,15 +79,6 @@ test_that("categorical output returns the status and distinct absence states", {
     expect_equal(cov[["T3::t"]], "partial")
     expect_true(is.na(value[["T4::t"]]))            # definitive without evidence -> invalid
     expect_true(nr[["T4::t"]])
-
-    ss <- run$channel_status
-    expect_equal(ss$status[ss$task_id == "T3::t"], "unavailable")
-    expect_equal(ss$status[ss$task_id == "T4::t"], "invalid")
-
-    # T1's value is grounded by its real evidence sentence.
-    t1_ev <- run$evidence[run$evidence$task_id == "T1::t", ]
-    expect_equal(t1_ev$evidence_ref, "D1::3")
-    expect_equal(t1_ev$source, "documents")
 })
 
 # Why: D1 keep-and-flag (owner-ratified). A status grounded by >=1 real id is kept
