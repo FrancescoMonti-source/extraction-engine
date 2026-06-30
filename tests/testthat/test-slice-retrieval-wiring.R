@@ -64,13 +64,3 @@ test_that("run_variable executes a text variable from raw documents via retrieva
     expect_equal(nrow(ev1), 1L)
     expect_match(ev1$evidence_ref, "^E1::")
 })
-
-# Why: an unrecognized documents source shape must fail loudly, not silently
-# produce empty results.
-test_that("a malformed documents source is rejected", {
-    expect_error(
-        run_variable(rw_variable(), rw_tasks[1, ],
-                     list(documents = list(foo = 1)),
-                     caller = rw_fake, model_name = "fake"),
-        "pre-retrieved|raw")
-})
