@@ -18,13 +18,21 @@
 # no_candidate semantics.
 # =============================================================================
 
+# Smoking text-retrieval query (peri-op smoking terms + pack-year forms) -- the
+# concept's Lucene selector (moved here from the retired adapter_smoking.R).
+SMOKING_QUERY <- paste(
+    "tabac*", "tabagi*", "fumeu*", "sevr*", "cigarette*", "paquet*",
+    "<(0* OR 1* OR 2* OR 3* OR 4* OR 5* OR 6* OR 7* OR 8* OR 9*) PA>",
+    "(0*PA OR 1*PA OR 2*PA OR 3*PA OR 4*PA OR 5*PA OR 6*PA OR 7*PA OR 8*PA OR 9*PA)",
+    sep = " OR ")
+
 smoking_concept_spec <- function() {
     concept_spec(
         name = "smoking",
         channels = list(
             text_smoking_mentions = text_channel(
                 source = "documents",
-                selector = lucene_query(SMOKING_QUERY),   # from adapter_smoking.R
+                selector = lucene_query(SMOKING_QUERY),
                 native_grain = "document_sentence",
                 required_roles = c("subject_id", "event_id", "date", "text",
                                    "source_item_id"),

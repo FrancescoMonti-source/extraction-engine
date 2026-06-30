@@ -32,7 +32,7 @@ suppressWarnings(suppressMessages({
 # ---- engine (same chain as tests/testthat.R, no test-only files) -------------
 for (f in c("R/retrieval.R", "R/extract.R", "R/data.R", "R/structured.R",
             "R/channel-combine.R", "R/spec.R", "R/channels.R", "R/operators.R",
-            "R/run_variable.R", "R/concepts-smoking.R", "R/adapter_smoking.R",
+            "R/run_variable.R", "R/concepts-smoking.R",
             "R/types/smoking.R")) {
     source(f)
 }

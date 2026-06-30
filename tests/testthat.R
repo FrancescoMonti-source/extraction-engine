@@ -18,7 +18,6 @@ source("R/concepts-smoking.R")
 source("R/concepts-anastomoses.R")
 source("R/concepts-dialysis.R")
 source("R/adapter_anastomoses.R")
-source("R/adapter_smoking.R")
 source("R/types/anastomoses.R")
 source("R/types/smoking.R")
 
