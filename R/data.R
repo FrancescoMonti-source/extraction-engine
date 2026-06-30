@@ -287,6 +287,37 @@ load_biol_results <- function(bio_path) {
     normalize_source(readRDS(bio_path), BIOL_SOURCE)
 }
 
-# NB: pmsi$main and pmsi$actes are real redsan tables but have no loader/consumer
-# yet (the surgery anchor currently comes from the chirurgie workbook via the
-# adapters). Declare their source_spec when a variable actually consumes them.
+# pmsi$actes: one row per CCAM procedure act, dated at the act itself (point time).
+# Declared now that act_channel() consumes it (CODEACTE membership). Real redsan table;
+# add a loader when a real run needs one (tests/run_variable take the frame directly).
+ACTE_SOURCE <- source_spec("pmsi actes",
+    cols = list(
+        PATID    = col("PATID",    "chr",  roles = "subject_id",
+                       legacy_roles = "subject"),
+        EVTID    = col("EVTID",    "chr",  roles = "event_id",
+                       legacy_roles = "event"),
+        ELTID    = col("ELTID",    "chr",  roles = "source_item_id",
+                       legacy_roles = "record"),
+        CODEACTE = col("CODEACTE", "chr",  roles = "code"),
+        DATEACTE = col("DATEACTE", "date", roles = "date")),
+    source_row_id = "pmsi_actes",
+    module = "pmsi",
+    table = "actes",
+    identifiers = c("PATID", "EVTID", "ELTID"),
+    source_time_kind = "point",
+    source_time_start = "DATEACTE",
+    query_date_keys = "DATEACTE",
+    default_batch_key = "DATEACTE",
+    normalizer = "process_pmsi")
+
+# NB: pmsi$main is a real redsan table but has no loader/consumer yet. Declare its
+# source_spec when a variable actually consumes it.
+
+# Registry: channel-facing source name -> source_spec, so run_variable() resolves a
+# channel's roles (which column is `code`, point vs interval time) from the spec
+# instead of hardcoding physical column names in the executor.
+EE_SOURCES <- list(
+    pmsi_diag  = DIAG_SOURCE,
+    pmsi_actes = ACTE_SOURCE,
+    biology    = BIOL_SOURCE,
+    documents  = DOCS_SOURCE)
