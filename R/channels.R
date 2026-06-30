@@ -2,22 +2,32 @@
 # channels.R -- experimental channel + selector constructors
 # -----------------------------------------------------------------------------
 # A channel is ONE source-specific route for resurfacing signals related to a
-# concept. It does not interpret clinical meaning. `type` (code / text / lab) is
-# the dispatch key the runner uses to pick an execution path; `produces` is the
-# signal shape; `selector` is the source-specific identity rule. The text channel
-# may also carry the concept-owned answer `extractor` (its response definition),
-# because the answer schema belongs to the concept, not to each variable.
+# concept. It does not interpret clinical meaning. `type` (code / lab / text) is
+# the dispatch key the runner uses to pick an execution path, and it IMPLIES the
+# signal shape: `produces` is derived from the constructor, never supplied by the
+# user (a code channel cannot claim to produce a measurement). `selector` is the
+# source-specific identity rule. The text channel may also carry the concept-owned
+# answer `extractor` (its response definition), because the answer schema belongs
+# to the concept, not to each variable.
 # =============================================================================
 
-channel <- function(source, selector, produces, type = "generic",
+# Signal shape per channel type. The constructor sets this; users never write it.
+.channel_produces <- c(
+    code = "code_hit",
+    lab  = "numeric_measurement",
+    text = "text_candidate")
+
+channel <- function(source, selector, type = "generic",
                     native_grain = NA_character_, required_roles = character(),
                     linkage = character(), ...) {
-    for (arg in c("source", "produces", "type")) {
+    for (arg in c("source", "type")) {
         val <- get(arg)
         if (!is.character(val) || length(val) != 1L || !nzchar(val)) {
             stop(arg, " must be one non-empty string.", call. = FALSE)
         }
     }
+    produces <- unname(.channel_produces[type])
+    if (is.na(produces)) produces <- paste0(type, "_signal")
     .experimental_spec(
         c(list(
             type = type,
@@ -31,16 +41,16 @@ channel <- function(source, selector, produces, type = "generic",
         "ee_channel")
 }
 
-code_channel <- function(source, selector, produces = "code_hit", ...) {
-    channel(source, selector, produces, type = "code", ...)
+code_channel <- function(source, selector, ...) {
+    channel(source, selector, type = "code", ...)
 }
 
-text_channel <- function(source, selector, produces = "text_candidate", ...) {
-    channel(source, selector, produces, type = "text", ...)
+text_channel <- function(source, selector, ...) {
+    channel(source, selector, type = "text", ...)
 }
 
-lab_channel <- function(source, selector, produces = "numeric_measurement", ...) {
-    channel(source, selector, produces, type = "lab", ...)
+lab_channel <- function(source, selector, ...) {
+    channel(source, selector, type = "lab", ...)
 }
 
 # --- selectors ----------------------------------------------------------------
