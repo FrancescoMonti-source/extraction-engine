@@ -81,47 +81,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
     invisible(TRUE)
 }
 
-.structured_execution_error <- function(tasks, field, measure_name, error) {
-    coverage <- tasks %>%
-        mutate(
-            n_source_rows = NA_integer_,
-            n_scope_rows = NA_integer_,
-            processing_state = "processing_error")
-    values <- tibble::tibble(
-        task_id = character(), field = character(),
-        normalized_value = character(), accepted_value = character(),
-        measurement_value = double(), measurement_time = as.Date(character()),
-        field_validity = character(), validity_reason = character())
-    evidence <- tibble::tibble(
-        task_id = character(), field = character(), source = character(),
-        source_row_id = character(), evidence_ref = character(),
-        evidence_summary = character())
-    derivation <- tasks %>%
-        transmute(
-            task_id,
-            field = field,
-            rule = paste0("execution:", measure_name),
-            n_source_rows = NA_integer_,
-            n_scope_rows = NA_integer_,
-            status = "processing_error",
-            error = error)
-    list(
-        coverage = coverage, values = values, evidence = evidence,
-        observations = tibble::tibble(), derivation = derivation)
-}
-
-# Production wrapper: programming/data-shape failures remain visible as a
-# complete derivation census rather than disappearing with an aborted script.
-run_structured_measurement <- function(measure, source_rows, tasks, ..., field) {
-    measure_name <- deparse(substitute(measure))
-    tryCatch(
-        measure(source_rows, tasks, ...),
-        error = function(e) {
-            .structured_execution_error(
-                tasks, field, measure_name, conditionMessage(e))
-        })
-}
-
 # --- scope helpers (point / interval) ----------------------------------------
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi

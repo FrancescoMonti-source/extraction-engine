@@ -67,18 +67,3 @@ diabetes_baseline_status_template <- function(concept = diabetes_concept_spec())
             output = binary_output(),
             combine = any_positive()))   # build = .default_template_build(concept)
 }
-
-# --- diabetes: thin clinically-named caller of the neutral measure_code_presence()
-# core (R/structured.R). ICD-10 E10-E14 over the diagnosis source, default 5-year
-# lookback. Kept for backward compatibility (direct structured callers/tests/scripts);
-# the generic run_variable() code branch calls the neutral core directly.
-DIABETES_CODES <- c("E10", "E11", "E12", "E13", "E14")
-
-measure_diabetes <- function(diag, tasks, codes = DIABETES_CODES,
-                             from_days = -1825L, to_days = 7L,
-                             missing_datsort = c("use_start", "exclude")) {
-    measure_code_presence(
-        diag, tasks, codes = codes, from_days = from_days, to_days = to_days,
-        missing_datsort = missing_datsort,
-        field = "diabetes_status", source = "diagnosis")
-}
