@@ -35,7 +35,7 @@ hs_var <- function(combine = hit_set_difference(include = "act_present",
         unit = "transplant", anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = channels, output = binary_output(),
-        combine = combine, absence_policy = open_world())
+        combine = combine)
 }
 
 hs_tasks <- tibble::tibble(

@@ -164,8 +164,7 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
         window = days_after(0L, 2L),
         channels = list(
             glucose_measurements = use_channel(reducer = max_value())),
-        output = number_output(),
-        absence_policy = missing_if_no_measurement())
+        output = number_output())
 
     expect_null(direct$template)
     expect_setequal(names(direct$channels), "glucose_measurements")
@@ -201,8 +200,8 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         channels = list(
             esrd_code = code_channel(
                 source = "pmsi_diag", selector = icd10("N18"),
-                native_grain = "diagnosis_row",
-                required_roles = c("subject", "event", "interval_start",
+        native_grain = "diagnosis_row",
+        required_roles = c("subject", "event", "interval_start",
                                    "interval_end", "code", "native_ref"),
                 linkage = "subject")))
     esrd_var <- variable_spec(
@@ -210,8 +209,7 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = list(esrd_code = use_channel()),
-        output = binary_output(),       # single channel -> combine = NULL (membership)
-        absence_policy = open_world())
+        output = binary_output())       # single channel -> combine = NULL (membership)
 
     tasks <- tibble::tibble(
         task_id = c("N1::t", "N2::t"), PATID = c("N1", "N2"),

@@ -2,22 +2,25 @@
 
 This repo is the **shared coordination layer** between two assistants (Claude,
 GPT-5.5) and the human owner. It exists so neither model depends on its own chat
-memory — anyone can re-enter cold by reading `DESIGN.md` + this file.
+memory — anyone can re-enter cold by reading `DESIGN.md`, `MIGRATION.md`, and
+this file.
 
 ## Protocol
 
 - **Roles.** The human owns product & clinical decisions. Claude and GPT-5.5
   **both draft and both review** (mutual, not one-directional). The human is the
   relay between the two models and the decision-maker.
-- **Source of truth.** `DESIGN.md` = architecture + rationale. `HANDOFF.md`
-  (this file) = the review/coordination frame and the running log.
+- **Source of truth.** `DESIGN.md` = target architecture and vocabulary.
+  `MIGRATION.md` = shipped-vs-target implementation gaps. `HANDOFF.md`
+  (this file) = the review/coordination frame and chronological log.
 - **Handoff format** (every exchange): *Goal & acceptance criteria · proposed
   change + reasoning · files changed · open questions/uncertainties.*
 - **No rubber-stamping.** State disagreements explicitly with the tradeoff.
   Responses land **in the repo** (update `DESIGN.md` or append a log entry here),
   not only in chat — so the decision and its reasoning survive compaction.
-- **Decisions** get recorded in `DESIGN.md` §6 (Decisions & rationale) once the
-  human accepts them.
+- **Decisions** get recorded in `DESIGN.md` when they change the target
+  contract, or in `MIGRATION.md` when they only affect shipped-vs-target
+  migration state, once the human accepts them.
 
 ---
 

@@ -2,10 +2,10 @@
 # operators.R -- experimental operators / helpers
 # -----------------------------------------------------------------------------
 # Generic reusable computational pieces used INSIDE a variable_spec or template:
-# windows, reducers, combiners, output types, absence policies, extraction
-# methods. These are operators/helpers, NOT variable templates (a variable
-# template is concept-specific; these are not). Each is a thin tagged record the
-# runner reads by class/kind.
+# windows, reducers, combiners, output types, and extraction methods. These are
+# operators/helpers, NOT variable templates (a variable template is
+# concept-specific; these are not). Each is a thin tagged record the runner reads
+# by class/kind.
 # =============================================================================
 
 # --- relative windows ---------------------------------------------------------
@@ -107,18 +107,19 @@ llm_after_lucene <- function(top_n = NULL) {
 }
 
 # --- output (cohort column) types ---------------------------------------------
-# Suffix avoids masking base::numeric()/the word "binary"; the design note's
-# binary()/numeric() spelling is deferred to avoid the shadowing.
-binary_output <- function() {
+# Target constructor names are short (`bin_output()`, `num_output()`, etc.). The
+# older names remain as migration aliases so existing specs keep running while the
+# target vocabulary becomes executable.
+bin_output <- function() {
     .experimental_spec(list(kind = "binary"), "ee_output_type")
 }
 
-number_output <- function() {
+num_output <- function() {
     .experimental_spec(list(kind = "number"), "ee_output_type")
 }
 
 # A categorical cohort column over a fixed level set (e.g. smoking statuses).
-categorical_output <- function(levels) {
+cat_output <- function(levels) {
     .experimental_spec(list(kind = "categorical", levels = as.character(levels)),
                        "ee_output_type")
 }
@@ -126,22 +127,23 @@ categorical_output <- function(levels) {
 # A SET of cohort columns produced by one extraction task (e.g. the several
 # anastomosis durations / types / locations from one operative report). The output
 # contract belongs to the task, not to one scalar column.
-fields_output <- function(fields) {
+struct_output <- function(fields) {
     .experimental_spec(list(kind = "fields", fields = as.character(fields)),
                        "ee_output_type")
 }
 
-# --- absence policies ---------------------------------------------------------
-# Absence is interpreted at variable_spec level. The carried incomplete_value is
-# what the combiner returns when ascertainment is partial (no positive + a source
-# was unavailable), so missing evidence is never silently turned into a negative.
-open_world <- function(incomplete_value = NA_integer_) {
-    .experimental_spec(list(kind = "open_world", incomplete_value = incomplete_value),
-                       "ee_absence_policy")
+binary_output <- function() {
+    bin_output()
 }
 
-missing_if_no_measurement <- function() {
-    .experimental_spec(
-        list(kind = "missing_if_no_measurement", incomplete_value = NA_real_),
-        "ee_absence_policy")
+number_output <- function() {
+    num_output()
+}
+
+categorical_output <- function(levels) {
+    cat_output(levels)
+}
+
+fields_output <- function(fields) {
+    struct_output(fields)
 }

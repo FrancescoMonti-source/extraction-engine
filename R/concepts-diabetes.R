@@ -64,8 +64,7 @@ diabetes_baseline_status_template <- function(concept = diabetes_concept_spec())
             channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
             text_method = llm_after_lucene(top_n = 20L),
             output = binary_output(),
-            combine = any_positive(),
-            absence_policy = open_world()))   # build = .default_template_build(concept)
+            combine = any_positive()))   # build = .default_template_build(concept)
 }
 
 # --- diabetes: thin clinically-named caller of the neutral measure_code_presence()

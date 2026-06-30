@@ -40,7 +40,7 @@ hx_var <- function(expr = HX_EXPR,
         unit = "transplant", anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = channels, output = binary_output(),
-        combine = expr, absence_policy = open_world())
+        combine = expr)
 }
 
 hx_tasks <- tibble::tibble(

@@ -8,7 +8,7 @@
 # provenance: numbered snippets, `evidence_ids` (a dynamic enum), and a
 # `decision_note`. Per the brief, `no_candidate` is an R-side workflow state.
 #
-# Contract (DESIGN/TECHNICAL_NOTES, conformed to D0840 tabac_statut):
+# Contract (DESIGN.md, conformed to D0840 tabac_statut):
 #   variable:     smoking_status_periop  (== D0840 tabac_statut)
 #   anchor:       surgery date (DATEACTE)
 #   source scope: docs with RECDATE in [anchor - 365d, anchor + 7d]

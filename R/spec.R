@@ -180,7 +180,6 @@ use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
                 text_extractor = params$text_extractor),
             output = params$output,
             combine = params$combine,
-            absence_policy = params$absence_policy,
             template_name = params$template_name)
     }
 }
@@ -208,13 +207,18 @@ variable_template <- function(name, concept, defaults = list(), build = NULL) {
 # It may be built from a template (template=) or written directly (concept=).
 variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NULL,
                           window = NULL, channels = list(), output = NULL,
-                          combine = NULL, absence_policy = NULL, template = NULL,
-                          template_name = NULL, ...) {
+                          combine = NULL, template = NULL, template_name = NULL,
+                          ...) {
     if (!is.null(template)) {
         if (!inherits(template, "ee_variable_template")) {
             stop("template must be created with variable_template().", call. = FALSE)
         }
         overrides <- list(...)
+        if ("absence_policy" %in% names(overrides)) {
+            stop("absence_policy is no longer a variable_spec() argument; ",
+                 "use output type plus channel coverage/audit status instead.",
+                 call. = FALSE)
+        }
         if (!missing(name)) overrides$name <- name
         if (!missing(unit)) overrides$unit <- unit
         if (!missing(anchor)) overrides$anchor <- anchor
@@ -222,10 +226,15 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
         if (!missing(channels)) overrides$channels <- channels
         if (!missing(output)) overrides$output <- output
         if (!missing(combine)) overrides$combine <- combine
-        if (!missing(absence_policy)) overrides$absence_policy <- absence_policy
         params <- utils::modifyList(template$defaults, overrides, keep.null = TRUE)
         params$template_name <- template$name
         return(template$build(params))
+    }
+
+    unused <- names(list(...))
+    if (length(unused)) {
+        stop("Unused variable_spec() argument(s): ",
+             paste(unused, collapse = ", "), call. = FALSE)
     }
 
     if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
@@ -251,7 +260,124 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
     .experimental_spec(
         list(name = name, concept = concept, unit = unit, anchor = anchor,
              window = window, channels = channels, output = output,
-             combine = combine, absence_policy = absence_policy,
-             template = template_name),
+             combine = combine, template = template_name),
         "ee_variable_spec")
+}
+
+# --- inspection / resolution --------------------------------------------------
+# Read-only helpers for understanding what will execute after concept defaults and
+# variable activations are combined. They are intentionally lightweight: the return
+# value is an experimental list/S3 view, not a frozen public schema.
+
+inspect <- function(x, ...) {
+    UseMethod("inspect")
+}
+
+inspect.ee_variable_spec <- function(x, ...) {
+    resolve_variable_spec(x)
+}
+
+inspect.ee_concept_spec <- function(x, ...) {
+    .experimental_spec(
+        list(name = x$name,
+             channels = lapply(x$channels, inspect)),
+        "ee_concept_inspection")
+}
+
+inspect.ee_channel <- function(x, ...) {
+    .experimental_spec(
+        list(type = x$type,
+             source = x$source,
+             selector = x$selector,
+             native_grain = x$native_grain,
+             required_roles = x$required_roles,
+             linkage = x$linkage,
+             extractor = x$extractor),
+        "ee_channel_inspection")
+}
+
+inspect.ee_resolved_variable_spec <- function(x, ...) {
+    x
+}
+
+inspect.default <- function(x, ...) {
+    stop("No inspect() method for objects of class: ",
+         paste(class(x), collapse = ", "), call. = FALSE)
+}
+
+.inherit_from_activation <- function(channel_def, channel_use, field,
+                                     channel_field = field) {
+    value <- channel_use[[field]]
+    source <- "activation"
+    if (is.null(value)) {
+        value <- channel_def[[channel_field]]
+        source <- "channel"
+    }
+    if (is.null(value)) {
+        value <- NULL
+        source <- "none"
+    }
+    list(value = value, source = source)
+}
+
+.resolve_channel_activation <- function(name, concept, channel_use) {
+    channel_def <- concept$channels[[name]]
+    if (is.null(channel_def)) {
+        stop("Cannot resolve unknown channel: ", name, call. = FALSE)
+    }
+    method <- .inherit_from_activation(channel_def, channel_use, "method",
+                                       "default_method")
+    extractor <- .inherit_from_activation(channel_def, channel_use, "extractor")
+    reducer <- .inherit_from_activation(channel_def, channel_use, "reducer")
+
+    .experimental_spec(
+        list(
+            name = name,
+            type = channel_def$type,
+            source = channel_def$source,
+            selector = channel_def$selector,
+            native_grain = channel_def$native_grain,
+            required_roles = channel_def$required_roles,
+            linkage = channel_def$linkage,
+            method = method$value,
+            method_source = method$source,
+            reducer = reducer$value,
+            reducer_source = reducer$source,
+            extractor = extractor$value,
+            extractor_source = extractor$source,
+            activation = channel_use,
+            channel = channel_def),
+        "ee_resolved_channel")
+}
+
+resolve_variable_spec <- function(variable) {
+    if (!inherits(variable, "ee_variable_spec")) {
+        stop("resolve_variable_spec() requires a variable_spec().", call. = FALSE)
+    }
+    resolved_channels <- lapply(
+        names(variable$channels),
+        function(name) .resolve_channel_activation(
+            name, variable$concept, variable$channels[[name]]))
+    names(resolved_channels) <- names(variable$channels)
+
+    combine_rule <- if (inherits(variable$combine, "ee_combiner") &&
+                        !is.null(variable$combine$expr)) {
+        variable$combine$expr
+    } else {
+        NA_character_
+    }
+
+    .experimental_spec(
+        list(
+            name = variable$name,
+            concept = variable$concept$name,
+            unit = variable$unit,
+            anchor = variable$anchor,
+            window = variable$window,
+            template = variable$template,
+            output = variable$output,
+            combine = variable$combine,
+            combine_rule = combine_rule,
+            channels = resolved_channels),
+        "ee_resolved_variable_spec")
 }

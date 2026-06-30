@@ -59,6 +59,5 @@ dialysis_status_template <- function(concept = dialysis_concept_spec()) {
             text_method = llm_after_lucene(),
             text_extractor = dialysis_text_definition(),
             output = binary_output(),
-            combine = any_positive(),
-            absence_policy = open_world()))   # build = .default_template_build(concept)
+            combine = any_positive()))   # build = .default_template_build(concept)
 }
