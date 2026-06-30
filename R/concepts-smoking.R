@@ -26,8 +26,8 @@ smoking_concept_spec <- function() {
                 source = "documents",
                 selector = lucene_query(SMOKING_QUERY),   # from adapter_smoking.R
                 native_grain = "document_sentence",
-                required_roles = c("subject", "event", "date", "text",
-                                   "native_ref"),
+                required_roles = c("subject_id", "event_id", "date", "text",
+                                   "source_item_id"),
                 linkage = "subject")))
 }
 

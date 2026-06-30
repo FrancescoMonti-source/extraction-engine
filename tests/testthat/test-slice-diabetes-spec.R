@@ -200,9 +200,9 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         channels = list(
             esrd_code = code_channel(
                 source = "pmsi_diag", selector = icd10("N18"),
-        native_grain = "diagnosis_row",
-        required_roles = c("subject", "event", "interval_start",
-                                   "interval_end", "code", "native_ref"),
+                native_grain = "diagnosis_row",
+                required_roles = c("subject_id", "event_id", "event_start",
+                                   "event_end", "code", "source_item_id"),
                 linkage = "subject")))
     esrd_var <- variable_spec(
         name = "esrd_status", concept = esrd_concept, unit = "patient",

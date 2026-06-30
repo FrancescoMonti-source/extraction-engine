@@ -34,8 +34,8 @@ diabetes_concept_spec <- function() {
                 source = "pmsi_diag",
                 selector = icd10(c("E10", "E11", "E12", "E13", "E14")),
                 native_grain = "diagnosis_row",
-                required_roles = c("subject", "event", "interval_start",
-                                   "interval_end", "code", "native_ref"),
+                required_roles = c("subject_id", "event_id", "event_start",
+                                   "event_end", "code", "source_item_id"),
                 linkage = "subject"),
             text_diabetes_mentions = text_channel(
                 source = "documents",
@@ -43,15 +43,16 @@ diabetes_concept_spec <- function() {
                     "diabete OR diabetique OR insulinotherapie OR insuline"),
                 extractor = diabetes_text_definition(),
                 native_grain = "document_sentence",
-                required_roles = c("subject", "event", "date", "text",
-                                   "native_ref"),
+                required_roles = c("subject_id", "event_id", "date", "text",
+                                   "source_item_id"),
                 linkage = "subject"),
             glucose_measurements = lab_channel(
                 source = "biology",
                 selector = analyte("GLU.GLU"),
                 native_grain = "lab_result",
-                required_roles = c("subject", "event", "date", "value",
-                                   "analyte", "native_ref"),
+                required_roles = c("subject_id", "event_id", "date",
+                                   "value_num", "value_str", "analyte",
+                                   "source_item_id", "source_result_id"),
                 linkage = "subject")))
 }
 

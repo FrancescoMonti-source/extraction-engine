@@ -15,14 +15,14 @@ hs_concept <- function() {
             act_present = code_channel(
                 source = "acts", selector = icd10("Z94"),
                 native_grain = "diagnosis_row",
-                required_roles = c("subject", "event", "interval_start",
-                                   "interval_end", "code", "native_ref"),
+                required_roles = c("subject_id", "event_id", "event_start",
+                                   "event_end", "code", "source_item_id"),
                 linkage = "subject"),
             signal_present = code_channel(
                 source = "exclusion_dx", selector = icd10("Z99"),
                 native_grain = "diagnosis_row",
-                required_roles = c("subject", "event", "interval_start",
-                                   "interval_end", "code", "native_ref"),
+                required_roles = c("subject_id", "event_id", "event_start",
+                                   "event_end", "code", "source_item_id"),
                 linkage = "subject")))
 }
 

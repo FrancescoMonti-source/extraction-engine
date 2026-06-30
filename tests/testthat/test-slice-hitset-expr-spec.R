@@ -17,8 +17,8 @@ hx_concept <- function() {
     code_ch <- function(source, prefix) code_channel(
         source = source, selector = icd10(prefix),
         native_grain = "diagnosis_row",
-        required_roles = c("subject", "event", "interval_start", "interval_end",
-                           "code", "native_ref"),
+        required_roles = c("subject_id", "event_id", "event_start", "event_end",
+                           "code", "source_item_id"),
         linkage = "subject")
     concept_spec(
         name = "transplant_minus_dialysis",

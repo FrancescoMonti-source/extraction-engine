@@ -35,15 +35,15 @@ dialysis_concept_spec <- function() {
                 source = "pmsi_diag",
                 selector = icd10(c("Z992", "N186")),
                 native_grain = "diagnosis_row",
-                required_roles = c("subject", "event", "interval_start",
-                                   "interval_end", "code", "native_ref"),
+                required_roles = c("subject_id", "event_id", "event_start",
+                                   "event_end", "code", "source_item_id"),
                 linkage = "subject"),
             text_dialysis_mentions = text_channel(
                 source = "documents",
                 selector = lucene_query("dialyse OR hemodialyse OR epuration"),
                 native_grain = "document_sentence",
-                required_roles = c("subject", "event", "date", "text",
-                                   "native_ref"),
+                required_roles = c("subject_id", "event_id", "date", "text",
+                                   "source_item_id"),
                 linkage = "subject")))
 }
 

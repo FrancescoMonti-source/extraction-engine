@@ -3,12 +3,13 @@
 # -----------------------------------------------------------------------------
 # This is the SOURCE LAYER: the only place raw warehouse column names appear.
 # Each source is a DECLARATION (`source_spec`) mapping raw columns -> canonical
-# ROLES (subject / event / date / interval / value / analyte / code / text / …);
-# one generic `normalize_source()` applies the shared normalization (Europe/Paris
-# clinical dates, numeric coercion, source-row ids, presence/uniqueness checks).
-# A new warehouse re-declares only these specs; nothing else should mention a raw
-# column name. (Output column names are still the historical ones for now; the
-# rename of downstream code to *speak* roles is a separate step.)
+# roles (subject_id / event_id / source_item_id / date / event_start /
+# event_end / value_num / value_str / analyte / code / text / ...); one generic
+# `normalize_source()` applies the shared normalization (Europe/Paris clinical
+# dates, numeric coercion, source-row ids, presence/uniqueness checks). A new
+# warehouse re-declares only these specs; nothing else should mention a raw column
+# name. Output column names are still the historical runner names for now; the
+# target role vocabulary is exposed through source metadata.
 # Privacy: identifier-bearing workbooks are read column-by-column (see
 # read_workbook_columns); the docs RDS carries no direct identifiers.
 # =============================================================================
@@ -68,21 +69,91 @@ read_workbook_columns <- function(path, columns) {
 }
 
 # --- declared source layer ---------------------------------------------------
-# `col()` declares one output column: which raw column it comes from (`from`,
-# a fallback vector is allowed), how to normalize it (`kind`), and which canonical
-# engine ROLE it plays (`role`, metadata for later use — not consumed here yet).
-col <- function(from, kind = c("chr", "num", "date"), role = NA_character_) {
-    list(from = from, kind = match.arg(kind), role = role)
+# `col()` declares one output column: which raw column it comes from (`from`, a
+# fallback vector is allowed), how to normalize it (`kind`), and which canonical
+# engine role(s) it plays. `legacy_roles` keeps migration-era labels inspectable
+# while concepts and source specs move to the target vocabulary.
+col <- function(from, kind = c("chr", "num", "date"), role = NULL,
+                roles = NULL, legacy_roles = character()) {
+    if (is.null(roles)) roles <- role
+    roles <- as.character(roles %||% character())
+    legacy_roles <- as.character(legacy_roles %||% character())
+    roles <- roles[!is.na(roles) & nzchar(roles)]
+    legacy_roles <- legacy_roles[!is.na(legacy_roles) & nzchar(legacy_roles)]
+    structure(
+        list(
+            from = from,
+            kind = match.arg(kind),
+            role = if (length(roles)) roles[[1]] else NA_character_,
+            roles = roles,
+            legacy_roles = legacy_roles),
+        class = c("ee_source_col", "list"),
+        api_status = "experimental")
 }
 
 # A source spec: the per-source raw->role mapping plus normalization options.
-source_spec <- function(name, cols, source_row_id = NULL, unique_cols = NULL) {
-    list(name = name, cols = cols, source_row_id = source_row_id,
-         unique_cols = unique_cols)
+source_spec <- function(name, cols, source_row_id = NULL, unique_cols = NULL,
+                        module = NULL, table = NULL, identifiers = character(),
+                        source_time_kind = NULL, source_time_start = NULL,
+                        source_time_end = NULL, query_date_keys = character(),
+                        default_batch_key = NULL, normalizer = NULL) {
+    structure(
+        list(
+            name = name,
+            module = .nullable_chr(module),
+            table = .nullable_chr(table),
+            identifiers = as.character(identifiers %||% character()),
+            source_time_kind = .nullable_chr(source_time_kind),
+            source_time_start = .nullable_chr(source_time_start),
+            source_time_end = .nullable_chr(source_time_end),
+            query_date_keys = as.character(query_date_keys %||% character()),
+            default_batch_key = .nullable_chr(default_batch_key),
+            normalizer = .nullable_chr(normalizer),
+            cols = cols,
+            roles = .source_role_map(cols),
+            legacy_roles = .source_role_map(cols, include_legacy = TRUE),
+            source_row_id = source_row_id,
+            unique_cols = unique_cols),
+        class = c("ee_source_spec", "list"),
+        api_status = "experimental")
 }
 
 source_row_ids <- function(source, n) {
     sprintf("%s:%08d", source, seq_len(n))
+}
+
+`%||%` <- function(x, y) {
+    if (is.null(x)) y else x
+}
+
+.nullable_chr <- function(x) {
+    if (is.null(x) || length(x) == 0L || (length(x) == 1L && is.na(x))) {
+        return(NULL)
+    }
+    x <- as.character(x)
+    if (length(x) != 1L) stop("Expected a single string.", call. = FALSE)
+    x
+}
+
+.source_role_map <- function(cols, include_legacy = FALSE) {
+    out <- list()
+    for (nm in names(cols)) {
+        roles <- cols[[nm]]$roles
+        if (isTRUE(include_legacy)) {
+            roles <- unique(c(roles, cols[[nm]]$legacy_roles))
+        }
+        for (role in roles) {
+            out[[role]] <- unique(c(out[[role]], nm))
+        }
+    }
+    out
+}
+
+source_roles <- function(spec, include_legacy = FALSE) {
+    if (!inherits(spec, "ee_source_spec")) {
+        stop("source_roles() requires a source_spec().", call. = FALSE)
+    }
+    if (isTRUE(include_legacy)) spec$legacy_roles else spec$roles
 }
 
 .source_pick <- function(raw, candidates) {
@@ -131,12 +202,23 @@ normalize_source <- function(raw, spec) {
 # the corpus (RECTXT), not the index.
 DOCS_SOURCE <- source_spec("docs index",
     cols = list(
-        ELTID   = col("ELTID",   "chr",  role = "record"),
-        PATID   = col("PATID",   "chr",  role = "subject"),
-        EVTID   = col("EVTID",   "chr",  role = "event"),
-        RECDATE = col("RECDATE", "date", role = "date"),
-        RECTYPE = col("RECTYPE", "chr",  role = "type")),
-    unique_cols = "ELTID")
+        ELTID   = col("ELTID",   "chr",  roles = "source_item_id",
+                      legacy_roles = "record"),
+        PATID   = col("PATID",   "chr",  roles = "subject_id",
+                      legacy_roles = "subject"),
+        EVTID   = col("EVTID",   "chr",  roles = "event_id",
+                      legacy_roles = "event"),
+        RECDATE = col("RECDATE", "date", roles = "date"),
+        RECTYPE = col("RECTYPE", "chr",  roles = "document_type",
+                      legacy_roles = "type")),
+    unique_cols = "ELTID",
+    module = "doceds",
+    table = "documents",
+    identifiers = c("PATID", "EVTID", "ELTID"),
+    source_time_kind = "point",
+    source_time_start = "RECDATE",
+    query_date_keys = "RECDATE",
+    default_batch_key = "RECDATE")
 
 load_docs_index <- function(docs_path) {
     normalize_source(readRDS(docs_path), DOCS_SOURCE)
@@ -145,13 +227,27 @@ load_docs_index <- function(docs_path) {
 # pmsi$diag: one row per ICD-10 diagnosis, attached to the parent stay interval.
 DIAG_SOURCE <- source_spec("pmsi diag",
     cols = list(
-        PATID   = col("PATID",   "chr",  role = "subject"),
-        EVTID   = col("EVTID",   "chr",  role = "event"),
-        ELTID   = col("ELTID",   "chr",  role = "record"),
-        diag    = col("diag",    "chr",  role = "code"),
-        DATENT  = col("DATENT",  "date", role = "interval_start"),
-        DATSORT = col("DATSORT", "date", role = "interval_end")),
-    source_row_id = "pmsi_diag")
+        PATID   = col("PATID",   "chr",  roles = "subject_id",
+                      legacy_roles = "subject"),
+        EVTID   = col("EVTID",   "chr",  roles = "event_id",
+                      legacy_roles = "event"),
+        ELTID   = col("ELTID",   "chr",  roles = "source_item_id",
+                      legacy_roles = "record"),
+        diag    = col("diag",    "chr",  roles = "code"),
+        DATENT  = col("DATENT",  "date", roles = "event_start",
+                      legacy_roles = "interval_start"),
+        DATSORT = col("DATSORT", "date", roles = "event_end",
+                      legacy_roles = "interval_end")),
+    source_row_id = "pmsi_diag",
+    module = "pmsi",
+    table = "diag",
+    identifiers = c("PATID", "EVTID", "ELTID"),
+    source_time_kind = "interval",
+    source_time_start = "DATENT",
+    source_time_end = "DATSORT",
+    query_date_keys = c("DATENT", "DATSORT"),
+    default_batch_key = "DATENT",
+    normalizer = "process_pmsi")
 
 load_pmsi_diag <- function(pmsi_path) {
     x <- readRDS(pmsi_path)
@@ -163,15 +259,29 @@ load_pmsi_diag <- function(pmsi_path) {
 # numeric result; `value_raw` keeps the original string for audit.
 BIOL_SOURCE <- source_spec("biol results",
     cols = list(
-        PATID     = col("PATID",                 "chr",  role = "subject"),
-        EVTID     = col("EVTID",                 "chr",  role = "event"),
-        ELTID     = col("ELTID",                 "chr",  role = "record"),
-        BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  role = "record_aux"),
-        DATEXAM   = col("DATEXAM",               "date", role = "date"),
-        analyte   = col("TYPEANA",               "chr",  role = "analyte"),
-        value_raw = col("NUMRES",                "chr",  role = "value_raw"),
-        value     = col("NUMRES",                "num",  role = "value")),
-    source_row_id = "biol")
+        PATID     = col("PATID",                 "chr",  roles = "subject_id",
+                        legacy_roles = "subject"),
+        EVTID     = col("EVTID",                 "chr",  roles = "event_id",
+                        legacy_roles = "event"),
+        ELTID     = col("ELTID",                 "chr",  roles = "source_item_id",
+                        legacy_roles = "record"),
+        BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  roles = "source_result_id",
+                        legacy_roles = "record_aux"),
+        DATEXAM   = col("DATEXAM",               "date", roles = "date"),
+        analyte   = col("TYPEANA",               "chr",  roles = "analyte"),
+        value_raw = col("NUMRES",                "chr",  roles = "value_str",
+                        legacy_roles = "value_raw"),
+        value     = col("NUMRES",                "num",  roles = "value_num",
+                        legacy_roles = "value")),
+    source_row_id = "biol",
+    module = "biol",
+    table = "results",
+    identifiers = c("PATID", "EVTID", "ELTID", "BIOL_ID"),
+    source_time_kind = "point",
+    source_time_start = "DATEXAM",
+    query_date_keys = "DATEXAM",
+    default_batch_key = "DATEXAM",
+    normalizer = "process_biol")
 
 load_biol_results <- function(bio_path) {
     normalize_source(readRDS(bio_path), BIOL_SOURCE)
