@@ -14,13 +14,20 @@
 # NULL and the fields output drives the multi-field assembly.
 # =============================================================================
 
+# Operative-report retrieval query (broad recall; the model + evidence do the
+# precision) -- the concept's Lucene selector (moved here from adapter_anastomoses.R).
+ANASTOMOSES_QUERY <- paste(
+    "anastom*", "gregoir*", "ureter*", "reimplant*",
+    "<veine iliaque>", "<artere iliaque>",
+    sep = " OR ")
+
 anastomoses_concept_spec <- function() {
     concept_spec(
         name = "transplant_anastomoses",
         channels = list(
             text_operative_report = text_channel(
                 source = "documents",
-                selector = lucene_query(ANASTOMOSES_QUERY),   # from adapter_anastomoses.R
+                selector = lucene_query(ANASTOMOSES_QUERY),
                 native_grain = "document_sentence",
                 required_roles = c("subject_id", "event_id", "date", "text",
                                    "source_item_id"),

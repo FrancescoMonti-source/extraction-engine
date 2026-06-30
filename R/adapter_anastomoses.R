@@ -7,13 +7,6 @@
 
 suppressWarnings(suppressMessages(library(dplyr)))
 
-# Free retrieval-query design (broad recall; the model + evidence do precision).
-ANASTOMOSES_QUERY <- paste(
-    "anastom*", "gregoir*", "ureter*", "reimplant*",
-    "<veine iliaque>", "<artere iliaque>",
-    sep = " OR "
-)
-
 # Recipient-only tasks; reads ONLY the three non-identifier columns.
 anastomoses_load_tasks <- function(chirurgie_path) {
     ch <- read_workbook_columns(
@@ -35,14 +28,4 @@ anastomoses_load_tasks <- function(chirurgie_path) {
         stop("anastomoses: task_id must be unique.", call. = FALSE)
     }
     tasks
-}
-
-# Eligibility = recipient's documents from the SAME surgical event (PATID+EVTID).
-anastomoses_eligibility <- function(tasks, docs_index) {
-    docs_index %>%
-        inner_join(
-            distinct(tasks, task_id, PATID, EVTID, anchor_date),
-            by = c("PATID", "EVTID"), relationship = "many-to-many"
-        ) %>%
-        transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
 }
