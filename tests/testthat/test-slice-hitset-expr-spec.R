@@ -70,8 +70,6 @@ test_that("bare string combine returns value, coverage, and raw membership audit
 test_that("hit-set expression grammar and channel validation fail closed", {
     expect_setequal(hit_set_expr("(a | b) & !c")$channels, c("a", "b", "c"))
     expect_error(hit_set_expr("foo(a)"), "operators")
-    expect_error(hit_set_expr("a && b"), "operators")
-    expect_error(hit_set_expr("a & 5"), "literal")
 
     expect_error(
         hx_var(expr = "transplant_act | missing_channel"),

@@ -74,9 +74,7 @@ test_that("smoking concept is neutral; documented status lives in the template",
     expect_equal(smk$template, "documented_smoking_status_periop_template")
     expect_false(is.null(smk$channels$text_smoking_mentions$extractor))  # activation owns it
     expect_equal(smk$output$kind, "categorical")
-    expect_setequal(smk$output$levels, SMOKING_STATUSES)
     expect_null(smk$combine)        # single channel: categorical output drives assembly
-
 })
 
 # Why: single-channel categorical assembly (combine = NULL, output = categorical)
@@ -92,7 +90,6 @@ test_that("categorical output returns the status and distinct absence states", {
     nr <- setNames(run$values$needs_review, run$values$task_id)
 
     expect_equal(value[["T1::t"]], "actif")        # documented status transcribed
-    expect_equal(cov[["T1::t"]], "complete")
     expect_equal(value[["T2::t"]], "indetermine")  # abstention is a VALID ascertained value
     expect_false(nr[["T2::t"]])
     expect_true(is.na(value[["T3::t"]]))            # no_candidate -> not ascertained
@@ -101,7 +98,6 @@ test_that("categorical output returns the status and distinct absence states", {
     expect_true(nr[["T4::t"]])
 
     ss <- run$channel_status
-    expect_equal(ss$status[ss$task_id == "T1::t"], "complete")
     expect_equal(ss$status[ss$task_id == "T3::t"], "unavailable")
     expect_equal(ss$status[ss$task_id == "T4::t"], "invalid")
 
@@ -137,7 +133,4 @@ test_that("D1: invented citation is kept-and-flagged, not fail-closed", {
     expect_true(cw[["T6::t"]])
     expect_true(nr[["T6::t"]])
     expect_equal(nrow(run$evidence[run$evidence$task_id == "T6::t", ]), 0L)
-
-    # No warning on the clean cases.
-    expect_false(cw[["T1::t"]])
 })

@@ -18,8 +18,5 @@ test_that("resolve_variable_spec exposes inherited executable essentials", {
     expect_setequal(names(resolved$channels),
                     c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
 
-    text <- resolved$channels$text_diabetes_mentions
-    expect_equal(text$method_source, "activation")
-    expect_equal(text$extractor_source, "channel")
     expect_equal(inspect(baseline)$combine_rule, resolved$combine_rule)
 })

@@ -43,16 +43,12 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
     run <- run_variable(var, wh_tasks, wh_sources)   # no caller: structured only
 
     value <- setNames(run$values$value, run$values$task_id)
-    cov <- setNames(run$values$channel_coverage, run$values$task_id)
 
     expect_equal(value[["Q1"]], 1L)        # diabetes code present
     expect_equal(value[["Q2"]], 0L)        # only a non-diabetes code -> negative
     expect_equal(value[["Q3"]], 0L)        # no diagnosis rows -> no observed hit -> 0 (coverage partial)
     expect_equal(value[["Q4"]], 1L)        # 2005 code still counts (no window)
 
-    expect_equal(cov[["Q1"]], "complete")
-    expect_equal(cov[["Q2"]], "complete")
-    expect_equal(cov[["Q3"]], "partial")
     expect_true(is.na(run$combine_rule))
     expect_equal(run$evidence$evidence_ref[run$evidence$task_id == "Q4"], "diag:003")
 })

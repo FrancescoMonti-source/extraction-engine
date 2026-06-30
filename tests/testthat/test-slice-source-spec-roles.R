@@ -1,7 +1,6 @@
 # Contract tests for the source-spec role vocabulary slice.
 # Why: source_spec() is the HDW boundary. It must expose the target role names and
-# redsan-shaped source mechanics without changing the normalized rows consumed by
-# current executors.
+# redsan-shaped source mechanics without exposing source-level grain.
 
 test_that("default source specs expose redsan-shaped metadata without source grain", {
     specs <- list(documents = DOCS_SOURCE, pmsi_diag = DIAG_SOURCE,
