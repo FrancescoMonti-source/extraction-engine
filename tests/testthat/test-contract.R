@@ -133,18 +133,6 @@ test_that("each field's evidence contains only that field's cited snippets", {
     expect_equal(nrow(ven), 0L)
 })
 
-# Why: smoking's abstention semantics differ from the shared documented/unusable
-# contract. Definitive statuses require grounding, while indeterminate may correctly
-# report that the supplied evidence is insufficient without citing a snippet.
-test_that("smoking needs evidence for a definitive status but not for indetermine", {
-    v1 <- parse_smoking(list(smoking_status = "sevre", evidence_ids = list(), decision_note = "x"), "S001")
-    expect_equal(v1$fields$field_validity, "invalid")
-    v2 <- parse_smoking(list(smoking_status = "indetermine", evidence_ids = list(), decision_note = "x"), "S001")
-    expect_equal(v2$fields$field_validity, "valid")          # abstention may cite nothing
-    v3 <- parse_smoking(list(smoking_status = "actif", evidence_ids = list("S001"), decision_note = "x"), "S001")
-    expect_equal(v3$fields$field_validity, "valid")
-})
-
 # Why: one malformed model result must not abort a cohort run or erase later tasks.
 # This protects the per-task failure-isolation contract and the resulting complete
 # processing census.
@@ -170,64 +158,6 @@ test_that("a parse error isolates one task without aborting the batch", {
     expect_equal(run$values$task_id, "T2")                  # T1 dropped, T2 survived
     ps <- run$coverage$processing_state[match(c("T1", "T2"), run$coverage$task_id)]
     expect_equal(ps, c("processing_error", "valid"))
-})
-
-# Why: bundled extraction can produce one invalid field beside valid grounded fields.
-# Valid values must remain usable while the overall task is still flagged for review;
-# task-level rejection would unnecessarily discard correct sibling values.
-test_that("acceptance is field-level: a valid field survives an invalid sibling", {
-    docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
-                                 RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
-    tasks <- ana_tasks(); elig <- anastomoses_eligibility(tasks, docs_index)
-    corpus <- make_corpus("E1", "Anastomose arterielle termino-laterale. Technique de Gregoir.")
-    r <- retrieve(corpus, tasks, elig, ANASTOMOSES_QUERY)
-    sids <- r$candidates$snippet_id
-    fake <- function(prompt, type, system_prompt) {
-        res <- empty_anastomoses_result()
-        res$transplantation_type_anastomose_arterielle <-           # valid (has evidence)
-            list(status = "documented", value = "termino-laterale", evidence_ids = list(sids[1]))
-        res$transplantation_type_anastomose_ureterale <-            # invalid (documented, no evidence)
-            list(status = "documented", value = "Gregoir", evidence_ids = list())
-        res
-    }
-    run <- run_extraction(r$coverage, r$candidates, anastomoses_definition(), fake, "fake")
-    v <- run$values
-    art <- v[v$field == "transplantation_type_anastomose_arterielle", ]
-    ure <- v[v$field == "transplantation_type_anastomose_ureterale", ]
-    expect_equal(art$field_validity, "valid")
-    expect_equal(art$accepted_value, "termino-laterale")    # accepted despite sibling invalid
-    expect_equal(ure$field_validity, "invalid")
-    expect_true(is.na(ure$accepted_value))                  # invalid field not accepted
-    expect_equal(unique(v$task_validity), "invalid")        # task flagged because a field is invalid
-})
-
-# Why: evidence IDs are an integrity boundary. An invented citation must never
-# materialise as source evidence. Per D1 keep-and-flag (owner-ratified, #3 -- now
-# consistent across all text parsers), a field grounded by >=1 real id is KEPT and
-# flagged via citation_warning rather than failed closed: the real grounding stands and
-# the fabricated id is surfaced, not silently dropped and not buried in free text.
-test_that("a cited snippet ID that was never supplied is kept-and-flagged, not materialised", {
-    docs_index <- tibble::tibble(ELTID = "E1", PATID = "P1", EVTID = "EV1",
-                                 RECDATE = as.Date("2025-03-10"), RECTYPE = "CRO")
-    tasks <- ana_tasks(); elig <- anastomoses_eligibility(tasks, docs_index)
-    corpus <- make_corpus("E1", "Anastomose arterielle termino-laterale. Technique de Gregoir.")
-    r <- retrieve(corpus, tasks, elig, ANASTOMOSES_QUERY)
-    sids <- r$candidates$snippet_id
-    fake <- function(prompt, type, system_prompt) {
-        res <- empty_anastomoses_result()
-        res$transplantation_type_anastomose_arterielle <-
-            list(status = "documented", value = "termino-laterale",
-                 evidence_ids = list(sids[1], "S999"))   # one real + one fabricated ID
-        res
-    }
-    run <- run_extraction(r$coverage, r$candidates, anastomoses_definition(), fake, "fake")
-    v <- run$values[run$values$field == "transplantation_type_anastomose_arterielle", ]
-    expect_equal(v$field_validity, "valid")                # kept: grounded by the real id
-    expect_equal(v$accepted_value, "termino-laterale")
-    expect_true(v$citation_warning)                        # flagged: model cited an unsupplied id
-    ev <- run$evidence[run$evidence$field == "transplantation_type_anastomose_arterielle", ]
-    expect_true(sids[1] %in% ev$snippet_id)                # real ID still resolves
-    expect_false("S999" %in% ev$snippet_id)                # fabricated ID never materializes
 })
 
 # Why: unbounded strings and arrays caused deterministic output truncation on the

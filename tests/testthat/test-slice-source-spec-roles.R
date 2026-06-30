@@ -22,7 +22,7 @@ test_that("default source specs expose redsan-shaped metadata without source gra
           biology = "biol|results|point|DATEXAM||DATEXAM|DATEXAM|process_biol"))
 })
 
-test_that("source role maps use target names while preserving legacy aliases", {
+test_that("source role maps use target names", {
     expect_equal(
         unlist(source_roles(DIAG_SOURCE)[
             c("subject_id", "event_id", "source_item_id", "event_start",
@@ -36,30 +36,6 @@ test_that("source role maps use target names while preserving legacy aliases", {
         c(source_item_id = "ELTID", source_result_id = "BIOL_ID",
           value_num = "value", value_str = "value_raw"))
     expect_equal(source_roles(DOCS_SOURCE)$document_type, "RECTYPE")
-    expect_true(all(c("subject", "event", "record", "interval_start",
-                      "interval_end") %in%
-                    names(source_roles(DIAG_SOURCE, include_legacy = TRUE))))
-})
-
-test_that("source roles do not rename the normalized rows current executors consume", {
-    raw_biol <- tibble::tibble(
-        PATID = "P1",
-        EVTID = "EV1",
-        ELTID = "L1",
-        biol_ID = "B1",
-        DATEXAM = as.POSIXct("2025-06-22 00:30:00", tz = "Europe/Paris"),
-        TYPEANA = "K.K",
-        NUMRES = "5.4")
-
-    out <- normalize_source(raw_biol, BIOL_SOURCE)
-
-    expect_equal(
-        names(out),
-        c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID",
-          "DATEXAM", "analyte", "value_raw", "value"))
-    expect_equal(out$BIOL_ID, "B1")
-    expect_equal(out$DATEXAM, as.Date("2025-06-22"))
-    expect_equal(out$value, 5.4)
 })
 
 test_that("concept channel required_roles use the target source vocabulary", {

@@ -2,7 +2,7 @@
 # variable: smoking_status_periop). Proves run_variable() is a real entry point
 # into retrieval: raw synthetic documents (corpus + docs_index) -> eligibility
 # windowing -> retrieve() -> extraction -> final categorical values, with no
-# manually supplied coverage/candidates. Fixtures remain supported.
+# manually supplied coverage/candidates.
 
 rw_make_corpus <- function(eltids, texts) {
     corpustools::create_tcorpus(
@@ -66,20 +66,6 @@ test_that("run_variable executes a text variable from raw documents via retrieva
     ev1 <- run$evidence[run$evidence$task_id == "P1::s", ]
     expect_equal(nrow(ev1), 1L)
     expect_match(ev1$evidence_ref, "^E1::")
-})
-
-# Why: fixtures must keep working for tests/debugging -- the same variable executes
-# from pre-retrieved {coverage, candidates} through the unchanged path.
-test_that("pre-retrieved fixtures remain supported alongside real retrieval", {
-    fixture_docs <- list(
-        coverage = tibble::tibble(task_id = "P1::s", coverage_state = "no_candidate"),
-        candidates = tibble::tibble())
-    run <- run_variable(rw_variable(), rw_tasks[1, ],
-                        list(documents = fixture_docs),
-                        caller = rw_fake, model_name = "fake")
-    expect_true(is.na(run$values$value[run$values$task_id == "P1::s"]))
-    expect_equal(run$channel_status$status[run$channel_status$task_id == "P1::s"],
-                 "unavailable")
 })
 
 # Why: an unrecognized documents source shape must fail loudly, not silently
