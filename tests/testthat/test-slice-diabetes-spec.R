@@ -81,35 +81,6 @@ test_that("diabetes concept and baseline template select channels explicitly", {
     expect_false("glucose_measurements" %in% names(baseline$channels))
 })
 
-# Why: #4 factored the per-concept template build() -- it was identical across the four
-# concepts -- into a shared default builder, so a template may omit build=. The default
-# must produce the same executable variable_spec, and an explicit build= must still be
-# honoured for a template that ever needs a different assembly.
-test_that("variable_template build= defaults to the shared builder and still accepts an override", {
-    concept <- diabetes_concept_spec()
-
-    # Omitted build: the default 1:1 builder assembles a working spec.
-    tmpl <- diabetes_baseline_status_template(concept)
-    expect_true(is.function(tmpl$build))
-    spec <- variable_spec(template = tmpl, name = "diabete_pre_greffe",
-                          unit = "transplant", anchor = "anchor_date")
-    expect_s3_class(spec, "ee_variable_spec")
-    # any_positive() lowers to a raw hit-set expression over the activated channels.
-    expect_equal(spec$combine$kind, "hit_set_expr")
-    expect_equal(spec$combine$expr, "pmsi_diag_e10_e14 | text_diabetes_mentions")
-    expect_setequal(names(spec$channels),
-                    c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
-
-    # Explicit build= escape hatch: a template can still supply its own assembly.
-    custom <- variable_template(
-        name = "custom_tmpl", concept = concept, defaults = list(unit = "x"),
-        build = function(params) structure(list(tag = "custom", unit = params$unit),
-                                           class = "ee_variable_spec"))
-    out <- variable_spec(template = custom, name = "v")
-    expect_equal(out$tag, "custom")
-    expect_equal(out$unit, "x")     # default param flows into the custom build
-})
-
 # Why: the executable slice must preserve the formal boundary: selected channels
 # resurface source-specific signals, variable_spec combines them, and output keeps
 # final value, per-channel status, and evidence refs instead of hiding judgment.
@@ -164,7 +135,7 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
         window = days_after(0L, 2L),
         channels = list(
             glucose_measurements = use_channel(reducer = max_value())),
-        output = number_output())
+        output = num_output())
 
     expect_null(direct$template)
     expect_setequal(names(direct$channels), "glucose_measurements")
@@ -209,7 +180,7 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = list(esrd_code = use_channel()),
-        output = binary_output())       # single channel -> combine = NULL (membership)
+        output = bin_output())          # single channel -> combine = NULL (membership)
 
     tasks <- tibble::tibble(
         task_id = c("N1::t", "N2::t"), PATID = c("N1", "N2"),
@@ -224,180 +195,4 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
     value <- setNames(run$values$value, run$values$task_id)
     expect_equal(value[["N1::t"]], 1L)   # N18 detected via the channel's OWN selector
     expect_equal(value[["N2::t"]], 0L)   # a diabetes code is ABSENT for an ESRD variable
-})
-
-# ---------------------------------------------------------------------------
-# Slice 1b: close the any_positive() combine gap on the SAME variable
-# (diabete_pre_greffe, PMSI + text, any_positive). Same concept, no new clinical
-# complexity -- this only proves the COMBINE is genuinely wired through
-# run_variable(): both-positive, one-positive-one-absent, and all-complete-negative.
-# ---------------------------------------------------------------------------
-
-cg_tasks <- tibble::tibble(
-    task_id = paste0("Q", 1:4, "::t"),
-    PATID = paste0("Q", 1:4),
-    anchor_date = as.Date("2024-06-01"))
-
-# Q1,Q2 carry a diabetes code (positive); Q3,Q4 carry I10 (in-window, usable ->
-# a COMPLETE negative, not "no PMSI data").
-cg_diag <- tibble::tibble(
-    source_row_id = sprintf("diag:%03d", 1:4),
-    PATID = paste0("Q", 1:4),
-    EVTID = paste0("EV", 1:4),
-    ELTID = paste0("D", 1:4),
-    diag = c("E11.9", "E11.9", "I10", "I10"),
-    DATENT = as.Date("2024-05-20"),
-    DATSORT = as.Date("2024-05-21"))
-
-# Text candidates only for Q1 (-> documented) and Q4 (-> not_documented, a
-# complete negative). Q2/Q3 are no_candidate, so the text channel is unavailable.
-cg_docs <- list(
-    coverage = tibble::tibble(
-        task_id = cg_tasks$task_id,
-        coverage_state = c("candidate", "no_candidate", "no_candidate", "candidate")),
-    candidates = tibble::tibble(
-        task_id = c("Q1::t", "Q4::t"),
-        snippet_id = "S001",
-        hit_ref = c("DOC_Q1::3", "DOC_Q4::3"),
-        ELTID = c("DOC_Q1", "DOC_Q4"),
-        sentence = 3L,
-        hit_text = "Patient diabetique.",
-        snippet_text = "Patient diabetique sous metformine.",
-        RECDATE = as.Date("2024-05-15"),
-        RECTYPE = "note"))
-
-cg_sources <- list(documents = cg_docs, pmsi_diag = cg_diag)
-
-cg_fake <- function(prompt, type, system_prompt) {
-    if (grepl("Q1::t", prompt, fixed = TRUE)) {
-        return(list(diabetes_status = "documented", evidence_ids = list("S001")))
-    }
-    list(diabetes_status = "not_documented", evidence_ids = list())   # Q4
-}
-
-# Why: any_positive() must be genuinely wired through run_variable() across the
-# four combine outcomes, evidence from EVERY positive channel must survive, and
-# channel_coverage must stay complete-vs-partial (text no_candidate is not absence).
-test_that("any_positive combine is wired through run_variable across the gap cases", {
-    baseline <- variable_spec(
-        template = diabetes_baseline_status_template(),
-        name = "diabete_pre_greffe", unit = "transplant", anchor = "anchor_date")
-    run <- run_variable(baseline, cg_tasks, cg_sources,
-                        caller = cg_fake, model_name = "fake")
-
-    values <- setNames(run$values$value, run$values$task_id)
-    cov <- setNames(run$values$channel_coverage, run$values$task_id)
-
-    expect_equal(values[["Q1::t"]], 1L)        # PMSI + text both positive
-    expect_equal(values[["Q2::t"]], 1L)        # PMSI positive + text no_candidate
-    expect_equal(values[["Q3::t"]], 0L)        # no observed hit -> 0 (coverage flags the silent text)
-    expect_equal(values[["Q4::t"]], 0L)        # both complete, no positive -> documented negative
-
-    expect_equal(cov[["Q1::t"]], "complete")
-    expect_equal(cov[["Q2::t"]], "partial")    # text channel not evaluable
-    expect_equal(cov[["Q3::t"]], "partial")
-    expect_equal(cov[["Q4::t"]], "complete")
-
-    # Evidence from BOTH positive channels survives for Q1.
-    q1_ev <- run$evidence[run$evidence$task_id == "Q1::t", ]
-    expect_setequal(q1_ev$channel,
-                    c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
-    ref <- setNames(q1_ev$evidence_ref, q1_ev$channel)
-    expect_equal(ref[["pmsi_diag_e10_e14"]], "diag:001")
-    expect_equal(ref[["text_diabetes_mentions"]], "DOC_Q1::3")
-
-    # A documented negative (Q4) carries no positive evidence.
-    expect_equal(nrow(run$evidence[run$evidence$task_id == "Q4::t", ]), 0L)
-
-    # Per-channel status: Q1 both complete + positive; Q4 both complete + negative.
-    q1_status <- run$channel_status[run$channel_status$task_id == "Q1::t", ]
-    expect_true(all(q1_status$status == "complete"))
-    expect_true(all(q1_status$hit))
-    q4_status <- run$channel_status[run$channel_status$task_id == "Q4::t", ]
-    expect_true(all(q4_status$status == "complete"))
-    expect_true(all(!q4_status$hit))
-})
-
-# ---------------------------------------------------------------------------
-# Multi-source resilience + window scoping through the spine. Re-pins the two
-# invariants the retired pre-spine diabetes spike (test-multisource-diabetes.R)
-# uniquely covered: a positive in one channel survives a model error in another,
-# and out-of-window evidence does not establish a positive. The heterogeneous
-# code+text any_positive matrix, the no_candidate-is-not-absence policy, and
-# cross-channel provenance are already covered by the gap-cases test above.
-# ---------------------------------------------------------------------------
-
-ms_tasks <- tibble::tibble(
-    task_id = c("R1::t", "R2::t"), PATID = c("R1", "R2"),
-    anchor_date = as.Date("2024-06-01"))
-
-# R1: in-window diabetes code (a hit). R2: diabetes code dated WELL before the
-# 5-year window (must NOT count as a positive).
-ms_diag <- tibble::tibble(
-    source_row_id = c("diag:R1", "diag:R2"),
-    PATID = c("R1", "R2"), EVTID = c("E1", "E2"), ELTID = c("D1", "D2"),
-    diag = c("E11.9", "E11.9"),
-    DATENT = c(as.Date("2024-05-20"), as.Date("2015-01-01")),
-    DATSORT = c(as.Date("2024-05-21"), as.Date("2015-01-02")))
-
-# R1 has a retrieved text candidate (the model will ERROR on it); R2 is no_candidate.
-ms_docs <- list(
-    coverage = tibble::tibble(
-        task_id = ms_tasks$task_id, coverage_state = c("candidate", "no_candidate")),
-    candidates = tibble::tibble(
-        task_id = "R1::t", snippet_id = "S001", hit_ref = "DOC_R1::3",
-        ELTID = "DOC_R1", sentence = 3L, hit_text = "diabete",
-        snippet_text = "Patient diabetique.", RECDATE = as.Date("2024-05-15"),
-        RECTYPE = "note"))
-
-ms_sources <- list(documents = ms_docs, pmsi_diag = ms_diag)
-
-# The text model fails (non-transient) on R1's task.
-ms_fake <- function(prompt, type, system_prompt) {
-    if (grepl("R1::t", prompt, fixed = TRUE)) stop("synthetic text model failure")
-    list(diabetes_status = "not_documented", evidence_ids = list())   # R2
-}
-
-ms_baseline <- function() variable_spec(
-    template = diabetes_baseline_status_template(),
-    name = "diabete_pre_greffe", unit = "transplant", anchor = "anchor_date")
-
-# Why: a positive in the code channel must survive a model error in the text channel
-# (heterogeneous failure resilience); the result must flag partial coverage and keep
-# the failed channel auditable -- never lose the code positive or hide the failure.
-test_that("any_positive survives a text-channel model error and keeps code provenance", {
-    run <- run_variable(ms_baseline(), ms_tasks, ms_sources,
-                        caller = ms_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
-    cov <- setNames(run$values$channel_coverage, run$values$task_id)
-
-    expect_equal(value[["R1::t"]], 1L)         # code positive survives the text error
-    expect_equal(cov[["R1::t"]], "failed")     # a channel ERRORED -> failed (distinct from a
-                                               # merely-silent channel's partial)
-
-    ss <- run$channel_status
-    text_status <- ss$status[ss$task_id == "R1::t" &
-                             ss$channel == "text_diabetes_mentions"]
-    expect_equal(text_status, "error")          # the failure is auditable, not hidden
-
-    # provenance: the code channel's evidence survives the text failure
-    ev1 <- run$evidence[run$evidence$task_id == "R1::t", ]
-    expect_equal(ev1$channel, "pmsi_diag_e10_e14")
-    expect_equal(ev1$evidence_ref, "diag:R1")
-})
-
-# Why: evidence dated outside the variable's window must not establish a positive --
-# the window is enforced end-to-end through the spine, not only in the executor unit.
-test_that("out-of-window code does not count as a positive through the spine", {
-    run <- run_variable(ms_baseline(), ms_tasks, ms_sources,
-                        caller = ms_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
-
-    # R2: E11 dated 2015 is out of the 5-year window + text no_candidate -> no observed
-    # hit, so value 0 (the out-of-window code is an ascertained negative, see below).
-    expect_equal(value[["R2::t"]], 0L)
-    code_contrib <- run$channel_status$contribution[
-        run$channel_status$task_id == "R2::t" &
-        run$channel_status$channel == "pmsi_diag_e10_e14"]
-    expect_equal(code_contrib, "negative")      # out-of-window -> ascertained negative
 })

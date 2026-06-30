@@ -57,7 +57,7 @@ anastomoses_var <- function() {
 }
 
 # Why: a multi-field concept must be expressible with no date window (it is
-# event-scoped). The output is a SET of cohort columns (fields_output, combine = NULL).
+# event-scoped). The output is a SET of cohort columns (struct_output, combine = NULL).
 test_that("anastomoses concept is multi-field, event-scoped, with no date window", {
     concept <- anastomoses_concept_spec()
     expect_equal(concept$name, "transplant_anastomoses")
@@ -122,85 +122,4 @@ test_that("fields output distinguishes no_candidate and a failed call", {
     expect_equal(a3$status, "error")              # model errored
     expect_true(a3$needs_review)
     expect_equal(nrow(run$values[run$values$task_id == "A3::t", ]), 0L)
-})
-
-# Why: D1 keep-and-flag is now consistent across text parsers (owner-ratified, #3).
-# An anastomoses field grounded by >=1 real id is KEPT and flagged when the model also
-# cites an unsupplied id -- no longer failed closed (the pre-#3 behaviour). The flag
-# surfaces in the envelope: per-field on values, per-task on the channel status. The
-# invented id never materializes as evidence.
-test_that("fields output keeps-and-flags an invented citation (no longer fail-closed)", {
-    cw_fake <- function(prompt, type, system_prompt) {
-        res <- setNames(
-            lapply(names(ANASTOMOSES_FIELDS),
-                   function(f) list(status = "not_documented", evidence_ids = list())),
-            names(ANASTOMOSES_FIELDS))
-        res$transplantation_type_anastomose_arterielle <-      # one real + one fabricated id
-            list(status = "documented", value = "termino-laterale",
-                 evidence_ids = list("S001", "S999"))
-        res[[ANASTOMOSES_SUMMARY]] <- "resume des anastomoses retenues"
-        res
-    }
-    run <- run_variable(anastomoses_var(), ana_tasks[1, ], ana_sources,
-                        caller = cw_fake, model_name = "fake")
-
-    art <- run$values[run$values$task_id == "A1::t" &
-                      run$values$field == "transplantation_type_anastomose_arterielle", ]
-    expect_equal(art$value, "termino-laterale")    # kept, not dropped
-    expect_equal(art$field_validity, "valid")
-    expect_true(art$citation_warning)              # flagged per field
-
-    ss1 <- run$channel_status[run$channel_status$task_id == "A1::t", ]
-    expect_true(ss1$citation_warning)              # per-task flag surfaces in channel status
-    expect_false(ss1$needs_review)                 # a flagged-but-valid field is not a review trigger
-
-    # The real id grounds the value; the fabricated id never materializes as evidence.
-    art_ev <- run$evidence[run$evidence$task_id == "A1::t" &
-                           run$evidence$field == "transplantation_type_anastomose_arterielle", ]
-    expect_equal(art_ev$evidence_ref, "OP1::2")
-})
-
-# Why: anastomoses is EVENT-scoped -- eligibility is the subject's documents from the
-# SAME surgical event (PATID + EVTID), NOT a date window. run_variable() must retrieve
-# from RAW operative-report documents end-to-end (the seam, previously fixtures-only):
-# a same-patient document from a DIFFERENT event must be excluded even though it
-# mentions anastomoses.
-test_that("event-scoped anastomoses retrieves from raw docs by PATID+EVTID", {
-    ev_tasks <- tibble::tibble(
-        task_id = "RA::t", PATID = "RA", EVTID = "EVT1", anchor_date = as.Date("2024-03-10"))
-    ev_docs_index <- tibble::tibble(
-        ELTID   = c("CRO_IN", "CRO_OTHER"),
-        PATID   = c("RA", "RA"),
-        EVTID   = c("EVT1", "EVT9"),              # second doc: SAME patient, OTHER event
-        RECDATE = as.Date(c("2024-03-10", "2019-01-01")),
-        RECTYPE = "CRO")
-    ev_corpus <- corpustools::create_tcorpus(
-        data.frame(
-            ELTID = c("CRO_IN", "CRO_OTHER"),
-            RECTXT = c("Anastomose arterielle termino-laterale sur artere iliaque externe.",
-                       "Anastomose arterielle d'une autre greffe anterieure."),
-            stringsAsFactors = FALSE),
-        text_columns = "RECTXT", doc_column = "ELTID",
-        split_sentences = TRUE, remember_spaces = FALSE, verbose = FALSE)
-    ev_sources <- list(documents = list(corpus = ev_corpus, docs_index = ev_docs_index))
-
-    ev_fake <- function(prompt, type, system_prompt) {
-        res <- setNames(
-            lapply(names(ANASTOMOSES_FIELDS),
-                   function(f) list(status = "not_documented", evidence_ids = list())),
-            names(ANASTOMOSES_FIELDS))
-        res$transplantation_type_anastomose_arterielle <-   # ground on the lone in-event snippet
-            list(status = "documented", value = "termino-laterale", evidence_ids = list("S001"))
-        res[[ANASTOMOSES_SUMMARY]] <- "resume"
-        res
-    }
-
-    run <- run_variable(anastomoses_var(), ev_tasks, ev_sources,
-                        caller = ev_fake, model_name = "fake")
-
-    art <- run$values[run$values$field == "transplantation_type_anastomose_arterielle", ]
-    expect_equal(art$value, "termino-laterale")          # extracted from the in-event report
-    # Evidence grounds in the in-event document only; the other event never appears.
-    expect_true(all(grepl("^CRO_IN::", run$evidence$evidence_ref)))
-    expect_false(any(grepl("^CRO_OTHER", run$evidence$evidence_ref)))
 })

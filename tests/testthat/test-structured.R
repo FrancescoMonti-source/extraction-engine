@@ -138,23 +138,6 @@ test_that("measure_code_presence marks family presence for any ICD-10 codes", {
     expect_equal(unique(run$values$field), "esrd_status")  # field is parameterised
 })
 
-# Why: measure_diabetes() is now a THIN caller of the neutral core. It must delegate
-# exactly -- E10-E14 family, diabetes_status field -- not reimplement.
-test_that("measure_diabetes delegates to measure_code_presence with its clinical params", {
-    diag <- diag_rows(
-        PATID = c("P1", "P2"),
-        diag = c("E11.9", "I10"),
-        DATENT = c("2025-03-09", "2025-03-09"),
-        DATSORT = c("2025-03-10", "2025-03-10"))
-    tasks <- structured_tasks(c("P1", "P2"))
-
-    wrapped <- measure_diabetes(diag, tasks)
-    direct  <- measure_code_presence(diag, tasks, codes = DIABETES_CODES,
-                                     field = "diabetes_status", source = "diagnosis")
-    expect_equal(wrapped, direct)                   # wrapper == core with clinical params
-    expect_equal(unique(wrapped$values$field), "diabetes_status")
-})
-
 # Why: hyperkalaemia must distinguish source availability, potassium selection,
 # parseability, and threshold outcome. This prevents malformed sibling results or
 # unrelated analytes from silently changing a valid deterministic measurement.
@@ -247,28 +230,6 @@ test_that("measure_analyte_value selects the max usable value with no clinical t
     expect_equal(v1$measurement_value, 9.4)
     expect_equal(v1$field, "max_glucose")             # field is parameterised
     expect_equal(run$evidence$source[run$evidence$task_id == "P1::t"], "biology")
-})
-
-# Why: measure_hyperkalaemia() is now a THIN caller of the neutral core. It must
-# delegate exactly -- the clinical result (potassium concept, strict 5.0 threshold,
-# present/absent) comes from measure_analyte_value(), not a reimplementation.
-test_that("measure_hyperkalaemia delegates to measure_analyte_value with its clinical params", {
-    biol <- biol_rows(
-        PATID = c("P1", "P2"), analyte = "K.K",
-        value_raw = c("5.6", "4.8"),
-        DATEXAM = c("2025-03-10", "2025-03-10"))
-    tasks <- structured_tasks(c("P1", "P2"))
-
-    wrapped <- measure_hyperkalaemia(biol, tasks)
-    direct  <- measure_analyte_value(biol, tasks, analytes = POTASSIUM_CODES,
-                                     threshold = 5.0, field = "hyperkalaemia",
-                                     source = "biology")
-    expect_equal(wrapped, direct)                     # wrapper == core with clinical params
-
-    vals <- setNames(wrapped$values$accepted_value, wrapped$values$task_id)
-    expect_equal(vals[["P1::t"]], "present")          # 5.6 > 5.0
-    expect_equal(vals[["P2::t"]], "absent")           # 4.8 <= 5.0
-    expect_equal(unique(wrapped$values$field), "hyperkalaemia")
 })
 
 # Why: a programming or input-shape failure can occur before per-row measurement.

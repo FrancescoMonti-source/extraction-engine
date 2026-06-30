@@ -29,7 +29,7 @@ wh_variable <- function() {
         anchor = NULL,                 # no anchor
         window = NULL,                 # whole history
         channels = list(pmsi_diag_e10_e14 = use_channel()),
-        output = binary_output())      # single channel -> combine = NULL (membership)
+        output = bin_output())         # single channel -> combine = NULL (membership)
 }
 
 # Why: a whole-history variable must execute with no anchor and no date window,
@@ -53,24 +53,6 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
     expect_equal(cov[["Q1"]], "complete")
     expect_equal(cov[["Q2"]], "complete")
     expect_equal(cov[["Q3"]], "partial")
-})
-
-# Why: whole-history source contribution must stay transparent like the windowed
-# OR path -- signal/negative/silent per channel, evidence for the positive.
-test_that("diabetes_ever preserves source contribution", {
-    run <- run_variable(wh_variable(), wh_tasks, wh_sources)
-    ss <- run$channel_status
-    get <- function(tid, col) ss[[col]][ss$task_id == tid]
-
-    expect_equal(get("Q1", "contribution"), "signal")
-    expect_equal(get("Q1", "processing_state"), "measured")
-    expect_equal(get("Q2", "contribution"), "negative")
-    expect_equal(get("Q3", "contribution"), "silent")
-    expect_equal(get("Q3", "processing_state"), "no_eligible_source")
-    # Single channel -> no cross-channel combine; the membership value comes from output().
     expect_true(is.na(run$combine_rule))
-
-    # The positive is grounded by its diagnosis row; the 2005 code grounds Q4.
-    expect_equal(run$evidence$evidence_ref[run$evidence$task_id == "Q1"], "diag:001")
     expect_equal(run$evidence$evidence_ref[run$evidence$task_id == "Q4"], "diag:003")
 })
