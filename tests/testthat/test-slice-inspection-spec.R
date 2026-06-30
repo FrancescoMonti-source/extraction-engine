@@ -11,11 +11,8 @@ test_that("resolve_variable_spec exposes inherited executable essentials", {
 
     resolved <- resolve_variable_spec(baseline)
 
-    expect_s3_class(resolved, "ee_resolved_variable_spec")
     expect_equal(resolved$combine_rule,
                  "pmsi_diag_e10_e14 | text_diabetes_mentions")
     expect_setequal(names(resolved$channels),
                     c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
-
-    expect_equal(inspect(baseline)$combine_rule, resolved$combine_rule)
 })

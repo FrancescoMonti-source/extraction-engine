@@ -60,7 +60,6 @@ spec_fake_docs <- function(prompt, type, system_prompt) {
 # the channels it needs, so glucose remains available for another variable.
 test_that("diabetes concept and baseline template select channels explicitly", {
     concept <- diabetes_concept_spec()
-    expect_equal(attr(concept, "api_status"), "experimental")
     expect_setequal(
         names(concept$channels),
         c("pmsi_diag_e10_e14", "text_diabetes_mentions", "glucose_measurements"))

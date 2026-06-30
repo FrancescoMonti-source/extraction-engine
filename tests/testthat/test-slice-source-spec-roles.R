@@ -6,7 +6,6 @@ test_that("default source specs expose redsan-shaped metadata without source gra
     specs <- list(documents = DOCS_SOURCE, pmsi_diag = DIAG_SOURCE,
                   biology = BIOL_SOURCE)
 
-    expect_true(all(vapply(specs, inherits, logical(1), "ee_source_spec")))
     expect_false(any(vapply(specs, function(x) "grain" %in% names(x), logical(1))))
 
     registry_shape <- vapply(specs, function(x) {

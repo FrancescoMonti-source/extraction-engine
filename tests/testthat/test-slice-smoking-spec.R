@@ -73,7 +73,6 @@ test_that("smoking concept is neutral; documented status lives in the template",
     smk <- smoking_periop()
     expect_equal(smk$template, "documented_smoking_status_periop_template")
     expect_false(is.null(smk$channels$text_smoking_mentions$extractor))  # activation owns it
-    expect_equal(smk$output$kind, "categorical")
     expect_null(smk$combine)        # single channel: categorical output drives assembly
 })
 

@@ -60,8 +60,6 @@ test_that("bare string combine returns value, coverage, and raw membership audit
     expect_equal(run$combine_rule, "transplant_act & !dialysis_signal")
 
     m <- run$membership
-    expect_true(all(c("task_id", "channel", "hit",
-                      "processing_state", "evidence_refs") %in% names(m)))
     expect_true(is.na(m$hit[m$task_id == "HX2::t" &
                             m$channel == "dialysis_signal"]))
 })

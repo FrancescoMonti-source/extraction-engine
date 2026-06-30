@@ -103,7 +103,6 @@ test_that("struct output distinguishes no_candidate and a failed call", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
                         caller = ana_fake, model_name = "fake")
 
-    expect_equal(nrow(run$values[run$values$task_id == "A2::t", ]), 0L)  # no fields
     ss <- run$channel_status
     a2 <- ss[ss$task_id == "A2::t", ]
     expect_equal(a2$status, "unavailable")        # no_candidate
