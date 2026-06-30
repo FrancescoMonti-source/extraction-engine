@@ -4842,3 +4842,54 @@ design note §envelope, `TECHNICAL_NOTES.md`, `R/concepts-dialysis.R`) also unch
 
 **Suite:** 395 tests, 0 warnings. **Files:** `scripts/run_variable_{diabetes,smoking}_real.R`,
 `tests/testthat/test-slice-diabetes-spec.R`, `HANDOFF.md`.
+
+## Test-suite pruning: the invariant-protection gate -- Claude (2026-06-30)
+
+Continues the `codex/test-contract-pruning` line (Codex commits `d359b8c..d5af401`).
+The owner set the gate explicitly: **keep a test only if deleting it would remove
+protection for a target invariant** (DESIGN §15 + the §12 coverage matrix). Default to
+delete. The owner also named the failure mode driving this: "you two tend to implement
+pointless tests and I tend to approve them without reading" -- the suite peaked near 400
+and ~300 have since been pruned -- so model sign-off is not a real filter.
+
+**Two whole files deleted** (neither entered through `run_variable()`, the target public
+entry point -- both drove "today's implementation route" helpers):
+
+- `test-contract.R` (8 tests). Behaviors covered upstream by executing slice tests:
+  per-task failure isolation -> anastomoses A3; no_candidate skips model -> smoking T3 /
+  anastomoses A2; field evidence isolation -> anastomoses #2. The remaining three were
+  judged out by the gate, not lifted: event-scope eligibility (researcher-owned scoping --
+  once EVTID is pinned via a CCAM act the "leak" can't arise; and the kept `all(==)`
+  assertion was vacuous on empty retrieval anyway); exact-snippet round-trip (representation
+  detail; evidence->source already covered by `evidence_ref` in diabetes/smoking/whole-
+  history); Paris-tz loader (cannot occur -- owner's HDW is always tz=Europe/Paris).
+- `test-slice-inspection-spec.R` (1 test). `inspect()` is `help()` for a spec; needs no
+  test. Its sibling `resolve_variable_spec()` is introspection too, and its substance
+  (resolved `combine_rule`, inherited channel names) is asserted through `run_variable()`
+  in hitset-expr (`run$combine_rule`) and diabetes (`selected_channels`).
+
+**Five redundant blocks deleted** -- each restated a property an executing test already
+protects: diabetes #1 (explicit channel selection -> proven by #2 `selected_channels` + #3
+activating glucose); smoking #1 (concept neutrality -> the text-channel echo of the
+concept-agnostic ESRD/N18 proof #4, behavior in #2); anastomoses #1 (struct/`window=NULL`
+-> #2 runs that exact spec; the `linkage` vector is declared-but-unexercised since the raw
+event-scope retrieval test is already gone); source-roles #1 (the `registry_shape` mega-
+string pins default-registry *config*, not an invariant; interval-vs-point time is exercised
+by the windowed code tests); source-roles #3 (canonical `required_roles` are transitively
+validated by every `run_variable()` call; the `expect_false(old_vocab)` is completed-
+migration residue).
+
+**Soft calls (deleted, flagged for objection):** smoking #1 and source-roles #3 assert
+real-ish properties with no runtime consequence. Reverting either is a one-line `git
+restore`.
+
+**Left standing (passes the gate, untouched):** smoking #2+#3 and anastomoses #2+#3 each run
+the same spec twice on identical inputs -- mergeable, but splitting gives cleaner failure
+messages, so kept. `test-structured`'s date assertions are now thin (tz always Paris) but
+its real job (loader provenance + no-filtering-on-load) stands.
+
+**Suite:** 13 `test_that` blocks across 8 files, 76 assertions, 0 failures, 0 warnings.
+Green-after-cut is the confirmation the deleted coverage was redundant. **Files:**
+`tests/testthat/test-contract.R` (del), `tests/testthat/test-slice-inspection-spec.R` (del),
+`tests/testthat/test-slice-{anastomoses,diabetes,smoking,source-spec-roles}-spec.R`,
+`HANDOFF.md`.

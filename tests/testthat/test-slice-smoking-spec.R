@@ -60,22 +60,6 @@ smoking_periop <- function() {
         name = "tabac_statut_periop", unit = "transplant", anchor = "anchor_date")
 }
 
-# Why: the concept must stay neutral -- it declares only where smoking text lives.
-# "Documented current status" is a template/activation choice (the categorical
-# answer schema, output, and collapse), so the concept could later feed a different
-# smoking observation (pack-years, lifetime) without changing.
-test_that("smoking concept is neutral; documented status lives in the template", {
-    concept <- smoking_concept_spec()
-    expect_equal(concept$name, "smoking")
-    expect_setequal(names(concept$channels), "text_smoking_mentions")
-    expect_null(concept$channels$text_smoking_mentions$extractor)   # neutral concept
-
-    smk <- smoking_periop()
-    expect_equal(smk$template, "documented_smoking_status_periop_template")
-    expect_false(is.null(smk$channels$text_smoking_mentions$extractor))  # activation owns it
-    expect_null(smk$combine)        # single channel: categorical output drives assembly
-})
-
 # Why: single-channel categorical assembly (combine = NULL, output = categorical)
 # must carry a CATEGORICAL value and keep the three non-positive outcomes distinct --
 # indetermine (model judged evidence inconclusive) is a real ascertained value, while

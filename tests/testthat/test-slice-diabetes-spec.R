@@ -55,29 +55,6 @@ spec_fake_docs <- function(prompt, type, system_prompt) {
     list(diabetes_status = "not_documented", evidence_ids = list())
 }
 
-# Why: concept_spec should declare possible diabetes signal channels without using
-# them by default. The baseline template is concept-specific and activates only
-# the channels it needs, so glucose remains available for another variable.
-test_that("diabetes concept and baseline template select channels explicitly", {
-    concept <- diabetes_concept_spec()
-    expect_setequal(
-        names(concept$channels),
-        c("pmsi_diag_e10_e14", "text_diabetes_mentions", "glucose_measurements"))
-
-    tmpl <- diabetes_baseline_status_template(concept)
-    baseline <- variable_spec(
-        template = tmpl,
-        name = "diabete_pre_greffe",
-        unit = "transplant",
-        anchor = "anchor_date")
-
-    expect_equal(baseline$template, "diabetes_baseline_status_template")
-    expect_setequal(
-        names(baseline$channels),
-        c("pmsi_diag_e10_e14", "text_diabetes_mentions"))
-    expect_false("glucose_measurements" %in% names(baseline$channels))
-})
-
 # Why: the executable slice must preserve the formal boundary: selected channels
 # resurface source-specific signals, variable_spec combines them, and output keeps
 # final value, per-channel status, and evidence refs instead of hiding judgment.

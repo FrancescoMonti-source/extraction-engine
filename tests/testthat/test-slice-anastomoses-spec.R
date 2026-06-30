@@ -56,19 +56,6 @@ anastomoses_var <- function() {
         name = "recipient_anastomoses", unit = "transplant", anchor = "anchor_date")
 }
 
-# Why: a multi-field concept must be expressible with no date window (it is
-# event-scoped). The output is a SET of cohort columns (struct_output, combine = NULL).
-test_that("anastomoses concept is multi-field, event-scoped, with no date window", {
-    concept <- anastomoses_concept_spec()
-    expect_setequal(concept$channels$text_operative_report$linkage,
-                    c("subject", "event"))
-
-    var <- anastomoses_var()
-    expect_null(var$window)                       # event scope, not a date window
-    expect_null(var$combine)                      # single channel: output drives assembly
-    expect_setequal(var$output$fields, names(ANASTOMOSES_FIELDS))
-})
-
 # Why: one task yields several fields, and acceptance is FIELD-LEVEL -- a valid
 # grounded field keeps its value even when a sibling field is invalid, while the
 # task is still flagged for review.
