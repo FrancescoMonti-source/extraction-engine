@@ -268,19 +268,19 @@ measure_code_presence <- function(source_table, tasks, codes,
 # every candidate row (the inputs to the reduction), so provenance shows the whole
 # window the number was reduced from, whatever the reducer.
 #
-# biol: normalized result rows
+# source_table: normalized result rows
 #   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
 # tasks: task_id, PATID, anchor_date.
-measure_analyte_values <- function(biol, tasks, analytes,
+measure_analyte_values <- function(source_table, tasks, analytes,
                                    from_days = -7L, to_days = 7L,
                                    field = "analyte_value", source = "biology") {
     .validate_structured_inputs(
-        tasks, biol,
+        tasks, source_table,
         c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID", "DATEXAM",
           "analyte", "value", "value_raw"),
         "biology rows")
 
-    biol <- biol %>% transmute(
+    biol <- source_table %>% transmute(
         source_row_id = as.character(source_row_id),
         PATID = as.character(PATID),
         EVTID = as.character(EVTID),
