@@ -58,6 +58,6 @@ dialysis_status_template <- function(concept = dialysis_concept_spec()) {
             channels = c("pmsi_diag_dialysis", "text_dialysis_mentions"),
             text_method = llm_after_lucene(),
             text_extractor = dialysis_text_definition(),
-            output = binary_output(),
+            output = bin_output(),
             combine = any_positive()))   # build = .default_template_build(concept)
 }

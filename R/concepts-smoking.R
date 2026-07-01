@@ -52,6 +52,6 @@ documented_smoking_status_periop_template <- function(concept = smoking_concept_
             channels = c("text_smoking_mentions"),
             text_method = llm_after_lucene(),
             text_extractor = smoking_definition(),   # categorical answer schema (types/smoking.R)
-            output = categorical_output(SMOKING_STATUSES)))  # single channel -> combine = NULL;
+            output = cat_output(SMOKING_STATUSES)))  # single channel -> combine = NULL;
                                                             # output drives assembly
 }

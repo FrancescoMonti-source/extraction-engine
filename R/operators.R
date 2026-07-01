@@ -34,8 +34,8 @@ days_after <- function(from_days = 0L, to_days) {
 # channel has no hit-algebra, so it carries combine = NULL and its value is shaped
 # by output() (documented status, multi-field, numeric, or membership). There is no
 # documented_status()/collect_fields() combiner: those were single-channel OUTPUT
-# assembly mislabelled as combines, now reached via output = categorical_output()/
-# fields_output() with combine = NULL (see run_variable()'s output dispatch).
+# assembly mislabelled as combines, now reached via output = cat_output()/
+# struct_output() with combine = NULL (see run_variable()'s output dispatch).
 #
 # any_positive() is sugar: at variable_spec() build it LOWERS to the raw hit-set
 # expression "a | b | ..." over the activated channels (>=2). It is not a distinct
@@ -108,9 +108,9 @@ llm_after_lucene <- function(top_n = NULL) {
 }
 
 # --- output (cohort column) types ---------------------------------------------
-# Target constructor names are short (`bin_output()`, `num_output()`, etc.). The
-# older names remain as migration aliases so existing specs keep running while the
-# target vocabulary becomes executable.
+# Constructor names are short: bin_output() / num_output() / cat_output() /
+# struct_output(). Each is a thin tagged record; the internal $kind the runner
+# dispatches on (binary/number/categorical/fields) is unchanged.
 bin_output <- function() {
     .experimental_spec(list(kind = "binary"), "ee_output_type")
 }
@@ -131,20 +131,4 @@ cat_output <- function(levels) {
 struct_output <- function(fields) {
     .experimental_spec(list(kind = "fields", fields = as.character(fields)),
                        "ee_output_type")
-}
-
-binary_output <- function() {
-    bin_output()
-}
-
-number_output <- function() {
-    num_output()
-}
-
-categorical_output <- function(levels) {
-    cat_output(levels)
-}
-
-fields_output <- function(fields) {
-    struct_output(fields)
 }

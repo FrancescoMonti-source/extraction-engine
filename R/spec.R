@@ -66,7 +66,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         }
         if (!is.null(output) && !identical(output$kind, "binary")) {
             stop("A hit-set expression only produces a 0/1 membership value; output ",
-                 "must be binary_output() (or omitted), not '", output$kind, "'.",
+                 "must be bin_output() (or omitted), not '", output$kind, "'.",
                  call. = FALSE)
         }
         return(combine)
