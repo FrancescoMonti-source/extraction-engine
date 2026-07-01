@@ -5211,3 +5211,72 @@ the true generic gap; if it had run green untouched, the row would have been alr
 
 **Files:** `R/run_variable.R`, `tests/testthat/test-slice-whole-history-spec.R`, `MIGRATION.md`,
 `HANDOFF.md`.
+
+---
+
+## 2026-07-02 -- Alignment audit: working model had drifted from DESIGN.md (owner asked to check)
+
+A long design conversation (grain/level naming, per-channel "what counts as a hit" predicate,
+`index_event` derived anchor, channel-override at the variable_spec). Before capturing it as
+"decisions," audited against DESIGN.md -- and found MOST of it is ALREADY the ratified contract; I had
+drifted by reasoning from the CODE (where these are dead/unwired) instead of DESIGN, and told the
+owner "unit is dead" when DESIGN says the opposite. Owner was right to be surprised. No engine code
+written; this entry + memories are the deliverable.
+
+**Already specified in DESIGN, code lags (the gap is wiring, not design):**
+- **unit IS the grain** -- §7 "Grain is the `unit`", first-class, takes the group-by
+  (`unit = "PATID"` / `transplant_unit()`). Code: `unit` set-but-not-read, grain implicit in the
+  tasks frame.
+- **local selector/field override at activation** -- §14.3 (the owner's exact type-2 example) +
+  "any field in `use_channel()` replaces the inherited field; a supplied selector replaces it
+  locally, does not mutate the concept." Code: selector read from `channel_def`, not the activation.
+- **lab hit-predicate** -- §8: unthresholded lab = presence hit; `analyte_value("GLU.GLU", gt = 11)`
+  = threshold hit. A target, not banned -- only the dead impl was removed (memory
+  `hdw-standardized-no-validity-checks` corrected accordingly).
+- **event-derived anchor** -- `anchor = transplant_date()` / `surgery_date()` already derive a date
+  from an event.
+- **event/stay-grain structured executors** -- §7 (~line 570) explicitly names this as THE current
+  migration gap (text resolves event scope; code/lab don't). = the "Event/stay grain" MIGRATION row.
+- **grain-agnostic combine over mixed channels** -- §7 `combine = "text_diabet & glucose"` means
+  different things at patient vs stay grain -- essentially the diabetes AND example, already in the doc.
+
+**Genuinely new (not generic in DESIGN):** `index_event` -- a GENERIC derived anchor (find the event
+matching a code selector, anchor at its date-role), generalizing the domain constructors
+`transplant_date()`/`surgery_date()`. Single-match for now (multi-match -> `candidate_selection`).
+Prerequisite is a redsan change (denormalize the stay envelope onto `$diag`/`$actes`), then
+`ACTE_SOURCE` declares `event_start`/`event_end`. Details + date-typing caveats in memory
+`index-event-derived-anchor`.
+
+**Naming (decided after the audit):** output-grain axis renamed `unit`->`output_one_row_per` (frees
+`unit` for the measurement unit) -- DESIGN's "Grain is the `unit`" made explicit; rationale is the
+fill-and-tweak boilerplate-R-snippet authoring model (memory `variable-spec-boilerplate-explicit-names`).
+Channel attachment (`linkage`) named `level` (ratified 2026-07-02).
+
+**Takeaway (memory `design-is-source-of-truth-code-lags`):** read DESIGN before proposing engine
+"design"; the gap is usually the code lagging the contract.
+
+**Files:** `HANDOFF.md`; memories `design-is-source-of-truth-code-lags`, `index-event-derived-anchor`,
+`hdw-standardized-no-validity-checks`, `MEMORY.md`.
+
+---
+
+## 2026-07-02 -- Reduce/combine composition + deferred `where` filter axis; naming ratified
+
+Clarified (grounded in DESIGN §8 validity matrix) that `reduce` and `combine` NEVER co-occur in one
+variable: `combine` produces 0/1 (bin) only; a `num`/`str`/`cat`/`struct` output needs
+`combine = NULL`. So "mean Hb for the text&lab-anemia cohort" is TWO independent columns -- a
+`bin`+combine cohort and a `num`+reducer value -- composed by a DOWNSTREAM row-filter
+(`value[cohort == 1]`), NOT a spec sequence/dependency (that fear was a misread; the columns are
+independent). Corrected my own earlier framing: "combine-gated numeric" is NOT a missing capability;
+DESIGN deliberately excludes it (cohort selection out of scope, §~955). The lab side of the cohort
+still needs the §8 lab hit-predicate (`analyte_value(gt/lt ...)` → hit), which IS the real unwired gap.
+
+Owner WANTS the one-spec form eventually -- `num_output(mean Hb) where (text_anemia & lab_anemia)`, a
+`where`/filter axis -- but is HOLDING it (two-column pattern works; add when it hurts). Recorded as a
+deferred design axis: memory `where-filter-dimension-deferred`.
+
+Naming ratified: **`output_one_row_per`** (output grain, frees `unit` for measurement unit) +
+**`level`** (per-channel attachment, was DESIGN's `linkage`).
+
+**Files:** `HANDOFF.md`; memories `where-filter-dimension-deferred`, `variable-spec-boilerplate-explicit-names`,
+`design-is-source-of-truth-code-lags`, `MEMORY.md`.
