@@ -100,10 +100,12 @@ hit_set_difference <- function(include, exclude = character()) {
 }
 
 # --- text extraction methods --------------------------------------------------
-# top_n is carried for provenance; the slice's text source is pre-retrieved, so it
-# is not yet consumed by run_extraction (a retrieval-ordering seam is future work).
-llm_after_lucene <- function(top_n = NULL) {
-    .experimental_spec(list(kind = "llm_after_lucene", top_n = top_n),
+# No candidate-selection knob: the slice's text source is pre-retrieved, so
+# run_extraction applies no arrange/limit rule. When retrieval runs in-engine, add it
+# as candidates = llm_candidate_selection(arrange, limit) INSIDE the method (see
+# MIGRATION.md) -- an unread knob is not carried in the meantime.
+llm_after_lucene <- function() {
+    .experimental_spec(list(kind = "llm_after_lucene"),
                        "ee_extraction_method")
 }
 
