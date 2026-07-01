@@ -63,12 +63,14 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
 # Real retrieval from raw documents (corpus + docs_index). Eligibility is resolved
 # by the channel's LINKAGE, so the spine stays concept-agnostic:
-#   - event linkage   -> the subject's documents from the SAME event (PATID + EVTID),
-#                        no date window (e.g. an operative report for one surgery);
-#   - subject linkage -> the subject's documents inside the variable's date window.
+#   - event linkage           -> the subject's documents from the SAME event (PATID +
+#                                EVTID), no date window (e.g. an operative report);
+#   - subject linkage + window -> the subject's documents inside the variable's window;
+#   - subject linkage, no window -> the subject's ENTIRE document record (whole
+#                                history / "ever"), no date filter -- the text mirror of
+#                                the whole-history structured code path.
 # Then the existing retrieve() runs the channel's Lucene query and assembles
-# candidates + coverage. (Whole-history text -- subject linkage, no window -- is not
-# wired here yet; supply fixtures for that, a later parallel eligibility case.)
+# candidates + coverage.
 .retrieve_text_channel <- function(channel_def, variable, tasks, src) {
     linkage <- channel_def$linkage
     if (!is.null(linkage) && "event" %in% linkage) {
@@ -83,7 +85,22 @@ suppressWarnings(suppressMessages(library(dplyr)))
         return(retrieve(src$corpus, tasks, eligibility,
                         query = channel_def$selector$query))
     }
-    if (is.null(variable$window) || !inherits(variable$window, "ee_window")) {
+    # Whole-history subject text: no window -> the subject's entire record, no date
+    # filter. Whole-history tasks carry no anchor_date, so none is joined (it rides
+    # through retrieve() as an NA days_from_anchor ranking column, meaningless here).
+    if (is.null(variable$window)) {
+        keys <- if ("anchor_date" %in% names(tasks)) {
+            distinct(tasks, task_id, PATID, anchor_date)
+        } else {
+            distinct(tasks, task_id, PATID) %>% mutate(anchor_date = as.Date(NA))
+        }
+        eligibility <- src$docs_index %>%
+            inner_join(keys, by = "PATID", relationship = "many-to-many") %>%
+            transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
+        return(retrieve(src$corpus, tasks, eligibility,
+                        query = channel_def$selector$query))
+    }
+    if (!inherits(variable$window, "ee_window")) {
         stop("Real retrieval needs a date window (subject linkage) or an event ",
              "linkage; supply pre-retrieved fixtures otherwise.", call. = FALSE)
     }

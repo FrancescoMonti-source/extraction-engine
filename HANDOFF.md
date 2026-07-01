@@ -5172,3 +5172,35 @@ mapping the parser doesn't already bake in. No consumer today, so not built.
 **No test churn:** doc-only reconciliation of the MIGRATION row; execution paths untouched.
 
 **Files:** `MIGRATION.md`, `HANDOFF.md`.
+
+---
+
+## 2026-07-01 -- Whole-history text: generic no-window subject eligibility (validated by a disposable variable_spec)
+
+Owner named a consumer (whole-history depression) to unblock the "Whole-history text" row. Key
+correction mid-slice (owner): do NOT build a depression concept -- "whole-history depression" is
+JUST a `variable_spec` a study author writes; the engine only needs the GENERIC capability. And the
+validating variable_spec is a **disposable test probe**, not shipped machinery. Suite green at **75**
+(68 -> 75, +7 assertions; no regressions).
+
+**Generic engine change (the only real gap):** `.retrieve_text_channel` handled event-linkage and
+subject+window, but *errored* on subject-linkage with no window. Added a whole-history branch: no
+window -> scope the subject's ENTIRE document record (join `docs_index` by `PATID`, no `RECDATE`
+filter), the text mirror of the whole-history code path. Whole-history tasks carry no `anchor_date`,
+so none is joined (it rides through `retrieve()` as an NA `days_from_anchor` ranking column,
+meaningless here). Nothing concept-specific.
+
+**Validation = a disposable variable_spec run through the public surface:** the whole-history slice
+test ([test-slice-whole-history-spec.R]) now also poses a whole-history TEXT demand as a variable_spec
+(`window = NULL` over the EXISTING diabetes text channel) + a corpus fixture + fake caller, and runs
+it via `run_variable()`. This mirrors the existing whole-history *structured* `wh_variable()` probe.
+Asserts the distinguishing invariant: a 2005 note still counts (no date filter), a subject with no
+documents is `partial` (not-ascertained, open-world), and the positive is grounded in the real
+retrieved sentence. The variable_spec is test-local -- no concept/template added to `R/`.
+
+**Discipline reaffirmed:** validate an engine capability by writing the throwaway variable_spec a
+user would write (TDD from the public surface), NOT by shipping a concept. The variable_spec reveals
+the true generic gap; if it had run green untouched, the row would have been already-satisfied.
+
+**Files:** `R/run_variable.R`, `tests/testthat/test-slice-whole-history-spec.R`, `MIGRATION.md`,
+`HANDOFF.md`.
