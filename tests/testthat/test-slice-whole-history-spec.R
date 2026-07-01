@@ -51,80 +51,50 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
 })
 
 # ---------------------------------------------------------------------------
-# Whole-history TEXT: the SAME unanchored axis over a TEXT channel. This guards the
-# distinct invariant that no-window subject text eligibility scopes the subject's
-# ENTIRE document record (the text mirror of diabetes_ever): a matching document of
-# ANY age is retrieved, because whole history applies no date filter.
-#
-# The variable below is a DISPOSABLE PROBE, not shipped machinery: "whole-history
-# text" is JUST a variable_spec with window = NULL over a text channel. The engine
-# gains a generic capability; nothing concept-specific is added. An existing concept
-# is reused only to pose the demand through the public run_variable() surface.
+# Whole-history TEXT eligibility invariant (the ONE thing unique to the no-window
+# branch of .retrieve_text_channel): no-window subject text scopes the subject's
+# ENTIRE record, so a document any date window would EXCLUDE (here a 2005 note) is
+# still retrieved and extracted. Recent-mention->present, evidence grounding, and
+# open-world "no document -> partial" are already guarded by
+# test-slice-retrieval-wiring.R and the structured whole-history test above, so they
+# are NOT re-asserted here. The variable is a disposable probe (window = NULL over an
+# existing text channel), not shipped machinery.
 
-wht_tasks <- tibble::tibble(
-    task_id = c("Q1", "Q3", "Q4"),
-    PATID   = c("Q1", "Q3", "Q4"))          # no anchor_date -- whole history
+wht_tasks <- tibble::tibble(task_id = "Q4", PATID = "Q4")   # no anchor_date
 
-# Q1: recent diabetes note. Q4: a 2005 note -- OLD, but no window, so it still counts.
-# Q3: no documents at all (open-world "not ascertained", not an absence).
+# A single OLD note (2005): any window would drop it; whole history keeps it.
 wht_docs_index <- tibble::tibble(
-    ELTID   = c("D1", "D4"),
-    PATID   = c("Q1", "Q4"),
-    EVTID   = c("V1", "V4"),
-    RECDATE = as.Date(c("2024-02-01", "2005-06-01")),
-    RECTYPE = "note")
+    ELTID = "D4", PATID = "Q4", EVTID = "V4",
+    RECDATE = as.Date("2005-06-01"), RECTYPE = "note")
 wht_corpus <- corpustools::create_tcorpus(
-    data.frame(
-        ELTID  = c("D1", "D4"),
-        RECTXT = c("Patient diabetique connu, suivi regulier.",
-                   "Diabete de type 2 ancien documente en 2005."),
-        stringsAsFactors = FALSE),
+    data.frame(ELTID = "D4",
+               RECTXT = "Diabete de type 2 ancien documente en 2005.",
+               stringsAsFactors = FALSE),
     text_columns = "RECTXT", doc_column = "ELTID",
     split_sentences = TRUE, remember_spaces = FALSE, verbose = FALSE)
-
 wht_sources <- list(documents = list(corpus = wht_corpus, docs_index = wht_docs_index))
 
-# Fake caller (no real model): any retrieved diabetes snippet -> documented.
 wht_fake <- function(prompt, type, system_prompt) {
-    if (grepl("diabet", prompt, ignore.case = TRUE)) {
-        list(diabetes_status = "documented", evidence_ids = list("S001"))
-    } else {
-        list(diabetes_status = "not_documented", evidence_ids = list())
-    }
+    list(diabetes_status = "documented", evidence_ids = list("S001"))
 }
 
 wht_variable <- function() {
     variable_spec(
         name = "diabetes_mention_ever",
         concept = diabetes_concept_spec(),
-        unit = "patient",
-        anchor = NULL,                 # no anchor
-        window = NULL,                 # whole history
+        unit = "patient", anchor = NULL, window = NULL,   # whole history
         channels = list(text_diabetes_mentions =
                             use_channel(method = llm_after_lucene())),
-        output = bin_output())         # single channel -> membership
+        output = bin_output())                            # single channel -> membership
 }
 
-# Why: a whole-history TEXT variable must execute with no anchor and no window,
-# retrieving from the subject's ENTIRE document record. A matching note of any age
-# -> present; a subject with no documents -> not ascertained (partial), not absent.
-test_that("whole-history text scopes the subject's entire document record (no window)", {
-    var <- wht_variable()
-    expect_null(var$window)
-    expect_null(var$anchor)
-
-    run <- run_variable(var, wht_tasks, wht_sources,
+# Why: if the no-window branch is broken or reverted, run_variable() either errors
+# (the old stop) or applies a window that drops the 2005 note -> value 0. value == 1
+# is reachable only when the whole record is in scope. (value == 1 also implies real
+# grounding: binary presence is invalid without a resolved evidence id.)
+test_that("no-window subject text retrieves a document any window would exclude", {
+    run <- run_variable(wht_variable(), wht_tasks, wht_sources,
                         caller = wht_fake, model_name = "fake")
-
     value <- setNames(run$values$value, run$values$task_id)
-    coverage <- setNames(run$values$channel_coverage, run$values$task_id)
-
-    expect_equal(value[["Q1"]], 1L)              # recent mention -> present
-    expect_equal(value[["Q4"]], 1L)              # 2005 mention still counts (no window)
-    expect_equal(coverage[["Q3"]], "partial")    # no document -> not ascertained
-
-    # Q4's positive is grounded by a real retrieved sentence from the 2005 note.
-    ev4 <- run$evidence[run$evidence$task_id == "Q4", ]
-    expect_equal(nrow(ev4), 1L)
-    expect_match(ev4$evidence_ref, "^D4::")
+    expect_equal(value[["Q4"]], 1L)
 })

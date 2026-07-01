@@ -5177,11 +5177,12 @@ mapping the parser doesn't already bake in. No consumer today, so not built.
 
 ## 2026-07-01 -- Whole-history text: generic no-window subject eligibility (validated by a disposable variable_spec)
 
-Owner named a consumer (whole-history depression) to unblock the "Whole-history text" row. Key
-correction mid-slice (owner): do NOT build a depression concept -- "whole-history depression" is
-JUST a `variable_spec` a study author writes; the engine only needs the GENERIC capability. And the
-validating variable_spec is a **disposable test probe**, not shipped machinery. Suite green at **75**
-(68 -> 75, +7 assertions; no regressions).
+Owner named a consumer (whole-history depression) to unblock the "Whole-history text" row. Two
+corrections mid-slice (owner): (1) do NOT build a depression concept -- "whole-history depression"
+is JUST a `variable_spec` a study author writes; the engine only needs the GENERIC capability, and
+the validating variable_spec is a **disposable test probe**, not shipped machinery. (2) Apply the
+prune-tests filter to the probe: the first draft added 7 assertions; only ONE survives the filter
+(see below). Suite green at **69** (68 -> 69, +1 assertion; no regressions).
 
 **Generic engine change (the only real gap):** `.retrieve_text_channel` handled event-linkage and
 subject+window, but *errored* on subject-linkage with no window. Added a whole-history branch: no
@@ -5191,12 +5192,18 @@ so none is joined (it rides through `retrieve()` as an NA `days_from_anchor` ran
 meaningless here). Nothing concept-specific.
 
 **Validation = a disposable variable_spec run through the public surface:** the whole-history slice
-test ([test-slice-whole-history-spec.R]) now also poses a whole-history TEXT demand as a variable_spec
+test ([test-slice-whole-history-spec.R]) poses a whole-history TEXT demand as a variable_spec
 (`window = NULL` over the EXISTING diabetes text channel) + a corpus fixture + fake caller, and runs
 it via `run_variable()`. This mirrors the existing whole-history *structured* `wh_variable()` probe.
-Asserts the distinguishing invariant: a 2005 note still counts (no date filter), a subject with no
-documents is `partial` (not-ascertained, open-world), and the positive is grounded in the real
-retrieved sentence. The variable_spec is test-local -- no concept/template added to `R/`.
+The variable_spec is test-local -- no concept/template added to `R/`.
+
+**Pruned to the one distinguishing invariant:** the single assertion is `value[["Q4"]] == 1L` for a
+subject whose ONLY note is from 2005 -- reachable only when the whole record is in scope (a broken or
+reverted no-window branch errors or applies a window that drops the note -> value 0; `value == 1`
+also implies real grounding, since binary presence is invalid without a resolved evidence id). The
+first draft also asserted recent-mention->present, no-document->`partial`, and evidence-ref grounding;
+all three duplicate invariants already guarded by `test-slice-retrieval-wiring.R` and the structured
+whole-history test above, so they were cut per [[prune-tests-to-target-invariants]].
 
 **Discipline reaffirmed:** validate an engine capability by writing the throwaway variable_spec a
 user would write (TDD from the public surface), NOT by shipping a concept. The variable_spec reveals
