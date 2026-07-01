@@ -4943,3 +4943,52 @@ tripwire, to be added only once a concrete produced-dataset provenance object is
 (not a current gap). The §12 coverage matrix is a one-time design-freezing discipline at
 lock, not a standing per-shape test requirement -- so the declined thresholded-lab test is
 not a hole.
+
+## Executor overhaul + CCAM act_channel + prototype purge -- Claude (2026-07-01)
+
+Big session on the `channel-shape` branch (11 commits, green throughout, ending at 68 tests).
+Two threads: a scaffolding purge, then the source-roles/channel-shape build.
+
+**Framing established (memory `product-is-the-engine-not-concepts`):** this is NOT a clinical
+study. The product is the generic concept-agnostic engine (DESIGN §1). Everything
+concept-specific -- `R/concepts-*`, `R/adapter_*`, `R/types/*`, `scripts/*_real.R`,
+exploration scripts -- is removable scaffolding, kept only while it validates the engine.
+
+**Purged (~2,100 lines):** the pre-`run_variable` prototype run path -- `scripts/run_structured.R`
++ the `measure_diabetes`/`measure_hyperkalaemia` clinical wrappers + `concepts-hyperkalaemia.R`
++ the `run_structured_measurement`/`.structured_execution_error`/`build_structured_review_view`
+helpers; `scripts/run_synthesis.R` (text-side twin, bypassed run_variable) + its orphaned
+`build_review_view`; 7 concluded round/phase exploration scripts. Folded each concept's Lucene
+query into its concept file and deleted `adapter_smoking.R` (kept `adapter_anastomoses.R` for
+its still-used `load_tasks`; deleted its orphaned `_eligibility`). `scripts/` is now just the
+3 `run_variable_*_real.R` validation runs + `check_grammar_enforcement.R`. `run_variable_*_real`
+are the real-model-on-real-data validation harness (they ARE the validation story; the unit
+suite is only tripwires) -- kept while validating, will collapse to one generic driver later.
+
+**Executor overhaul (structured.R 575 -> 402):** internalized channel `produces`; collapsed the
+whole-history code executor into a window-optional `measure_code_presence`; then made it
+source-agnostic and added the CCAM/act path (owner: "ccam channel is a must have, I filter on
+$CODEACTE"):
+- Matching is now **exact (a code set) or regex (per-pattern)**, replacing prefix-only
+  `code_in_family`. Codes normalized (dots/spaces stripped). `icd10()` takes a regex (DESIGN's
+  `icd10("^E1[0-4]")`) or `match="exact"`; new `ccam()` defaults exact. Concept selectors
+  migrated (diabetes `icd10("^E1[0-4]")`, dialysis `match="exact"`).
+- **Dropped `.usable_icd10_code` + the usable/invalid/field_validity/n_usable apparatus for
+  codes** -- HDW codes are standardized by redsan, so usability checks are cruft (the LLM
+  accept-only-valid pattern leaking onto deterministic channels; memory
+  `hdw-standardized-no-validity-checks`). It was also the ICD-10 coupling blocking CCAM.
+- **Role-aware:** `data.R` gains `ACTE_SOURCE` (pmsi$actes: CODEACTE=code, point DATEACTE) and
+  `EE_SOURCES` (channel-source-name -> spec registry). `.code_source_binding()` resolves the
+  code column + point/interval time from the source's roles; unregistered sources fall back to
+  the pmsi$diag shape. `pmsi$diag` output byte-compatible; `code`/`act` share one dispatch arm.
+- Params renamed: `source_table`, `code_col`/`start_col`/`end_col`. New floor-worthy test
+  `test-slice-act-channel-spec.R` (CCAM exact match over synthetic pmsi$actes, point window).
+
+**Open follow-ups (none blocking):** (1) lab usability -- `measure_analyte_value`'s
+`usable = !is.na(value)`/`invalid` is the same cruft (numeric in NUMRES, qualitative in STRRES
+which BIOL_SOURCE doesn't read); mirror the code cleanup. (2) output-constructor aliases --
+concepts still use legacy `binary_output`/`categorical_output`/`fields_output`; migrate to
+`bin_output`/`cat_output`/`struct_output` then delete the aliases (+ `llm_after_lucene(top_n)`
+-> `candidate_selection`). (3) rename `measure_analyte_value`'s first param for parity.
+The `channel-shape` branch now carries the whole overhaul -- worth merging as one unit before
+the next thread.
