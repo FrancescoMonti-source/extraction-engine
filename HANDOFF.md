@@ -5087,3 +5087,47 @@ decision_state/role"), so the floor test proves the demotion without edits. `mea
 semantics unchanged.
 
 **Files:** `R/hitset.R`, `R/operators.R`, `R/run_variable.R`, `MIGRATION.md`, `HANDOFF.md`.
+
+---
+
+## 2026-07-01 -- Source-roles: prune dead legacy_roles + reconcile the row (lab binding deferred)
+
+Investigated the MIGRATION.md "Source registry and roles" row (owner thought it was already
+done; it was *mostly* done). Findings, then a scoped cut. Suite green at **68**.
+
+**State found (most of the row had already landed):** `source_spec()` carries the canonical role
+map (`subject_id`/`event_id`/`source_item_id`/`code`/`analyte`/`value_num`/`value_str`/`date`/
+`event_start`/`event_end`/`document_type`/`source_result_id`); `EE_SOURCES` registers docs/diag/
+actes/biology; and the **code/act executor is fully role-driven** -- `.code_source_binding()`
+([run_variable.R]) resolves the code column + point/interval time from the source's roles, which
+is exactly why `pmsi$diag` (code col `diag`) and `pmsi$actes` (code col `CODEACTE`) share one
+`measure_code_presence()` executor.
+
+**The `legacy_roles` apparatus was fully dead** and was removed (owner picked "prune + reconcile
+only"): nothing called `source_roles(..., include_legacy = TRUE)`, so the migration-era alias
+labels (subject/event/record/interval_start/... ) had zero consumers. Deleted the `legacy_roles`
+param on `col()`, the `legacy_roles` field on the col struct + on `source_spec`, the
+`include_legacy` branch in `.source_role_map()` and `source_roles()`, and all `legacy_roles = ...`
+declarations across DOCS/DIAG/BIOL/ACTE sources. `col()`/`source_roles()` are now single-purpose.
+Migration to the target vocab is complete, so the inspectable back-compat labels earned nothing.
+
+**Deferred, with the reason recorded in the row (`defer-infra-until-consumer`):**
+- `.lab_source_binding()` -- the lab executor `measure_analyte_values()` still names biology
+  columns directly (`DATEXAM`/`analyte`/`value`/`value_raw`/`BIOL_ID`). The code path is
+  role-driven because it *had* to be (two coded sources, different code columns); biology has a
+  **single source**, so there is no second consumer forcing role-resolution. Add the binding
+  when a second biology source appears. NOT built speculatively.
+- `redsan::edsan_sources()` seeding -- specs are hand-declared; wire when a real multi-warehouse
+  consumer exists.
+
+**Design note:** output frames deliberately keep physical/runner column names. "Executors consume
+roles" means the executor resolves physical names *from* the spec's roles (as the code path does),
+NOT that normalized frames get renamed to role names. The other declared-but-unread source_spec
+metadata (`module`/`table`/`identifiers`/`query_date_keys`/`default_batch_key`/`normalizer`) was
+KEPT -- DESIGN §4 enumerates it as legitimate redsan-shaped source metadata, unlike the
+migration-only `legacy_roles`.
+
+**No test churn:** `test-slice-source-spec-roles.R` already asserted the role→column map with
+target names only (no legacy path), so it proves the map still resolves after the prune.
+
+**Files:** `R/data.R`, `MIGRATION.md`, `HANDOFF.md`.

@@ -71,22 +71,18 @@ read_workbook_columns <- function(path, columns) {
 # --- declared source layer ---------------------------------------------------
 # `col()` declares one output column: which raw column it comes from (`from`, a
 # fallback vector is allowed), how to normalize it (`kind`), and which canonical
-# engine role(s) it plays. `legacy_roles` keeps migration-era labels inspectable
-# while concepts and source specs move to the target vocabulary.
+# engine role(s) it plays.
 col <- function(from, kind = c("chr", "num", "date"), role = NULL,
-                roles = NULL, legacy_roles = character()) {
+                roles = NULL) {
     if (is.null(roles)) roles <- role
     roles <- as.character(roles %||% character())
-    legacy_roles <- as.character(legacy_roles %||% character())
     roles <- roles[!is.na(roles) & nzchar(roles)]
-    legacy_roles <- legacy_roles[!is.na(legacy_roles) & nzchar(legacy_roles)]
     structure(
         list(
             from = from,
             kind = match.arg(kind),
             role = if (length(roles)) roles[[1]] else NA_character_,
-            roles = roles,
-            legacy_roles = legacy_roles),
+            roles = roles),
         class = c("ee_source_col", "list"),
         api_status = "experimental")
 }
@@ -111,7 +107,6 @@ source_spec <- function(name, cols, source_row_id = NULL, unique_cols = NULL,
             normalizer = .nullable_chr(normalizer),
             cols = cols,
             roles = .source_role_map(cols),
-            legacy_roles = .source_role_map(cols, include_legacy = TRUE),
             source_row_id = source_row_id,
             unique_cols = unique_cols),
         class = c("ee_source_spec", "list"),
@@ -135,25 +130,21 @@ source_row_ids <- function(source, n) {
     x
 }
 
-.source_role_map <- function(cols, include_legacy = FALSE) {
+.source_role_map <- function(cols) {
     out <- list()
     for (nm in names(cols)) {
-        roles <- cols[[nm]]$roles
-        if (isTRUE(include_legacy)) {
-            roles <- unique(c(roles, cols[[nm]]$legacy_roles))
-        }
-        for (role in roles) {
+        for (role in cols[[nm]]$roles) {
             out[[role]] <- unique(c(out[[role]], nm))
         }
     }
     out
 }
 
-source_roles <- function(spec, include_legacy = FALSE) {
+source_roles <- function(spec) {
     if (!inherits(spec, "ee_source_spec")) {
         stop("source_roles() requires a source_spec().", call. = FALSE)
     }
-    if (isTRUE(include_legacy)) spec$legacy_roles else spec$roles
+    spec$roles
 }
 
 .source_pick <- function(raw, candidates) {
@@ -202,15 +193,11 @@ normalize_source <- function(raw, spec) {
 # the corpus (RECTXT), not the index.
 DOCS_SOURCE <- source_spec("docs index",
     cols = list(
-        ELTID   = col("ELTID",   "chr",  roles = "source_item_id",
-                      legacy_roles = "record"),
-        PATID   = col("PATID",   "chr",  roles = "subject_id",
-                      legacy_roles = "subject"),
-        EVTID   = col("EVTID",   "chr",  roles = "event_id",
-                      legacy_roles = "event"),
+        ELTID   = col("ELTID",   "chr",  roles = "source_item_id"),
+        PATID   = col("PATID",   "chr",  roles = "subject_id"),
+        EVTID   = col("EVTID",   "chr",  roles = "event_id"),
         RECDATE = col("RECDATE", "date", roles = "date"),
-        RECTYPE = col("RECTYPE", "chr",  roles = "document_type",
-                      legacy_roles = "type")),
+        RECTYPE = col("RECTYPE", "chr",  roles = "document_type")),
     unique_cols = "ELTID",
     module = "doceds",
     table = "documents",
@@ -227,17 +214,12 @@ load_docs_index <- function(docs_path) {
 # pmsi$diag: one row per ICD-10 diagnosis, attached to the parent stay interval.
 DIAG_SOURCE <- source_spec("pmsi diag",
     cols = list(
-        PATID   = col("PATID",   "chr",  roles = "subject_id",
-                      legacy_roles = "subject"),
-        EVTID   = col("EVTID",   "chr",  roles = "event_id",
-                      legacy_roles = "event"),
-        ELTID   = col("ELTID",   "chr",  roles = "source_item_id",
-                      legacy_roles = "record"),
+        PATID   = col("PATID",   "chr",  roles = "subject_id"),
+        EVTID   = col("EVTID",   "chr",  roles = "event_id"),
+        ELTID   = col("ELTID",   "chr",  roles = "source_item_id"),
         diag    = col("diag",    "chr",  roles = "code"),
-        DATENT  = col("DATENT",  "date", roles = "event_start",
-                      legacy_roles = "interval_start"),
-        DATSORT = col("DATSORT", "date", roles = "event_end",
-                      legacy_roles = "interval_end")),
+        DATENT  = col("DATENT",  "date", roles = "event_start"),
+        DATSORT = col("DATSORT", "date", roles = "event_end")),
     source_row_id = "pmsi_diag",
     module = "pmsi",
     table = "diag",
@@ -259,20 +241,14 @@ load_pmsi_diag <- function(pmsi_path) {
 # numeric result; `value_raw` keeps the original string for audit.
 BIOL_SOURCE <- source_spec("biol results",
     cols = list(
-        PATID     = col("PATID",                 "chr",  roles = "subject_id",
-                        legacy_roles = "subject"),
-        EVTID     = col("EVTID",                 "chr",  roles = "event_id",
-                        legacy_roles = "event"),
-        ELTID     = col("ELTID",                 "chr",  roles = "source_item_id",
-                        legacy_roles = "record"),
-        BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  roles = "source_result_id",
-                        legacy_roles = "record_aux"),
+        PATID     = col("PATID",                 "chr",  roles = "subject_id"),
+        EVTID     = col("EVTID",                 "chr",  roles = "event_id"),
+        ELTID     = col("ELTID",                 "chr",  roles = "source_item_id"),
+        BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  roles = "source_result_id"),
         DATEXAM   = col("DATEXAM",               "date", roles = "date"),
         analyte   = col("TYPEANA",               "chr",  roles = "analyte"),
-        value_raw = col("NUMRES",                "chr",  roles = "value_str",
-                        legacy_roles = "value_raw"),
-        value     = col("NUMRES",                "num",  roles = "value_num",
-                        legacy_roles = "value")),
+        value_raw = col("NUMRES",                "chr",  roles = "value_str"),
+        value     = col("NUMRES",                "num",  roles = "value_num")),
     source_row_id = "biol",
     module = "biol",
     table = "results",
@@ -292,12 +268,9 @@ load_biol_results <- function(bio_path) {
 # add a loader when a real run needs one (tests/run_variable take the frame directly).
 ACTE_SOURCE <- source_spec("pmsi actes",
     cols = list(
-        PATID    = col("PATID",    "chr",  roles = "subject_id",
-                       legacy_roles = "subject"),
-        EVTID    = col("EVTID",    "chr",  roles = "event_id",
-                       legacy_roles = "event"),
-        ELTID    = col("ELTID",    "chr",  roles = "source_item_id",
-                       legacy_roles = "record"),
+        PATID    = col("PATID",    "chr",  roles = "subject_id"),
+        EVTID    = col("EVTID",    "chr",  roles = "event_id"),
+        ELTID    = col("ELTID",    "chr",  roles = "source_item_id"),
         CODEACTE = col("CODEACTE", "chr",  roles = "code"),
         DATEACTE = col("DATEACTE", "date", roles = "date")),
     source_row_id = "pmsi_actes",
