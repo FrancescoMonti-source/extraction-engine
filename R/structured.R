@@ -2,11 +2,11 @@
 # structured.R — deterministic (non-LLM) extraction path for STRUCTURED sources
 # -----------------------------------------------------------------------------
 # Mirrors the text path's four views but: evidence = selected source rows,
-# measurement = a deterministic rule, NO corpus and NO model. NEUTRAL execution
-# machinery only (measure_code_presence[_ever] / measure_analyte_value); the
-# clinically-named callers (measure_diabetes, measure_hyperkalaemia) live beside
-# their concepts. Coverage census is kept over ALL tasks, same discipline as the
-# text path. Provenance points at the exact source rows.
+# measurement = a deterministic rule, NO corpus and NO model. NEUTRAL, concept-
+# agnostic executors only: measure_code_presence (code/act membership) and
+# measure_analyte_value (max value in a window); the run_variable() dispatch binds
+# each to its source. Coverage census is kept over ALL tasks, same discipline as
+# the text path. Provenance points at the exact source rows.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
@@ -254,20 +254,20 @@ measure_code_presence <- function(source_table, tasks, codes,
         derivation = derivation)
 }
 
-# --- generic analyte value: max usable value in a point-window over biol --------
-# Neutral lab/analyte executor: the generic core behind the clinically-named callers
-# (hyperkalaemia, diabetes glucose) and the run_variable() lab branch. Per task it
-# selects the MAXIMUM usable value of the declared analyte concept inside a point-
-# window around the anchor, with full coverage / values / evidence / observation /
-# derivation artifacts. `field` and `source` name the output rows. `threshold` is
-# OPTIONAL: NA (a pure numeric max_value variable) applies NO present/absent
-# interpretation and lets measurement_value carry the result; a supplied threshold
-# (e.g. hyperkalaemia 5.0) marks value > threshold as "present".
+# --- generic analyte value: max value in a point-window over biol ---------------
+# Neutral lab/analyte executor behind the run_variable() lab branch. Per task it
+# selects the MAXIMUM value of the declared analyte concept inside a point-window
+# around the anchor, with coverage / values / evidence / observation / derivation
+# artifacts. `field` and `source` name the output rows. No usability/validity check
+# and no threshold: HDW numeric results live in a numeric field (NUMRES; qualitative
+# results are STRRES, which BIOL_SOURCE does not read), so a target row always has a
+# value -- there is nothing to route to review. The result is carried by
+# measurement_value; present/absent thresholding is not this executor's job.
 #
 # biol: normalized result rows
 #   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
 # tasks: task_id, PATID, anchor_date.
-measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
+measure_analyte_value <- function(biol, tasks, analytes,
                                   from_days = -7L, to_days = 7L,
                                   field = "analyte_value", source = "biology") {
     .validate_structured_inputs(
@@ -306,23 +306,17 @@ measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes,
-            usable = is_target & !is.na(value),
-            invalid = is_target & !usable,
-            above_threshold = usable & !is.na(threshold) & value > threshold,
             scope_reason = "point time inside the task window",
-            observation_reason = case_when(
-                !is_target ~ "analyte outside the declared concept",
-                !usable ~ "value is unparseable and excluded",
-                is.na(threshold) ~ "usable value (no threshold applied)",
-                above_threshold ~ "usable value above the strict threshold",
-                TRUE ~ "usable value at or below the strict threshold"),
+            observation_reason = if_else(is_target,
+                "analyte matches the declared concept",
+                "analyte outside the declared concept"),
             # Non-target rows establish source/scope coverage; their unrelated
             # result values are unnecessary in persisted structured artifacts.
             value_raw = if_else(is_target, value_raw, NA_character_),
             value = if_else(is_target, value, NA_real_))
 
     selected <- observations %>%
-        filter(usable) %>%
+        filter(is_target) %>%
         arrange(task_id, desc(value), DATEXAM, source_row_id) %>%
         group_by(task_id) %>%
         slice_head(n = 1L) %>%
@@ -344,9 +338,6 @@ measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
         summarise(
             n_scope_rows = n(),
             n_candidate_rows = sum(is_target),
-            n_usable = sum(usable),
-            n_unusable = sum(invalid),
-            n_above = sum(above_threshold),
             .groups = "drop")
 
     coverage <- tkeys %>%
@@ -356,40 +347,22 @@ measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
                   by = "task_id") %>%
         mutate(
             across(
-                c(n_source_rows, n_scope_rows, n_candidate_rows, n_usable,
-                  n_unusable, n_above),
+                c(n_source_rows, n_scope_rows, n_candidate_rows),
                 ~ coalesce(as.integer(.x), 0L)),
             processing_state = case_when(
                 n_source_rows == 0L ~ "no_eligible_source",
                 n_candidate_rows == 0L ~ "no_candidate",
-                n_usable == 0L ~ "invalid",
                 TRUE ~ "measured"))
 
     values <- coverage %>%
-        filter(processing_state %in% c("measured", "invalid")) %>%
-        mutate(normalized_value = case_when(
-            processing_state == "invalid" ~ NA_character_,
-            is.na(threshold) ~ NA_character_,
-            measurement_value > threshold ~ "present",
-            TRUE ~ "absent")) %>%
+        filter(processing_state == "measured") %>%
         transmute(
             task_id,
             field = field,
-            normalized_value,
-            accepted_value = if_else(
-                processing_state == "measured", normalized_value, NA_character_),
             measurement_value,
             measurement_time,
-            field_validity = if_else(
-                processing_state == "measured", "valid", "invalid"),
-            validity_reason = if_else(
-                processing_state == "measured", "",
-                "analyte rows are in scope but none has a parseable value"),
             n_scope_rows,
-            n_candidate_rows,
-            n_usable,
-            n_unusable,
-            n_above)
+            n_candidate_rows)
 
     evidence <- observations %>%
         filter(selected_evidence) %>%
@@ -402,14 +375,12 @@ measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
                 DATEXAM),
             PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
 
-    threshold_clause <- if (is.na(threshold)) "" else
-        sprintf("value > %s; ", format(threshold, trim = TRUE))
     rule <- sprintf(
         paste0(
-            "same_subject; point_window[%d,%+d]; analyte=%s; %s",
-            "maximum usable value selected (ties: DATEXAM, source_row_id); unit ignored"),
+            "same_subject; point_window[%d,%+d]; analyte=%s; ",
+            "maximum value selected (ties: DATEXAM, source_row_id); unit ignored"),
         as.integer(from_days), as.integer(to_days),
-        paste(analytes, collapse = ","), threshold_clause)
+        paste(analytes, collapse = ","))
     derivation <- coverage %>%
         transmute(
             task_id,
@@ -418,9 +389,6 @@ measure_analyte_value <- function(biol, tasks, analytes, threshold = NA_real_,
             n_source_rows,
             n_scope_rows,
             n_candidate_rows,
-            n_usable,
-            n_unusable,
-            n_above,
             status = processing_state,
             error = NA_character_)
 
