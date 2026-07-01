@@ -33,7 +33,7 @@ dialysis_concept_spec <- function() {
         channels = list(
             pmsi_diag_dialysis = code_channel(
                 source = "pmsi_diag",
-                selector = icd10(c("Z992", "N186")),
+                selector = icd10(c("Z992", "N186"), match = "exact"),
                 native_grain = "diagnosis_row",
                 required_roles = c("subject_id", "event_id", "event_start",
                                    "event_end", "code", "source_item_id"),

@@ -97,6 +97,25 @@ suppressWarnings(suppressMessages(library(dplyr)))
     retrieve(src$corpus, tasks, eligibility, query = channel_def$selector$query)
 }
 
+# Resolve a coded channel's PHYSICAL columns from its source's roles (registry):
+# which column is the code, and the time field(s) -- a point source uses one date
+# for both ends. Falls back to the pmsi$diag shape for an unregistered source.
+.code_source_binding <- function(source) {
+    spec <- if (source %in% names(EE_SOURCES)) EE_SOURCES[[source]] else NULL
+    if (is.null(spec)) {
+        return(list(code_col = "diag", start_col = "DATENT", end_col = "DATSORT"))
+    }
+    code_col <- source_roles(spec)$code %||% "diag"
+    if (identical(spec$source_time_kind, "point")) {
+        d <- spec$source_time_start
+        list(code_col = code_col, start_col = d, end_col = d)
+    } else {
+        list(code_col = code_col,
+             start_col = spec$source_time_start %||% "DATENT",
+             end_col   = spec$source_time_end %||% "DATSORT")
+    }
+}
+
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
                                   caller, model_name) {
@@ -110,17 +129,19 @@ suppressWarnings(suppressMessages(library(dplyr)))
     # text eligibility (date-window OR event membership) is resolved upstream, so a
     # text-only variable (e.g. event-scoped anastomoses) need not declare a window.
     switch(channel_def$type,
-        code = {
-            codes <- .selector_codes(channel_def$selector, "prefixes")
-            if (is.null(variable$window)) {     # whole-history ("ever"): no anchor/window
-                measure_code_presence_ever(sources[[source]], tasks, codes = codes,
-                                           field = variable$name, source = source)
-            } else {
-                w <- .window_days(variable)     # neutral code executor (no clinical name)
-                measure_code_presence(sources[[source]], tasks, codes = codes,
-                                      from_days = w[["from_days"]], to_days = w[["to_days"]],
-                                      field = variable$name, source = source)
-            }
+        code = ,
+        act = {
+            # code (CIM-10 over pmsi$diag) and act (CCAM over pmsi$actes) share the
+            # neutral membership executor; only the source binding differs.
+            sel <- channel_def$selector
+            bind <- .code_source_binding(source)
+            w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
+                 else .window_days(variable)
+            measure_code_presence(
+                sources[[source]], tasks, codes = sel$codes, match = sel$match,
+                from_days = w[["from_days"]], to_days = w[["to_days"]],
+                code_col = bind$code_col, start_col = bind$start_col,
+                end_col = bind$end_col, field = variable$name, source = source)
         },
         lab = {
             w <- .window_days(variable)     # neutral analyte executor (no clinical name)

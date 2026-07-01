@@ -32,7 +32,7 @@ diabetes_concept_spec <- function() {
         channels = list(
             pmsi_diag_e10_e14 = code_channel(
                 source = "pmsi_diag",
-                selector = icd10(c("E10", "E11", "E12", "E13", "E14")),
+                selector = icd10("^E1[0-4]"),
                 native_grain = "diagnosis_row",
                 required_roles = c("subject_id", "event_id", "event_start",
                                    "event_end", "code", "source_item_id"),

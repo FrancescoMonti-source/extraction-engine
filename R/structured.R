@@ -96,51 +96,66 @@ suppressWarnings(suppressMessages(library(dplyr)))
     !is.na(start) & start <= hi & end_eff >= lo
 }
 
-# ICD-10 family membership by code prefix (E11 matches E11, E11.9, E119, ...).
-code_in_family <- function(codes, families) {
-    norm <- function(x) toupper(gsub("[^A-Za-z0-9]", "", as.character(x)))
-    fam <- norm(families)
-    fam <- fam[!is.na(fam) & nzchar(fam)]
-    vapply(norm(codes), function(code) {
-        !is.na(code) && nzchar(code) && length(fam) && any(startsWith(code, fam))
-    }, logical(1))
+# Code matching for a coded channel. The code is NORMALIZED (dots/spaces stripped,
+# upper-cased) before matching, so "E11.9" and "E119" are the same code.
+#   - exact: normalized code is in the declared set
+#   - regex: normalized code matches ANY declared pattern (e.g. "^E1[0-4]")
+# No usability/shape check -- HDW codes are standardized (CIM-10 in pmsi$diag, CCAM
+# in pmsi$actes), so there is no "malformed code" to route to review.
+.code_matches <- function(codes, patterns, match = c("regex", "exact")) {
+    match <- match.arg(match)
+    ncodes <- toupper(gsub("[^A-Za-z0-9]", "", as.character(codes)))
+    ok <- !is.na(ncodes) & nzchar(ncodes)
+    if (identical(match, "exact")) {
+        target <- toupper(gsub("[^A-Za-z0-9]", "", as.character(patterns)))
+        target <- target[!is.na(target) & nzchar(target)]
+        ok & ncodes %in% target
+    } else {
+        pats <- as.character(patterns)
+        pats <- pats[!is.na(pats) & nzchar(pats)]
+        hit <- rep(FALSE, length(ncodes))
+        for (p in pats) hit <- hit | grepl(p, ncodes, perl = TRUE)
+        ok & hit
+    }
 }
 
-.usable_icd10_code <- function(codes) {
-    normalized <- toupper(gsub("[^A-Za-z0-9]", "", as.character(codes)))
-    !is.na(normalized) & grepl("^[A-Z][0-9]{2}[A-Z0-9]{0,4}$", normalized)
-}
-
-# --- generic code presence: ICD-10 family over pmsi$diag (interval time) -------
-# Neutral structured executor: the generic core behind the clinically-named caller
-# (measure_diabetes) and the run_variable() code branch. Per task it marks "present"
-# if any usable ICD-10 code in the declared family overlaps the anchor window, "absent"
-# if in-scope rows exist but none matches, with full coverage / values / evidence /
-# observation / derivation artifacts. `field`/`source` name the output rows; `codes`
-# is the declared family (required -- no concept baked in).
+# --- generic code presence: a code family over a coded source ------------------
+# Neutral structured executor behind the run_variable() code (CIM-10 / pmsi$diag)
+# AND act (CCAM / pmsi$actes) branches. Per task it marks "present" if any code in
+# the declared family is in scope for the task, "absent" if in-scope rows exist but
+# none matches, with coverage / values / evidence / observation / derivation
+# artifacts. The caller resolves the PHYSICAL columns from the source's roles:
+# `code_col` holds the code; `start_col`/`end_col` the time interval (a point-dated
+# source passes one date for both). `match` is exact (a code set) or regex. `field` /
+# `source` name the output rows; `codes` is the declared family (no concept baked in).
 #
-# diag: pmsi$diag rows
-#   source_row_id, PATID, EVTID, ELTID, diag, DATENT, DATSORT.
-# tasks: task_id, PATID, anchor_date.
-measure_code_presence <- function(diag, tasks, codes,
+# source_table: a coded source frame
+#   source_row_id, PATID, EVTID, ELTID, <code_col>, <start_col>, <end_col>.
+# tasks: task_id, PATID, anchor_date (anchor only when windowed).
+measure_code_presence <- function(source_table, tasks, codes,
+                                  match = c("regex", "exact"),
                                   from_days = NULL, to_days = NULL,
-                                  missing_datsort = c("use_start", "exclude"),
+                                  code_col = "diag", start_col = "DATENT",
+                                  end_col = "DATSORT",
+                                  missing_end = c("use_start", "exclude"),
                                   field = "code_presence", source = "diagnosis") {
-    missing_datsort <- match.arg(missing_datsort)
+    match <- match.arg(match)
+    missing_end <- match.arg(missing_end)
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> whole history
     .validate_structured_inputs(
-        tasks, diag,
-        c("source_row_id", "PATID", "EVTID", "ELTID", "diag", "DATENT", "DATSORT"),
-        "diagnosis rows", require_anchor = windowed)
+        tasks, source_table,
+        unique(c("source_row_id", "PATID", "EVTID", "ELTID",
+                 code_col, start_col, end_col)),
+        "coded rows", require_anchor = windowed)
 
-    diag <- diag %>% transmute(
+    rows <- source_table %>% transmute(
         source_row_id = as.character(source_row_id),
         PATID = as.character(PATID),
         EVTID = as.character(EVTID),
         ELTID = as.character(ELTID),
-        diag = as.character(diag),
-        DATENT = .clinical_date(DATENT),
-        DATSORT = .clinical_date(DATSORT))
+        code = as.character(.data[[code_col]]),
+        t_start = .clinical_date(.data[[start_col]]),
+        t_end = .clinical_date(.data[[end_col]]))
     tkeys <- if (windowed) {
         tasks %>% transmute(
             task_id = as.character(task_id), PATID = as.character(PATID),
@@ -150,84 +165,58 @@ measure_code_presence <- function(diag, tasks, codes,
             task_id = as.character(task_id), PATID = as.character(PATID))
     }
 
-    source_counts <- diag %>%
+    source_counts <- rows %>%
         filter(!is.na(PATID)) %>%
         count(PATID, name = "n_source_rows")
-    missing_end_counts <- diag %>%
-        filter(!is.na(PATID), is.na(DATSORT)) %>%
-        count(PATID, name = "n_missing_datsort")
 
-    scoped <- diag %>%
+    scoped <- rows %>%
         inner_join(tkeys, by = "PATID", relationship = "many-to-many")
     if (windowed) {
         scoped <- scoped %>% filter(.overlaps_interval(
-            DATENT, DATSORT, anchor_date + from_days, anchor_date + to_days,
-            missing_datsort = missing_datsort))
+            t_start, t_end, anchor_date + from_days, anchor_date + to_days,
+            missing_datsort = missing_end))
     }
     observations <- scoped %>%
         mutate(
             field = field,
             source = source,
             in_scope = TRUE,
-            usable = .usable_icd10_code(diag),
-            invalid = !usable,
-            is_target = usable & code_in_family(diag, codes),
+            is_target = .code_matches(code, codes, match),
             selected_evidence = is_target,
-            scope_reason = if (windowed) {
-                if_else(is.na(DATSORT),
-                    "interval overlap; missing DATSORT handled with use_start",
-                    "interval overlap")
-            } else "whole history (no window)",
-            observation_reason = case_when(
-                is_target ~ if (windowed) "ICD-10 code matches the declared family"
-                            else "ICD-10 code matches the declared family (whole history)",
-                !usable ~ "malformed or missing ICD-10 code; excluded",
-                TRUE ~ "diagnosis code outside the declared family"))
+            scope_reason = if (windowed) "in scope for the task window"
+                           else "whole history (no window)",
+            observation_reason = if_else(is_target,
+                "code matches the declared family",
+                "code outside the declared family"))
 
     counts <- observations %>%
         group_by(task_id) %>%
         summarise(
             n_scope_rows = n(),
-            n_usable = sum(usable),
-            n_unusable = sum(invalid),
             n_matching_rows = sum(is_target),
             .groups = "drop")
     coverage <- tkeys %>%
         left_join(source_counts, by = "PATID") %>%
-        left_join(missing_end_counts, by = "PATID") %>%
         left_join(counts, by = "task_id") %>%
         mutate(
-            across(c(n_source_rows, n_missing_datsort, n_scope_rows, n_usable,
-                     n_unusable, n_matching_rows),
+            across(c(n_source_rows, n_scope_rows, n_matching_rows),
                    ~ coalesce(as.integer(.x), 0L)),
             processing_state = case_when(
                 n_source_rows == 0L ~ "no_eligible_source",
                 windowed & n_scope_rows == 0L ~ "no_candidate",
-                n_usable == 0L ~ "invalid",
                 TRUE ~ "measured"))
 
     values <- coverage %>%
-        filter(processing_state %in% c("measured", "invalid")) %>%
-        mutate(normalized_value = case_when(
-            processing_state == "invalid" ~ NA_character_,
-            n_matching_rows > 0L ~ "present",
-            TRUE ~ "absent")) %>%
+        filter(processing_state == "measured") %>%
+        mutate(normalized_value = if_else(n_matching_rows > 0L, "present", "absent")) %>%
         transmute(
             task_id,
             field = field,
             normalized_value,
-            accepted_value = if_else(
-                processing_state == "measured", normalized_value, NA_character_),
+            accepted_value = normalized_value,
             measurement_value = NA_real_,
             measurement_time = as.Date(NA),
-            field_validity = if_else(
-                processing_state == "measured", "valid", "invalid"),
-            validity_reason = if_else(
-                processing_state == "measured", "",
-                "diagnosis rows are in scope but none has a usable ICD-10 code"),
             n_scope_rows,
-            n_usable,
-            n_unusable,
             n_matching_rows)
 
     evidence <- observations %>%
@@ -235,18 +224,15 @@ measure_code_presence <- function(diag, tasks, codes,
         transmute(
             task_id, field, source, source_row_id,
             evidence_ref = source_row_id,
-            evidence_summary = sprintf(
-                "%s (%s to %s)", diag, DATENT,
-                ifelse(is.na(DATSORT), "missing", as.character(DATSORT))),
-            PATID, EVTID, ELTID, diag, DATENT, DATSORT)
+            evidence_summary = sprintf("%s (%s)", code, t_start),
+            PATID, EVTID, ELTID, code, t_start, t_end)
 
     rule <- if (windowed) {
-        sprintf(
-            "same_subject; interval_overlap[%d,%+d]; ICD-10 prefixes %s; missing_DATSORT=%s",
-            as.integer(from_days), as.integer(to_days), paste(codes, collapse = ","),
-            missing_datsort)
+        sprintf("same_subject; interval_overlap[%d,%+d]; %s match {%s}",
+                as.integer(from_days), as.integer(to_days), match,
+                paste(codes, collapse = ","))
     } else {
-        sprintf("whole_history; ICD-10 prefixes %s", paste(codes, collapse = ","))
+        sprintf("whole_history; %s match {%s}", match, paste(codes, collapse = ","))
     }
     derivation <- coverage %>%
         transmute(
@@ -255,30 +241,17 @@ measure_code_presence <- function(diag, tasks, codes,
             rule = rule,
             n_source_rows,
             n_scope_rows,
-            n_usable,
-            n_unusable,
             n_matching_rows,
             status = processing_state,
             error = NA_character_)
 
-    .assert_evidence_resolves(evidence, observations, diag)
+    .assert_evidence_resolves(evidence, observations, rows)
     list(
         coverage = coverage,
         values = values,
         evidence = evidence,
         observations = observations,
         derivation = derivation)
-}
-
-# --- whole-history ("ever") code presence ------------------------------------
-# Whole-history is just code presence with NO window: the same neutral executor
-# with from_days/to_days = NULL scopes the subject's ENTIRE record (no anchor
-# needed). Kept as a named alias for unanchored variables (e.g. diabetes_ever).
-measure_code_presence_ever <- function(diag, tasks, codes,
-                                       field = "code_presence", source = "diagnosis") {
-    measure_code_presence(diag, tasks, codes = codes,
-                          from_days = NULL, to_days = NULL,
-                          field = field, source = source)
 }
 
 # --- generic analyte value: max usable value in a point-window over biol --------

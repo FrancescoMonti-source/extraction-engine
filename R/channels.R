@@ -14,6 +14,7 @@
 # Signal shape per channel type. The constructor sets this; users never write it.
 .channel_produces <- c(
     code = "code_hit",
+    act  = "act_hit",
     lab  = "numeric_measurement",
     text = "text_candidate")
 
@@ -53,14 +54,30 @@ lab_channel <- function(source, selector, ...) {
     channel(source, selector, type = "lab", ...)
 }
 
+# Act channel: CCAM procedure codes over pmsi$actes. Same membership executor as
+# code_channel (a code family over a coded source); the source's point-dated time
+# and CODEACTE column are resolved from its roles.
+act_channel <- function(source, selector, ...) {
+    channel(source, selector, type = "act", ...)
+}
+
 # --- selectors ----------------------------------------------------------------
-# A selector is the concept-level identity rule for one source. (The design note
-# writes icd10("^E1[0-4]"); this slice carries the equivalent code prefixes so it
-# can reuse the tested prefix-family matcher. A richer pattern/regex selector
-# grammar is a deferred refinement.)
-icd10 <- function(prefixes) {
-    .experimental_spec(list(kind = "icd10_prefix", prefixes = as.character(prefixes)),
-                       "ee_selector")
+# A selector is the concept-level identity rule for one source. A code selector
+# (icd10 for CIM-10 diagnoses, ccam for CCAM acts) declares codes + a match mode:
+# `match = "regex"` matches each pattern against the normalized code (e.g.
+# icd10("^E1[0-4]")); `match = "exact"` matches against the normalized code set.
+# The code SYSTEM is implied by the channel's source, so the selector only carries
+# codes + mode (both lower to the same `kind = "code"` selector).
+icd10 <- function(pattern, match = c("regex", "exact")) {
+    .experimental_spec(
+        list(kind = "code", codes = as.character(pattern), match = match.arg(match)),
+        "ee_selector")
+}
+
+ccam <- function(codes, match = c("exact", "regex")) {
+    .experimental_spec(
+        list(kind = "code", codes = as.character(codes), match = match.arg(match)),
+        "ee_selector")
 }
 
 lucene_query <- function(query) {
