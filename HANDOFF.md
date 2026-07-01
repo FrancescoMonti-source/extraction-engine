@@ -4992,3 +4992,54 @@ concepts still use legacy `binary_output`/`categorical_output`/`fields_output`; 
 -> `candidate_selection`). (3) rename `measure_analyte_value`'s first param for parity.
 The `channel-shape` branch now carries the whole overhaul -- worth merging as one unit before
 the next thread.
+
+---
+
+## 2026-07-01 -- lab executor cleanup, plain-function reducers, output-vocab migration
+
+Continuation on `channel-shape` (five commits, suite green at **68** throughout). Closes all
+three open follow-ups from the entry above.
+
+**Lab executor de-crufted (`8b2c6c7`):** removed `measure_analyte_value`'s
+`usable = is_target & !is.na(value)` / `invalid` apparatus (+ `field_validity`/`validity_reason`/
+`n_usable`/`n_unusable`) -- the same standardized-HDW cruft stripped from the code path (numeric
+results are NUMRES, qualitative are STRRES which `BIOL_SOURCE` doesn't read, so `!is.na()` guards
+nothing). Also deleted the now-orphaned `threshold`/`above_threshold`/`n_above`/present-absent
+machinery: hyperkalaemia was deleted and `run_variable` never passed a threshold, so it was all
+dead. Memory `hdw-standardized-no-validity-checks` updated (lab now done, not pending).
+
+**Reducer is a plain function, not an operator (`8947670`):** owner -- *"i dont want ad hoc
+functions for trivial stuff when i could just ask the reduce of the lab channel to do
+`function(x) max(x, na.rm=T)`"*. `max_value()` was **decorative**: the lab dispatch ignored the
+declared reducer and hard-coded `max` in the executor. Now:
+- `measure_analyte_value` -> **`measure_analyte_values`**: it SCOPES candidate rows and returns
+  `candidates` (`task_id, source_row_id, value`); it does NOT reduce.
+- `.single_numeric_variable` pulls the channel's **reducer function** off the activation
+  (`use_channel(reducer = function(x) max(x, na.rm = TRUE))`) and applies it to the candidate
+  values; a numeric output with no reducer function errors.
+- Deleted `max_value()`. `min`/`mean`/`latest`/`count` now need no operators -- they are base R.
+- **Evidence = every in-window candidate** (the inputs the reducer saw), because the executor is
+  reducer-agnostic (a generic `function(x)` picks no row; `mean` matches none). Diabetes slice
+  test updated to assert both glucose rows are evidence; value `9.4` still `max(6.1, 9.4)`.
+- Memory: new `reducers-are-plain-functions`.
+
+**Output constructors migrated + aliases deleted (`2000601`):** the four concepts now call
+`bin_output`/`cat_output`/`struct_output` directly; the legacy
+`binary_output`/`number_output`/`categorical_output`/`fields_output` aliases are **removed**.
+Internal `$kind` (binary/number/categorical/fields) unchanged, so runner dispatch is untouched.
+`spec.R`'s hit-set error message + MIGRATION.md updated.
+
+**Dead `top_n` deleted (`003b4a7`):** `llm_after_lucene(top_n=)` was set-but-not-read (text is
+pre-retrieved; nothing read `$top_n`). Per defer-infra the owner chose to DELETE it rather than
+carry it or replace it with another unread seam. `llm_after_lucene()` now takes no argument. The
+target selection helper is named **`llm_candidate_selection()`** (owner renamed it off the design
+doc's `candidate_selection()` to avoid ambiguity with the new STRUCTURED `candidates` frame); it
+is **reserved, not built** -- add `candidates = llm_candidate_selection(arrange, limit)` inside
+the method only when retrieval runs in-engine and has a consumer. Recorded in
+`proposed-design-v2-deltas`.
+
+**Param parity (`66f2246`):** `measure_analyte_values`' first param `biol` -> `source_table`
+(matches `measure_code_presence`); internal transmuted frame stays `biol`.
+
+The `channel-shape` branch is ready to land as one unit; no open follow-ups outstanding from
+this thread.
