@@ -9,7 +9,7 @@
 # diabetes_baseline_status_template() is a CONCEPT-SPECIFIC quickstart (not a
 # generic computation pattern). Concrete variable_specs are written in study code,
 # e.g. diabete_pre_greffe (from this template) and perioperative_max_glucose
-# (written directly, using the max_value() operator) -- see tests.
+# (written directly, reducing the glucose channel with a plain function) -- see tests.
 # =============================================================================
 
 # The diabetes concept's TEXT answer schema (one evidenced field -- documented =>

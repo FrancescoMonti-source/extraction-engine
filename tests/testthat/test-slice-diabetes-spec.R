@@ -49,9 +49,11 @@ spec_sources <- list(
     biology = spec_biol)
 
 # Why: variable_spec may be written directly when no concept-specific template is
-# justified. Generic helpers like max_value() are operators inside that spec, not
-# user-facing variable templates.
-test_that("direct glucose variable_spec uses a helper without becoming a template", {
+# justified. The within-channel reduction is a PLAIN FUNCTION on the candidate values
+# (no bespoke max_value() operator) -- the executor scopes the window and the reducer
+# collapses it, so max is just base max(). Evidence = every in-window candidate row
+# (the inputs the reducer saw), not only the argmax.
+test_that("direct glucose variable_spec reduces the channel with a plain function", {
     concept <- diabetes_concept_spec()
     direct <- variable_spec(
         name = "perioperative_max_glucose",
@@ -60,7 +62,8 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
         anchor = "anchor_date",
         window = days_after(0L, 2L),
         channels = list(
-            glucose_measurements = use_channel(reducer = max_value())),
+            glucose_measurements = use_channel(
+                reducer = function(x) max(x, na.rm = TRUE))),
         output = num_output())
 
     expect_null(direct$template)
@@ -70,13 +73,14 @@ test_that("direct glucose variable_spec uses a helper without becoming a templat
     expect_equal(run$selected_channels$channel, "glucose_measurements")
 
     values <- setNames(run$values$value, run$values$task_id)
-    expect_equal(values[["P1::t"]], 9.4)
+    expect_equal(values[["P1::t"]], 9.4)      # max(6.1, 9.4) via the plain reducer
     expect_true(is.na(values[["P2::t"]]))     # glucose exists, but outside window
 
+    # Both in-window glucose rows for P1 are candidates -> both are evidence.
     ev <- run$evidence[run$evidence$task_id == "P1::t", ]
-    expect_equal(ev$channel, "glucose_measurements")
-    expect_equal(ev$source, "biology")
-    expect_equal(ev$evidence_ref, "biol:002")
+    expect_setequal(ev$evidence_ref, c("biol:001", "biol:002"))
+    expect_true(all(ev$channel == "glucose_measurements"))
+    expect_true(all(ev$source == "biology"))
 })
 
 # Why: the generic run_variable() spine must be CONCEPT-AGNOSTIC -- each channel's own

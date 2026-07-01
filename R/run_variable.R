@@ -144,9 +144,9 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 end_col = bind$end_col, field = variable$name, source = source)
         },
         lab = {
-            w <- .window_days(variable)     # neutral analyte executor (no clinical name)
-            measure_analyte_value(          # max usable value in window; no threshold
-                sources[[source]], tasks,   # for a numeric max_value output
+            w <- .window_days(variable)     # neutral analyte executor: scopes candidate
+            measure_analyte_values(         # rows; the reduction is the channel's reducer
+                sources[[source]], tasks,   # function, applied in assembly (numeric output)
                 analytes = .selector_codes(channel_def$selector, "codes"),
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 field = variable$name, source = source)
@@ -256,33 +256,49 @@ suppressWarnings(suppressMessages(library(dplyr)))
                            source_row_id = character(), evidence_ref = character()))
 }
 
-# A single numeric channel (e.g. max glucose): pass the measurement through as the
-# value, with per-source status and evidence shaped like the OR envelope.
+# A single numeric channel (e.g. max glucose): the executor returns per-task CANDIDATE
+# values in the window; the value is the channel's REDUCER function applied to them
+# (use_channel(reducer = function(x) max(x, na.rm = TRUE))) -- a plain numeric -> scalar
+# closure, not a bespoke operator. A task with no candidate rows is NA/partial. Status
+# and evidence are shaped like the OR envelope; evidence is every candidate row.
 .single_numeric_variable <- function(variable, tasks, channel_name, result) {
     var_name <- variable$name
     source_name <- .source_name_for_channel(channel_name, variable)
-    values <- result$coverage %>%
-        transmute(task_id, variable = var_name,
-                  value = measurement_value,
-                  channel_coverage = if_else(processing_state == "measured",
-                                             "complete", "partial"))
-    status <- result$coverage %>%
-        transmute(
-            task_id,
-            variable = var_name,
-            channel = channel_name,
+    reducer <- variable$channels[[channel_name]]$reducer
+    if (!is.function(reducer)) {
+        stop("Numeric output over channel '", channel_name, "' requires a reducer ",
+             "function, e.g. reducer = function(x) max(x, na.rm = TRUE).",
+             call. = FALSE)
+    }
+    cand <- result$candidates
+    task_ids <- as.character(tasks$task_id)
+    state_of <- function(tid) {
+        s <- result$coverage$processing_state[
+            as.character(result$coverage$task_id) == tid]
+        if (length(s)) as.character(s[[1]]) else NA_character_
+    }
+
+    values_l <- list(); status_l <- list()
+    for (tid in task_ids) {
+        vals <- cand$value[as.character(cand$task_id) == tid]
+        measured <- length(vals) > 0L
+        value <- if (measured) suppressWarnings(as.numeric(reducer(vals))) else NA_real_
+        values_l[[length(values_l) + 1L]] <- tibble::tibble(
+            task_id = tid, variable = var_name, value = value,
+            channel_coverage = if (measured) "complete" else "partial")
+        status_l[[length(status_l) + 1L]] <- tibble::tibble(
+            task_id = tid, variable = var_name, channel = channel_name,
             source = source_name,
-            status = case_when(
-                processing_state == "measured" ~ "complete",
-                processing_state == "invalid" ~ "invalid",
-                processing_state %in% c("processing_error", "model_error") ~ "error",
-                TRUE ~ "unavailable"),
-            hit = if_else(processing_state == "measured", TRUE, NA),
+            status = if (measured) "complete" else "unavailable",
+            hit = if (measured) TRUE else NA,
+            processing_state = state_of(tid),
             error = NA_character_)
+    }
     evidence <- result$evidence %>%
         transmute(task_id, variable = var_name, channel = channel_name,
                   source, source_row_id, evidence_ref)
-    list(values = values, channel_status = status, evidence = evidence)
+    list(values = bind_rows(values_l), channel_status = bind_rows(status_l),
+         evidence = evidence)
 }
 
 # categorical output (combine = NULL): a single text channel whose accepted

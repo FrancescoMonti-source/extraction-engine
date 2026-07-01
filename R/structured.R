@@ -4,9 +4,10 @@
 # Mirrors the text path's four views but: evidence = selected source rows,
 # measurement = a deterministic rule, NO corpus and NO model. NEUTRAL, concept-
 # agnostic executors only: measure_code_presence (code/act membership) and
-# measure_analyte_value (max value in a window); the run_variable() dispatch binds
-# each to its source. Coverage census is kept over ALL tasks, same discipline as
-# the text path. Provenance points at the exact source rows.
+# measure_analyte_values (valued rows of an analyte in a window -- reduction is a
+# plain function on the variable's channel activation, applied in assembly); the
+# run_variable() dispatch binds each to its source. Coverage census is kept over ALL
+# tasks, same discipline as the text path. Provenance points at the exact source rows.
 # =============================================================================
 
 suppressWarnings(suppressMessages(library(dplyr)))
@@ -254,22 +255,25 @@ measure_code_presence <- function(source_table, tasks, codes,
         derivation = derivation)
 }
 
-# --- generic analyte value: max value in a point-window over biol ---------------
+# --- generic analyte candidates: valued rows of an analyte in a point-window -----
 # Neutral lab/analyte executor behind the run_variable() lab branch. Per task it
-# selects the MAXIMUM value of the declared analyte concept inside a point-window
-# around the anchor, with coverage / values / evidence / observation / derivation
-# artifacts. `field` and `source` name the output rows. No usability/validity check
-# and no threshold: HDW numeric results live in a numeric field (NUMRES; qualitative
-# results are STRRES, which BIOL_SOURCE does not read), so a target row always has a
-# value -- there is nothing to route to review. The result is carried by
-# measurement_value; present/absent thresholding is not this executor's job.
+# SCOPES the declared analyte concept's rows to a point-window around the anchor and
+# returns them as CANDIDATES (source_row_id + numeric value) -- it does NOT reduce.
+# The within-channel reduction is a plain function on the value vector supplied by the
+# variable_spec's channel activation (use_channel(reducer = function(x) max(x, na.rm =
+# TRUE))), applied downstream in assembly; a bespoke "max" executor / max_value()
+# operator would be ad-hoc for a one-line base reduction. No usability/validity check:
+# HDW numeric results live in a numeric field (NUMRES; qualitative results are STRRES,
+# which BIOL_SOURCE does not read), so a target row always has a value. Evidence =
+# every candidate row (the inputs to the reduction), so provenance shows the whole
+# window the number was reduced from, whatever the reducer.
 #
 # biol: normalized result rows
 #   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
 # tasks: task_id, PATID, anchor_date.
-measure_analyte_value <- function(biol, tasks, analytes,
-                                  from_days = -7L, to_days = 7L,
-                                  field = "analyte_value", source = "biology") {
+measure_analyte_values <- function(biol, tasks, analytes,
+                                   from_days = -7L, to_days = 7L,
+                                   field = "analyte_value", source = "biology") {
     .validate_structured_inputs(
         tasks, biol,
         c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID", "DATEXAM",
@@ -306,6 +310,7 @@ measure_analyte_value <- function(biol, tasks, analytes,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes,
+            selected_evidence = is_target,     # every candidate is evidence
             scope_reason = "point time inside the task window",
             observation_reason = if_else(is_target,
                 "analyte matches the declared concept",
@@ -314,24 +319,6 @@ measure_analyte_value <- function(biol, tasks, analytes,
             # result values are unnecessary in persisted structured artifacts.
             value_raw = if_else(is_target, value_raw, NA_character_),
             value = if_else(is_target, value, NA_real_))
-
-    selected <- observations %>%
-        filter(is_target) %>%
-        arrange(task_id, desc(value), DATEXAM, source_row_id) %>%
-        group_by(task_id) %>%
-        slice_head(n = 1L) %>%
-        ungroup() %>%
-        transmute(
-            task_id,
-            source_row_id,
-            measurement_value = value,
-            measurement_time = DATEXAM,
-            selected_evidence = TRUE)
-    observations <- observations %>%
-        left_join(
-            select(selected, task_id, source_row_id, selected_evidence),
-            by = c("task_id", "source_row_id")) %>%
-        mutate(selected_evidence = coalesce(selected_evidence, FALSE))
 
     counts <- observations %>%
         group_by(task_id) %>%
@@ -343,8 +330,6 @@ measure_analyte_value <- function(biol, tasks, analytes,
     coverage <- tkeys %>%
         left_join(source_counts, by = "PATID") %>%
         left_join(counts, by = "task_id") %>%
-        left_join(select(selected, task_id, measurement_value, measurement_time),
-                  by = "task_id") %>%
         mutate(
             across(
                 c(n_source_rows, n_scope_rows, n_candidate_rows),
@@ -354,15 +339,12 @@ measure_analyte_value <- function(biol, tasks, analytes,
                 n_candidate_rows == 0L ~ "no_candidate",
                 TRUE ~ "measured"))
 
-    values <- coverage %>%
-        filter(processing_state == "measured") %>%
-        transmute(
-            task_id,
-            field = field,
-            measurement_value,
-            measurement_time,
-            n_scope_rows,
-            n_candidate_rows)
+    # The value vector the channel's reducer collapses to one number, ordered so the
+    # assembler can carry a stable measurement_time alongside the reduced value.
+    candidates <- observations %>%
+        filter(is_target) %>%
+        arrange(task_id, desc(value), DATEXAM, source_row_id) %>%
+        transmute(task_id, source_row_id, value, measurement_time = DATEXAM)
 
     evidence <- observations %>%
         filter(selected_evidence) %>%
@@ -378,7 +360,7 @@ measure_analyte_value <- function(biol, tasks, analytes,
     rule <- sprintf(
         paste0(
             "same_subject; point_window[%d,%+d]; analyte=%s; ",
-            "maximum value selected (ties: DATEXAM, source_row_id); unit ignored"),
+            "candidates reduced by the channel's reducer; unit ignored"),
         as.integer(from_days), as.integer(to_days),
         paste(analytes, collapse = ","))
     derivation <- coverage %>%
@@ -395,7 +377,7 @@ measure_analyte_value <- function(biol, tasks, analytes,
     .assert_evidence_resolves(evidence, observations, biol)
     list(
         coverage = coverage,
-        values = values,
+        candidates = candidates,
         evidence = evidence,
         observations = observations,
         derivation = derivation)

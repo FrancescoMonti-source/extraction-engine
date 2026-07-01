@@ -24,9 +24,10 @@ days_after <- function(from_days = 0L, to_days) {
 }
 
 # --- within-channel reducers --------------------------------------------------
-max_value <- function() {
-    .experimental_spec(list(kind = "max_value"), "ee_reducer")
-}
+# A within-channel reducer is just a plain function numeric -> scalar, supplied on
+# the variable's channel activation: use_channel(reducer = function(x) max(x, na.rm =
+# TRUE)). No bespoke operator wraps trivial base reductions (max/min/mean/length);
+# the numeric-output assembler applies the function to the channel's candidate values.
 
 # --- cross-channel combiner ---------------------------------------------------
 # The ONLY cross-channel combine is hit-set algebra (hit_set_expr); a single

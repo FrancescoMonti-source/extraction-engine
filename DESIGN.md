@@ -619,7 +619,7 @@ A lab channel has two faces:
 
 ``` text
 membership face: hit TRUE/FALSE/NA, usable in bin_output() and combine expressions
-value face: measurement values from matched rows, usable by num_output() and reducers such as max_value()
+value face: measurement values from matched rows, usable by num_output() and a plain reducer function, e.g. function(x) max(x, na.rm = TRUE)
 ```
 
 Thus a structured lab channel can support either membership output or numeric output depending on the variable activation.
@@ -1231,13 +1231,15 @@ recipient_anastomoses_template
 Generic patterns are operators/helpers, not templates:
 
 ``` text
-max_value()
 closest_before_anchor()
 llm_after_lucene()
 any_positive()
 threshold_binary()
 collect_fields()
 ```
+
+Within-channel reduction is not an operator: it is a plain function on the channel's
+candidate values, supplied on the activation, e.g. reducer = function(x) max(x, na.rm = TRUE).
 
 Example snippet-style template:
 
@@ -1397,7 +1399,7 @@ perioperative_max_glucose <- variable_spec(
 
   channels = list(
     glucose_measurements = use_channel(
-      reducer = max_value()
+      reducer = function(x) max(x, na.rm = TRUE)
     )
   ),
 

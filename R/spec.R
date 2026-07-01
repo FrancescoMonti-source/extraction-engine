@@ -128,7 +128,8 @@ concept_spec <- function(name, channels) {
 
 # use_channel() is the per-channel activation record placed inside a variable_spec.
 #   method    -> variable-owned extraction strategy (e.g. llm_after_lucene())
-#   reducer   -> variable-owned within-channel reduction (e.g. max_value())
+#   reducer   -> variable-owned within-channel reduction: a plain function
+#                numeric -> scalar, e.g. function(x) max(x, na.rm = TRUE)
 #   extractor -> optional override of the concept-owned answer definition
 use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
                         prompt = NULL, ...) {
