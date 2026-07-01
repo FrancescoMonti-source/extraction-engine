@@ -436,21 +436,21 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # observed hit", hence non-member). `!A` is the complement of A's observed hit set
 # within the task universe. So `A & !B` with B unavailable keeps an A-hit task
 # INCLUDED (B produced no observed hit) -- the uncertainty lives in channel_coverage
-# and the membership audit, never silently in the final set operation. The decision
-# is therefore always determined (included / excluded); NA is preserved only in the
-# per-channel audit (membership/overlap), not propagated into value/decision. (A
-# strict epistemic mode that propagates NA into the decision is a deliberate future
-# extension, not the default.)
-#   values        per task: value (1/0), decision (included/excluded),
-#                 decision_state (determined), channel_coverage (complete/partial/failed).
-#   channel_status per task x channel: role (asserted/negated/mixed), status, hit
-#                 (TRUE/FALSE/NA), processing_state, contribution, evidence_refs.
-#   evidence      per hit ref, role-tagged.
-#   membership    long-form for analysis: task_id, channel, role, hit (TRUE/FALSE/NA),
+# and the membership audit, never silently in the final set operation. NA is
+# preserved only in the per-channel audit (membership/overlap), not propagated into
+# value. (A strict epistemic mode that propagates NA into value is a deliberate future
+# extension, not the default.) The public surface is value + channel_coverage;
+# included/excluded is a presentation recoding of value, not an engine field, and
+# expression polarity is derived internally, never a public per-channel column.
+#   values        per task: value (1/0), channel_coverage (complete/partial/failed).
+#   channel_status per task x channel: status, hit (TRUE/FALSE/NA), processing_state,
+#                 contribution, evidence_refs.
+#   evidence      per hit ref.
+#   membership    long-form for analysis: task_id, channel, hit (TRUE/FALSE/NA),
 #                 processing_state, evidence_refs.
 #   overlap       UpSet-style summary: one row per membership pattern (TRUE/FALSE/NA
-#                 preserved) across the expression channels, with count, decision,
-#                 decision_state, channel_coverage.
+#                 preserved) across the expression channels, with count, value,
+#                 channel_coverage.
 .hit_set_expr_variable <- function(variable, tasks, channel_results) {
     var_name <- variable$name
     combine <- variable$combine
@@ -461,7 +461,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
         stop("hit-set expression references unactivated channel(s): ",
              paste(missing_ch, collapse = ", "), call. = FALSE)
     }
-    roles <- combine$roles
     task_ids <- as.character(tasks$task_id)
 
     reduced <- lapply(declared, function(ch) {
@@ -483,8 +482,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
     observed <- setNames(lapply(vectors, function(v) v %in% TRUE), referenced)
 
     result <- .eval_hitset_expr(combine$ast, observed)   # always TRUE/FALSE
-    decision <- if_else(result, "included", "excluded")
-    decision_state <- rep("determined", length(result))  # observed mode is determined
 
     # channel_coverage: were the selected channels actually evaluable for this task?
     # failed (a channel errored) > partial (a channel unavailable/unusable) > complete.
@@ -499,17 +496,11 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
     values <- tibble::tibble(
         task_id = task_ids, variable = var_name,
-        value = as.integer(result), decision = decision,
-        decision_state = decision_state, channel_coverage = channel_coverage)
+        value = as.integer(result), channel_coverage = channel_coverage)
 
-    role_of <- function(ch) {
-        r <- if (ch %in% names(roles)) unname(roles[[ch]]) else NA_character_
-        if (is.na(r)) "asserted" else r
-    }
     status_l <- list(); evidence_l <- list()
     for (ch in declared) {
         src <- .source_name_for_channel(ch, variable)
-        role <- role_of(ch)
         for (tid in task_ids) {
             r <- reduced[[ch]][[tid]]
             refs <- if (isTRUE(r$hit) && nrow(r$evidence)) {
@@ -517,7 +508,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             } else character()
             status_l[[length(status_l) + 1L]] <- tibble::tibble(
                 task_id = tid, variable = var_name, channel = ch, source = src,
-                role = role, status = r$status, hit = r$hit,
+                status = r$status, hit = r$hit,
                 processing_state = .channel_raw_state(channel_results, ch, tid),
                 contribution = .contribution_class(r$status, r$hit),
                 evidence_refs = if (length(refs)) paste(refs, collapse = "; ")
@@ -526,7 +517,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             if (length(refs)) {
                 evidence_l[[length(evidence_l) + 1L]] <- tibble::tibble(
                     task_id = tid, variable = var_name, channel = ch, source = src,
-                    role = role, source_row_id = refs, evidence_ref = refs)
+                    source_row_id = refs, evidence_ref = refs)
             }
         }
     }
@@ -534,7 +525,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
     wide <- tibble::tibble(task_id = task_ids)
     for (ch in referenced) wide[[ch]] <- vectors[[ch]]
-    overlap <- hit_set_overlap(wide, referenced, decision, decision_state,
+    overlap <- hit_set_overlap(wide, referenced, as.integer(result),
                                channel_coverage)
 
     list(
@@ -543,10 +534,10 @@ suppressWarnings(suppressMessages(library(dplyr)))
         evidence = if (length(evidence_l)) bind_rows(evidence_l) else
             tibble::tibble(task_id = character(), variable = character(),
                            channel = character(), source = character(),
-                           role = character(), source_row_id = character(),
+                           source_row_id = character(),
                            evidence_ref = character()),
         membership = channel_status %>%
-            transmute(task_id, channel, role, hit, processing_state, evidence_refs),
+            transmute(task_id, channel, hit, processing_state, evidence_refs),
         overlap = overlap)
 }
 

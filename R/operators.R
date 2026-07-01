@@ -63,8 +63,7 @@ hit_set_expr <- function(expr) {
         stop("A hit-set expression must reference >=1 channel.", call. = FALSE)
     }
     .experimental_spec(
-        list(kind = "hit_set_expr", expr = expr, ast = ast,
-             channels = channels, roles = .hitset_expr_roles(ast)),
+        list(kind = "hit_set_expr", expr = expr, ast = ast, channels = channels),
         "ee_combiner")
 }
 

@@ -5043,3 +5043,47 @@ the method only when retrieval runs in-engine and has a consumer. Recorded in
 
 The `channel-shape` branch is ready to land as one unit; no open follow-ups outstanding from
 this thread.
+
+---
+
+## 2026-07-01 -- Boolean-envelope demotion (drop decision / decision_state / public role)
+
+Closes the MIGRATION.md "Boolean envelope" row; also reconciles the now-stale "Channel shape"
+row (which channel-shape had already completed). Suite green at **68** throughout. The target
+was already ratified in DESIGN.md (`§ boolean output`, lines ~940-991) and memory
+`combine-output-naming-target-contract` -- this ships it, DESIGN needed no change.
+
+**What the public boolean surface now is** (DESIGN §"Downstream contract" / "Overlap audit"):
+- `values`: `task_id, variable, value (0/1), channel_coverage`. Dropped `decision`
+  (included/excluded) and `decision_state` (always "determined"). Rationale: observed set
+  algebra is always determined, and included/excluded is a *presentation recoding* of `value`
+  for cohort selection, not a generic engine field. Uncertainty lives in `channel_coverage`.
+- `channel_status` / `membership` / `evidence`: dropped the public `role`
+  (asserted/negated/mixed) column. A channel observes only its own hit; its logical position
+  in the expression lives in `combine_rule`, not as a per-channel property.
+- `overlap`: now groups on the pattern-determined **`value`** (0/1) + `channel_coverage`
+  instead of `decision` + `decision_state`. Still one row per membership pattern, NA preserved,
+  ggupset/UpSetR-pivotable.
+
+**Dead code removed with its only consumer** (`defer-infra-until-consumer`): the polarity
+`roles` field on the `hit_set_expr` combiner (`operators.R`) fed *only* the public `role`
+column via `role_of()`. Both gone, and the orphaned `.hitset_expr_roles()` walker in
+`hitset.R` deleted. `hit_set_difference()` builds `a & !b` strings directly (never used the
+walker), so sugar-lowering is unaffected. DESIGN §989 still reserves internal polarity
+derivation for a future sugar consumer -- re-derive from the AST if one appears.
+
+**Not a public-surface change but touched:** `hit_set_overlap()` signature
+`(wide, channels, decision, decision_state, channel_coverage)` -> `(wide, channels, value,
+channel_coverage)`.
+
+**Channel-shape row reconciled:** `produces` is already derived from the channel `type` inside
+the `channel()` constructor (never user-written; read once at assembly for `selected_channels`),
+and `act_channel()` + `ccam()` over `pmsi$actes` ship. Both of that row's tasks were done on
+channel-shape; MIGRATION.md just hadn't been updated.
+
+**No test churn:** `test-slice-hitset-expr-spec.R` already asserted only `value` +
+`channel_coverage` + raw `membership$hit` (its header even said "without exposing migration-era
+decision_state/role"), so the floor test proves the demotion without edits. `mean(value)`
+semantics unchanged.
+
+**Files:** `R/hitset.R`, `R/operators.R`, `R/run_variable.R`, `MIGRATION.md`, `HANDOFF.md`.

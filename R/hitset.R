@@ -32,8 +32,8 @@
 # extension, not the default.) Set algebra over EXPLICIT observed hit sets, not
 # clinical ontology.
 #
-# This file is the PURE core (parser / grammar / role derivation / evaluator /
-# overlap), decoupled from the channel/reduce machinery; run_variable.R wraps it to
+# This file is the PURE core (parser / grammar / evaluator / overlap), decoupled
+# from the channel/reduce machinery; run_variable.R wraps it to
 # attach per-channel status + evidence provenance + the Venn/UpSet audit.
 # =============================================================================
 
@@ -79,29 +79,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
          "literal/constant: ", deparse(node), call. = FALSE)
 }
 
-# Per-channel polarity ("role in expression"): a channel under an odd number of `!`
-# is "negated", an even number "asserted", and "mixed" if it appears both ways.
-.hitset_expr_roles <- function(node) {
-    seen <- list()
-    walk <- function(n, negated) {
-        if (is.name(n)) {
-            ch <- as.character(n)
-            seen[[ch]] <<- unique(c(seen[[ch]], negated))
-            return(invisible())
-        }
-        if (is.call(n)) {
-            op <- as.character(n[[1L]])
-            if (identical(op, "!")) { walk(n[[2L]], !negated); return(invisible()) }
-            for (i in seq_along(n)[-1L]) walk(n[[i]], negated)
-        }
-    }
-    walk(node, FALSE)
-    vapply(names(seen), function(ch) {
-        pol <- seen[[ch]]
-        if (length(pol) > 1L) "mixed" else if (isTRUE(pol)) "negated" else "asserted"
-    }, character(1))
-}
-
 # Evaluate a validated AST over a named list of per-channel logical vectors via R's
 # own operators; no eval(), no base-function exposure. The decision path passes
 # OBSERVED (two-valued) membership vectors, so the result is always TRUE/FALSE.
@@ -118,24 +95,20 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
 # UpSet-style overlap summary: group tasks by their membership PATTERN across the
 # expression channels (the scientifically useful overlap structure), with the count
-# and the pattern-determined final decision, decision_state, and channel_coverage.
-# `wide` is one row per task: task_id + one logical column per channel (hit T/F/NA,
-# NA states preserved). Keeps the per-channel state columns so it is directly
-# pivotable for ggupset/UpSetR.
-hit_set_overlap <- function(wide, channels, decision, decision_state,
-                            channel_coverage) {
+# and the pattern-determined value + channel_coverage. `wide` is one row per task:
+# task_id + one logical column per channel (hit T/F/NA, NA states preserved). Keeps
+# the per-channel state columns so it is directly pivotable for ggupset/UpSetR.
+hit_set_overlap <- function(wide, channels, value, channel_coverage) {
     state_str <- function(x) ifelse(is.na(x), "NA", ifelse(x, "TRUE", "FALSE"))
     parts <- lapply(channels, function(ch) sprintf("%s:%s", ch, state_str(wide[[ch]])))
     pattern <- do.call(paste, c(parts, list(sep = " | ")))
     df <- wide
     df$pattern <- pattern
-    df$decision <- decision
-    df$decision_state <- decision_state
+    df$value <- value
     df$channel_coverage <- channel_coverage
     df %>%
         dplyr::group_by(dplyr::across(dplyr::all_of(
-            c(channels, "pattern", "decision", "decision_state",
-              "channel_coverage")))) %>%
+            c(channels, "pattern", "value", "channel_coverage")))) %>%
         dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
         dplyr::arrange(dplyr::desc(n))
 }
