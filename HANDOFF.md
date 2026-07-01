@@ -5131,3 +5131,44 @@ migration-only `legacy_roles`.
 target names only (no legacy path), so it proves the map still resolves after the prune.
 
 **Files:** `R/data.R`, `MIGRATION.md`, `HANDOFF.md`.
+
+---
+
+## 2026-07-01 -- LLM boundary: investigated + reconciled the row (already functionally satisfied)
+
+Investigated the MIGRATION.md "LLM boundary" row (same pattern as source-roles: find out how much
+is already satisfied before touching anything). Verdict: the who-owns-what boundary is **already
+implemented and shipped on both sides**; the row's "align method declarations and provenance" is
+purely a declarative-surface refactor that duplicates the Text-method row's deferred work. Doc-only
+reconciliation, no code. Suite green at **68**.
+
+**Boundary mapped against the code (every responsibility is already in place):**
+- *ellmer owns* the structured call (`make_ollama_caller` -> `chat$chat_structured(prompt, type)`)
+  and type validation/parsing (`ellmer::type_from_schema()` builds the type; ellmer validates the
+  response and returns a parsed R list).
+- *engine owns* everything else via the per-task-isolated `run_extraction` loop: candidate
+  selection (text pre-retrieved), prompt rendering (`prompt_builder`), evidence-ID validation
+  (`resolve_cited_ids()` real-vs-invented + `.materialize_task_evidence()` exactly-one-snippet
+  assert), response-to-hit mapping (parser `normalized_value` `documented`->`present` ->
+  `.reduce_channel_result` -> `isTRUE(r$hit)`), and provenance (`attempts`: model/seed/
+  prompt+schema+query hashes/finish-reason/raw response, plus evidence + `channel_status`).
+
+**Two confirmations that pin down "nothing to build here now":**
+- `llm_after_lucene()` / `method` is **set-but-not-read at execution** -- grep of
+  run_variable/channel-combine/extract found zero reads. The text arm dispatches on
+  `channel_def$type == "text"` and consumes `extractor` (the definition bundle), never `method`;
+  `method` is surfaced only by `inspect()`. Reserved declarative surface (like `produces` was),
+  NOT dead alias apparatus like `legacy_roles` -- so it stays (it's the documented public tag).
+- `positive_hit_when` exists **only in DESIGN.md/HANDOFF.md, never in `R/`**. Response-to-hit
+  mapping is presently the binary parser's `documented`->`present`->hit.
+
+**The only unaligned part (deferred, `defer-infra-until-consumer`):** DESIGN §488 wants the
+method-specific knobs (`prompt`/`type`/`candidates`/`positive_hit_when`) folded INTO the
+`llm_after_lucene(...)` signature instead of the `definition`/`extractor` bundle. That is the SAME
+reserved-not-built work as the Text-method row -- gated on in-engine retrieval + a consumer.
+`positive_hit_when` in particular is only worth building when a variable needs a response-to-hit
+mapping the parser doesn't already bake in. No consumer today, so not built.
+
+**No test churn:** doc-only reconciliation of the MIGRATION row; execution paths untouched.
+
+**Files:** `MIGRATION.md`, `HANDOFF.md`.
