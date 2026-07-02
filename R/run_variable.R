@@ -260,7 +260,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             measure_analyte_values(         # rows; a thresholded selector (analyte_value)
                 sources[[source]], tasks,   # folds a value predicate into the target set --
                 analytes = .selector_codes(selector, "codes"),  # membership face; the value
-                gt = selector$gt, lt = selector$lt,  # face reduces candidates in assembly
+                gt = selector$gt,               # face reduces candidates in assembly
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 field = variable$name, source = source)
         },

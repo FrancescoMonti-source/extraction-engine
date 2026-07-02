@@ -86,13 +86,11 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
 
-# Value predicate for a thresholded analyte selector (DESIGN §8): strict, independent
-# bounds. A missing value never passes; a NULL bound leaves that side unconstrained.
-.passes_threshold <- function(value, gt, lt) {
-    ok <- !is.na(value)
-    if (!is.null(gt)) ok <- ok & value > gt
-    if (!is.null(lt)) ok <- ok & value < lt
-    ok
+# Value predicate for a thresholded analyte selector (DESIGN §8): a strict lower cutoff.
+# A missing value never passes; a NULL cutoff leaves the value unconstrained.
+.passes_threshold <- function(value, gt) {
+    if (is.null(gt)) return(!is.na(value))
+    !is.na(value) & value > gt
 }
 
 .overlaps_interval <- function(start, end, lo, hi,
@@ -297,7 +295,7 @@ measure_code_presence <- function(source_table, tasks, codes,
 #   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
 # tasks: task_id, PATID, anchor_date.
 measure_analyte_values <- function(source_table, tasks, analytes,
-                                   gt = NULL, lt = NULL,
+                                   gt = NULL,
                                    from_days = -7L, to_days = 7L,
                                    field = "analyte_value", source = "biology") {
     .validate_structured_inputs(
@@ -336,7 +334,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes &
-                .passes_threshold(value, gt, lt),
+                .passes_threshold(value, gt),
             selected_evidence = is_target,     # every candidate is evidence
             scope_reason = "point time inside the task window",
             observation_reason = if_else(is_target,
@@ -401,9 +399,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                 DATEXAM),
             PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
 
-    threshold_txt <- paste0(
-        if (!is.null(gt)) sprintf("value>%g; ", gt) else "",
-        if (!is.null(lt)) sprintf("value<%g; ", lt) else "")
+    threshold_txt <- if (!is.null(gt)) sprintf("value>%g; ", gt) else ""
     rule <- sprintf(
         paste0(
             "same_subject; point_window[%d,%+d]; analyte=%s; %s",
