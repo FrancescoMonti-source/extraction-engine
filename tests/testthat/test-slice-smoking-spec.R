@@ -57,7 +57,7 @@ sm_fake <- function(prompt, type, system_prompt) {
 smoking_periop <- function() {
     variable_spec(
         template = documented_smoking_status_periop_template(),
-        name = "tabac_statut_periop", unit = "transplant", anchor = "anchor_date")
+        name = "tabac_statut_periop", output_one_row_per = "PATID", anchor = "anchor_date")
 }
 
 # Why: single-channel categorical assembly (combine = NULL, output = categorical)

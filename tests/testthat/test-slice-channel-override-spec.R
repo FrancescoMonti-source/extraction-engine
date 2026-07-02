@@ -21,7 +21,7 @@ co_sources <- list(pmsi_diag = co_diag)
 co_spec <- function(use) variable_spec(
     name = "diabetes_code_status",
     concept = diabetes_concept_spec(),
-    unit = "patient",
+    output_one_row_per = "PATID",
     anchor = "anchor_date",
     window = before_anchor(days = 1825L, grace_days = 7L),
     channels = list(pmsi_diag_e10_e14 = use),

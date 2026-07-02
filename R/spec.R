@@ -172,7 +172,7 @@ use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
         variable_spec(
             name = params$name,
             concept = concept,
-            unit = params$unit,
+            output_one_row_per = params$output_one_row_per,
             anchor = params$anchor,
             window = params$window,
             channels = .activate_channels(
@@ -206,10 +206,10 @@ variable_template <- function(name, concept, defaults = list(), build = NULL) {
 
 # A variable_spec is the concrete executable definition of one analytical variable.
 # It may be built from a template (template=) or written directly (concept=).
-variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NULL,
-                          window = NULL, channels = list(), output = NULL,
-                          combine = NULL, template = NULL, template_name = NULL,
-                          ...) {
+variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PATID",
+                          anchor = NULL, window = NULL, channels = list(),
+                          output = NULL, combine = NULL, template = NULL,
+                          template_name = NULL, ...) {
     if (!is.null(template)) {
         if (!inherits(template, "ee_variable_template")) {
             stop("template must be created with variable_template().", call. = FALSE)
@@ -221,7 +221,7 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
                  call. = FALSE)
         }
         if (!missing(name)) overrides$name <- name
-        if (!missing(unit)) overrides$unit <- unit
+        if (!missing(output_one_row_per)) overrides$output_one_row_per <- output_one_row_per
         if (!missing(anchor)) overrides$anchor <- anchor
         if (!missing(window)) overrides$window <- window
         if (!missing(channels)) overrides$channels <- channels
@@ -244,6 +244,17 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
     if (!inherits(concept, "ee_concept_spec")) {
         stop("variable_spec() requires a concept_spec().", call. = FALSE)
     }
+    # output_one_row_per is the OUTPUT GRAIN: the concrete task column one output row
+    # represents ("PATID" = one row per patient, "EVTID" = one row per stay). It is
+    # the group-by the engine honors (the task universe is supplied at this grain) and
+    # what run_variable checks the tasks frame against. NULL from a template default
+    # coalesces to patient grain.
+    if (is.null(output_one_row_per)) output_one_row_per <- "PATID"
+    if (!is.character(output_one_row_per) || length(output_one_row_per) != 1L ||
+        !nzchar(output_one_row_per)) {
+        stop("variable_spec() output_one_row_per must be one non-empty column name ",
+             "(e.g. \"PATID\" or \"EVTID\").", call. = FALSE)
+    }
     .require_named_list(channels, "channels")
     bad <- !vapply(channels, inherits, logical(1), "ee_channel_use")
     if (any(bad)) stop("channels must use use_channel().", call. = FALSE)
@@ -259,7 +270,8 @@ variable_spec <- function(name = NULL, concept = NULL, unit = NULL, anchor = NUL
     .check_expr_channels(combine, names(channels))
 
     .experimental_spec(
-        list(name = name, concept = concept, unit = unit, anchor = anchor,
+        list(name = name, concept = concept, output_one_row_per = output_one_row_per,
+             anchor = anchor,
              window = window, channels = channels, output = output,
              combine = combine, template = template_name),
         "ee_variable_spec")
@@ -372,7 +384,7 @@ resolve_variable_spec <- function(variable) {
         list(
             name = variable$name,
             concept = variable$concept$name,
-            unit = variable$unit,
+            output_one_row_per = variable$output_one_row_per,
             anchor = variable$anchor,
             window = variable$window,
             template = variable$template,

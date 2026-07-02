@@ -101,7 +101,7 @@ sources <- list(pmsi_diag = diag, documents = list(corpus = corpus, docs_index =
 # ---- the variable + the real caller -----------------------------------------
 spec <- variable_spec(
     template = diabetes_baseline_status_template(),
-    name = "diabete_pre_greffe", unit = "transplant", anchor = "anchor_date")
+    name = "diabete_pre_greffe", output_one_row_per = "PATID", anchor = "anchor_date")
 caller <- make_ollama_caller(model = MODEL, seed = SEED, max_tokens = 512L)
 
 cat(sprintf("Real run | multi-source OR | model=%s | subjects=%d | max_docs/subj=%d | seed=%d\n",

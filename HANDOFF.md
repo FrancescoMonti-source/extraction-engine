@@ -5371,3 +5371,47 @@ values are the proof of EVTID scoping; the decoy proves count = matching-and-in-
 **Files:** `R/structured.R` (grain_keys scoping + candidates return),
 `tests/testthat/test-slice-event-stay-grain-spec.R`, `HANDOFF.md`; memory
 `design-is-source-of-truth-code-lags`.
+
+---
+
+## 2026-07-02 -- `output_one_row_per` wired: grain is a declared, guarded, executor-driving axis
+
+Gives the output-grain axis a real job (was `unit`, stored-but-unread). `variable_spec(unit=)` is
+RENAMED to `variable_spec(output_one_row_per=)` -- a concrete grain COLUMN (default "PATID"), e.g.
+`output_one_row_per = "EVTID"` for stay grain. This is DESIGN §7's "Grain is the `unit`" made explicit
+and, per the ratified naming, frees `unit` for the measurement unit (`analyte_value(unit=)`).
+
+Three things now hang off it:
+1. **Drives structured scoping.** `run_variable` computes `grain_keys = unique(c("PATID",
+   output_one_row_per))` and threads it to `measure_code_presence` (which lost its EVTID column-
+   sniffing from the previous slice -- the declaration is now authoritative, one source of truth).
+   "PATID" -> subject scope; "EVTID" -> `c(PATID, EVTID)` stay scope.
+2. **Guarded.** `.check_output_grain` (in `run_variable`, up front) enforces DESIGN §7's linkability
+   check: the grain column(s) are present in the tasks frame, non-NA, and the grain-key combination
+   is UNIQUE across tasks (one output row per unit -- 1:1 task<->unit). Clear errors otherwise.
+3. **Lab loud-guard.** `measure_analyte_values` is still PATID-only, so the lab branch now ERRORS if
+   run at non-PATID grain rather than silently mis-scoping (subject labs leaking into every stay).
+   Converts the deferred-lab gap from a silent-wrong into a loud-unsupported.
+
+Framing kept straight: the engine does NOT group-by a column internally. The caller supplies the task
+universe already at grain (one task_id per unit); `output_one_row_per` DECLARES which column that is,
+drives evidence scoping, and is validated against the frame. The per-task reducer is the "summarise
+within grain."
+
+**Migration:** all 14 `unit =` call sites -> `output_one_row_per =`. Every one was a patient-grain
+fixture (the "surgery"/"transplant" labels were the ANCHOR event, not the output grain; anastomoses'
+EVTID is channel linkage, not grain) so all became "PATID"; only the event-stay probe is "EVTID". No
+`$unit` reads existed. `unit` is removed from `variable_spec` (loud "unused argument" if passed).
+
+**Probe (disposable, in-test).** `test-slice-output-grain-guard-spec.R`: declaring "EVTID" grain with
+patient tasks (no EVTID column) errors; declaring "PATID" grain with a repeated PATID errors. Two
+assertions, the guard's two substantive guarantees (linkability + 1:1). Suite 73 -> 75.
+
+**Deferred still open:** lab stay-grain scoping (now loud-guarded, not silent); count-of-empty-stay =
+NA not 0; `level` (channel attachment) ratified but unwired.
+
+**Files:** `R/spec.R` (rename + validate + store + template/inspect), `R/run_variable.R`
+(`.check_output_grain` guard + grain_keys threading + lab loud-guard), `R/structured.R` (grain_keys is
+now a param, sniffing removed), 11 test files + 3 scripts (`unit=`->`output_one_row_per=`),
+`tests/testthat/test-slice-output-grain-guard-spec.R`, `HANDOFF.md`; memories
+`design-is-source-of-truth-code-lags`, `variable-spec-boilerplate-explicit-names`, `MEMORY.md`.

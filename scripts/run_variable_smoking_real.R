@@ -81,7 +81,7 @@ sources <- list(documents = list(corpus = corpus, docs_index = docs_index))
 # ---- the variable + the real caller -----------------------------------------
 spec <- variable_spec(
     template = documented_smoking_status_periop_template(),
-    name = "tabac_statut_periop", unit = "transplant", anchor = "anchor_date")
+    name = "tabac_statut_periop", output_one_row_per = "PATID", anchor = "anchor_date")
 
 caller <- make_ollama_caller(model = MODEL, seed = SEED, max_tokens = 512L)
 

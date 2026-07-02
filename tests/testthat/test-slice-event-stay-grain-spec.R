@@ -41,7 +41,7 @@ es_concept <- concept_spec(
 es_spec <- variable_spec(
     name = "n_ccam_acts_in_stay",
     concept = es_concept,
-    unit = "stay",                               # grain declaration (grain itself = the task frame)
+    output_one_row_per = "EVTID",                # stay grain: one output row per (PATID, EVTID)
     anchor = NULL,
     window = NULL,                               # event-scoped: same EVTID, no date window
     channels = list(stay_acts = use_channel(reducer = function(x) length(x))),

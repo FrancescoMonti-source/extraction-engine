@@ -53,7 +53,7 @@ ana_fake <- function(prompt, type, system_prompt) {
 anastomoses_var <- function() {
     variable_spec(
         template = recipient_anastomoses_template(),
-        name = "recipient_anastomoses", unit = "transplant", anchor = "anchor_date")
+        name = "recipient_anastomoses", output_one_row_per = "PATID", anchor = "anchor_date")
 }
 
 # Why: one task yields several fields, and acceptance is FIELD-LEVEL -- a valid

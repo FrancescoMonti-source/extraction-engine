@@ -89,7 +89,7 @@ sources <- list(documents = list(corpus = corpus, docs_index = docs_index))
 # ---- the variable + the real caller -----------------------------------------
 spec <- variable_spec(
     template = recipient_anastomoses_template(),
-    name = "recipient_anastomoses", unit = "transplant", anchor = "anchor_date")
+    name = "recipient_anastomoses", output_one_row_per = "PATID", anchor = "anchor_date")
 caller <- make_ollama_caller(model = MODEL, seed = SEED, max_tokens = 1024L)
 
 cat(sprintf("Real run | event-scoped multi-field | model=%s | events=%d | max_docs/event=%d | seed=%d\n",

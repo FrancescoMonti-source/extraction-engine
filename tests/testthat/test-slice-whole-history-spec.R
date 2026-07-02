@@ -25,7 +25,7 @@ wh_variable <- function() {
     variable_spec(
         name = "diabetes_ever",
         concept = diabetes_concept_spec(),
-        unit = "patient",
+        output_one_row_per = "PATID",
         anchor = NULL,                 # no anchor
         window = NULL,                 # whole history
         channels = list(pmsi_diag_e10_e14 = use_channel()),
@@ -82,7 +82,7 @@ wht_variable <- function() {
     variable_spec(
         name = "diabetes_mention_ever",
         concept = diabetes_concept_spec(),
-        unit = "patient", anchor = NULL, window = NULL,   # whole history
+        output_one_row_per = "PATID", anchor = NULL, window = NULL,   # whole history
         channels = list(text_diabetes_mentions =
                             use_channel(method = llm_after_lucene())),
         output = bin_output())                            # single channel -> membership

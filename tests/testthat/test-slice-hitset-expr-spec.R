@@ -21,7 +21,7 @@ hx_var <- function(expr = "transplant_act & !dialysis_signal",
                                    dialysis_signal = use_channel())) {
     variable_spec(
         name = "transplant_without_dialysis", concept = hx_concept(),
-        unit = "transplant", anchor = "anchor_date",
+        output_one_row_per = "PATID", anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = channels, output = bin_output(),
         combine = expr)

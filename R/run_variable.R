@@ -133,9 +133,41 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }
 }
 
+# Grain guard: the OUTPUT GRAIN (variable$output_one_row_per) is carried by the task
+# universe -- one task row per grain unit. This checks the tasks frame actually is at
+# the declared grain and returns the linkage keys the structured executors scope by:
+# unique(c("PATID", output_one_row_per)) -- "PATID" alone at patient grain, c("PATID",
+# "EVTID") at stay grain. DESIGN §7: the variable_spec decides the unit; the engine
+# checks the tasks can be mechanically linked to it.
+.check_output_grain <- function(variable, tasks) {
+    grain <- variable$output_one_row_per %||% "PATID"
+    grain_keys <- unique(c("PATID", grain))
+    missing_cols <- setdiff(grain_keys, names(tasks))
+    if (length(missing_cols)) {
+        stop("output_one_row_per = '", grain, "' needs task column(s): ",
+             paste(missing_cols, collapse = ", "),
+             " -- grain is carried by the task universe (one task per ", grain, ").",
+             call. = FALSE)
+    }
+    for (k in grain_keys) {
+        if (anyNA(tasks[[k]])) {
+            stop("grain column '", k, "' has NA in tasks; every output row must ",
+                 "identify its ", grain, ".", call. = FALSE)
+        }
+    }
+    key <- do.call(paste, c(lapply(grain_keys, function(k) as.character(tasks[[k]])),
+                            sep = "\r"))
+    if (anyDuplicated(key)) {
+        stop("output_one_row_per = '", grain, "' requires one task per ", grain,
+             ", but the tasks frame repeats a ", paste(grain_keys, collapse = "+"),
+             " combination.", call. = FALSE)
+    }
+    grain_keys
+}
+
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
-                                  caller, model_name) {
+                                  caller, model_name, grain_keys = "PATID") {
     channel_def <- variable$concept$channels[[channel_name]]
     # Activation may locally override the concept's baseline selector (DESIGN §14.3):
     # use_channel(selector = ...) replaces the inherited selector for THIS variable
@@ -163,11 +195,18 @@ suppressWarnings(suppressMessages(library(dplyr)))
                  else .window_days(variable)
             measure_code_presence(
                 sources[[source]], tasks, codes = sel$codes, match = sel$match,
+                grain_keys = grain_keys,
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 code_col = bind$code_col, start_col = bind$start_col,
                 end_col = bind$end_col, field = variable$name, source = source)
         },
         lab = {
+            if (!identical(grain_keys, "PATID")) {
+                stop("Lab channel '", channel_name, "' does not yet support a non-",
+                     "patient output_one_row_per (measure_analyte_values is subject-",
+                     "scoped); wire stay-grain lab scoping before using it.",
+                     call. = FALSE)
+            }
             w <- .window_days(variable)     # neutral analyte executor: scopes candidate
             measure_analyte_values(         # rows; the reduction is the channel's reducer
                 sources[[source]], tasks,   # function, applied in assembly (numeric output)
@@ -573,6 +612,7 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
     if (!length(variable$channels)) {
         stop("variable_spec has no selected channels.", call. = FALSE)
     }
+    grain_keys <- .check_output_grain(variable, tasks)
     channel_results <- lapply(
         names(variable$channels),
         .run_selected_channel,
@@ -580,7 +620,8 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         tasks = tasks,
         sources = sources,
         caller = caller,
-        model_name = model_name)
+        model_name = model_name,
+        grain_keys = grain_keys)
     names(channel_results) <- names(variable$channels)
 
     channel_names <- names(variable$channels)

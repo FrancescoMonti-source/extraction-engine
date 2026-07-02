@@ -135,6 +135,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # tasks: task_id, PATID, anchor_date (anchor only when windowed).
 measure_code_presence <- function(source_table, tasks, codes,
                                   match = c("regex", "exact"),
+                                  grain_keys = "PATID",
                                   from_days = NULL, to_days = NULL,
                                   code_col = "diag", start_col = "DATENT",
                                   end_col = "DATSORT",
@@ -143,12 +144,11 @@ measure_code_presence <- function(source_table, tasks, codes,
     match <- match.arg(match)
     missing_end <- match.arg(missing_end)
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> whole history
-    # Grain comes from the supplied task universe (DESIGN §7): when tasks carry a
-    # non-NA EVTID (stay grain), evidence is scoped to the task's OWN stay, not just the
-    # subject. Closes the §7 executor-wiring gap ("EVTID is invariant across HDW rows").
-    # Patient-grain tasks (no EVTID column) keep the subject-only join.
-    stay_grain <- "EVTID" %in% names(tasks) && !all(is.na(tasks$EVTID))
-    grain_keys <- if (stay_grain) c("PATID", "EVTID") else "PATID"
+    # Grain is DECLARED by the variable (output_one_row_per) and passed as grain_keys by
+    # the caller (run_variable): "PATID" alone scopes by subject (patient grain);
+    # c("PATID","EVTID") scopes each task to its OWN stay (stay grain) -- closing the
+    # DESIGN §7 executor gap ("EVTID is invariant across HDW rows"). source_counts and
+    # the join both use grain_keys, so coverage is per grain unit.
     .validate_structured_inputs(
         tasks, source_table,
         unique(c("source_row_id", "PATID", "EVTID", "ELTID",
@@ -165,8 +165,8 @@ measure_code_presence <- function(source_table, tasks, codes,
         t_end = .clinical_date(.data[[end_col]]))
     tkeys <- tasks %>%
         transmute(task_id = as.character(task_id), PATID = as.character(PATID))
-    if (stay_grain) tkeys$EVTID <- as.character(tasks$EVTID)
-    if (windowed)   tkeys$anchor_date <- .clinical_date(tasks$anchor_date)
+    for (k in setdiff(grain_keys, "PATID")) tkeys[[k]] <- as.character(tasks[[k]])
+    if (windowed) tkeys$anchor_date <- .clinical_date(tasks$anchor_date)
 
     source_counts <- rows %>%
         filter(!is.na(PATID)) %>%

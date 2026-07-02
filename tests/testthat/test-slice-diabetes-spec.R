@@ -58,7 +58,7 @@ test_that("direct glucose variable_spec reduces the channel with a plain functio
     direct <- variable_spec(
         name = "perioperative_max_glucose",
         concept = concept,
-        unit = "surgery",
+        output_one_row_per = "PATID",
         anchor = "anchor_date",
         window = days_after(0L, 2L),
         channels = list(
@@ -100,7 +100,7 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
                                    "event_end", "code", "source_item_id"),
                 linkage = "subject")))
     esrd_var <- variable_spec(
-        name = "esrd_status", concept = esrd_concept, unit = "patient",
+        name = "esrd_status", concept = esrd_concept, output_one_row_per = "PATID",
         anchor = "anchor_date",
         window = before_anchor(days = 1825L, grace_days = 7L),
         channels = list(esrd_code = use_channel()),

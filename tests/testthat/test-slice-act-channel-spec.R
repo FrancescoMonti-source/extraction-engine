@@ -31,7 +31,7 @@ act_var <- function(codes = "JAFA001", match = "exact") {
                                    "source_item_id"),
                 linkage = "subject")))
     variable_spec(
-        name = "transplant_act", concept = concept, unit = "patient",
+        name = "transplant_act", concept = concept, output_one_row_per = "PATID",
         anchor = "anchor_date",
         window = before_anchor(days = 30L, grace_days = 0L),
         channels = list(transplant_act = use_channel()),
