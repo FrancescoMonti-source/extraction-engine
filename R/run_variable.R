@@ -165,6 +165,55 @@ suppressWarnings(suppressMessages(library(dplyr)))
     grain_keys
 }
 
+# Derived-anchor PASS: when variable$anchor is an index_event(), compute a per-subject
+# anchor_date BEFORE windowing -- find each subject's event matching the selector in the
+# named source and take its date at role `at`. This is a resolution pass producing
+# (PATID, anchor_date), NOT an inter-channel dependency. A string/NULL anchor means the
+# caller already supplied tasks$anchor_date, so tasks pass through unchanged.
+.resolve_anchor <- function(variable, tasks, sources) {
+    anchor <- variable$anchor
+    if (!inherits(anchor, "ee_index_event")) return(tasks)
+
+    src <- sources[[anchor$source]]
+    if (is.null(src)) {
+        stop("index_event anchor needs source '", anchor$source, "' in sources.",
+             call. = FALSE)
+    }
+    spec <- if (anchor$source %in% names(EE_SOURCES)) EE_SOURCES[[anchor$source]]
+            else NULL
+    roles <- if (is.null(spec)) list() else source_roles(spec)
+    code_col <- roles$code %||% NULL
+    date_col <- roles[[anchor$at]] %||% NULL
+    if (is.null(code_col) || is.null(date_col)) {
+        stop("index_event: source '", anchor$source, "' lacks a 'code' role or a '",
+             anchor$at, "' date role.", call. = FALSE)
+    }
+    sel <- anchor$selector
+    matched <- src %>%
+        transmute(PATID = as.character(PATID),
+                  code_val = as.character(.data[[code_col[[1]]]]),
+                  anchor_date = .clinical_date(.data[[date_col[[1]]]])) %>%
+        filter(.code_matches(code_val, sel$codes, sel$match))
+
+    dup <- matched %>% count(PATID) %>% filter(n > 1L)
+    if (nrow(dup)) {
+        stop("index_event matched multiple events for subject(s): ",
+             paste(dup$PATID, collapse = ", "),
+             " -- single-match only for now.", call. = FALSE)
+    }
+    anchors <- matched %>% distinct(PATID, anchor_date)
+
+    tasks$anchor_date <- NULL
+    tasks <- tasks %>% left_join(anchors, by = "PATID")
+    unresolved <- unique(tasks$PATID[is.na(tasks$anchor_date)])
+    if (length(unresolved)) {
+        stop("index_event found no matching event for subject(s): ",
+             paste(unresolved, collapse = ", "),
+             " -- every unit needs its index event.", call. = FALSE)
+    }
+    tasks
+}
+
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
                                   caller, model_name, grain_keys = "PATID") {
@@ -613,6 +662,7 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         stop("variable_spec has no selected channels.", call. = FALSE)
     }
     grain_keys <- .check_output_grain(variable, tasks)
+    tasks <- .resolve_anchor(variable, tasks, sources)
     channel_results <- lapply(
         names(variable$channels),
         .run_selected_channel,

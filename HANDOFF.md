@@ -5415,3 +5415,41 @@ NA not 0; `level` (channel attachment) ratified but unwired.
 now a param, sniffing removed), 11 test files + 3 scripts (`unit=`->`output_one_row_per=`),
 `tests/testthat/test-slice-output-grain-guard-spec.R`, `HANDOFF.md`; memories
 `design-is-source-of-truth-code-lags`, `variable-spec-boilerplate-explicit-names`, `MEMORY.md`.
+
+---
+
+## 2026-07-02 -- index_event derived anchor: the first thing that reads `variable$anchor`
+
+An anchor can be a task COLUMN (`anchor = "inclusion_date"`, one date supplied per task) or now
+DERIVED from an event. `index_event(source, selector, at = "event_start")` (`R/operators.R`, class
+`ee_index_event`) is the GENERIC derived anchor -- DESIGN §14's `transplant_date()`/`surgery_date()`
+are domain-specific forms. Per subject: find the event in `source` whose `code` role matches
+`selector`, take its date at role `at` ("event_start"=DATENT, "event_end", "date").
+
+**Mechanism = an anchor-resolution PASS, not an inter-channel dependency.** New `.resolve_anchor` in
+`run_variable` runs AFTER `.check_output_grain`, BEFORE channel dispatch: if `variable$anchor` is an
+`ee_index_event`, it computes per-subject `(PATID, anchor_date)` and injects `anchor_date` into tasks;
+then normal windowing keys off it. A string/NULL anchor passes through unchanged (caller supplied
+`tasks$anchor_date`). NB `variable$anchor` was previously set-but-UNREAD (same shape as `unit` before
+this session) -- `.resolve_anchor` is the first reader; existing string-anchor tests are untouched
+because the pass no-ops on non-`ee_index_event`.
+
+Probed on `pmsi_diag`, which already maps `DATENT`->`event_start` (data.R), so NO source-spec change
+was needed. (ACTE_SOURCE still lacks `event_start`; the "stay with CCAM act X, anchored at its DATENT"
+variant needs `ACTE_SOURCE` to map DATENT->event_start + act fixtures carrying DATENT -- deferred, no
+consumer yet.)
+
+**Probe (disposable).** Two patients, SAME measured-code date (E11 on 2024-05-20) but DIFFERENT index
+events (Z94 stay starting 06-01 vs 01-01). anchor = index_event(pmsi_diag, icd10("^Z94"),
+at="event_start"); 30-day before-anchor window over an E11 code channel. P1 present (1), P2 absent (0)
+-- same code date, opposite outcome, so the anchor is derived per-subject. Plus a contract test:
+multiple index events per subject ERROR (single-match is a deliberate boundary; silent-arbitrary would
+give a wrong anchor -> wrong cohort membership invisibly). Suite 75 -> 78.
+
+**Contracts / deferred:** single-match only (multi-match -> candidate_selection, future); a unit with
+NO matching event ERRORS (every unit needs its index event -- graceful partial-cohort/NA handling
+deferred); anchor resolved per SUBJECT (PATID), stay-grain index_event out of scope for now.
+
+**Files:** `R/operators.R` (`index_event()` constructor), `R/run_variable.R` (`.resolve_anchor` pass +
+call), `tests/testthat/test-slice-index-event-spec.R`, `HANDOFF.md`; memory
+`index-event-derived-anchor`, `MEMORY.md`.

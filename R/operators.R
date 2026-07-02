@@ -23,6 +23,29 @@ days_after <- function(from_days = 0L, to_days) {
         "ee_window")
 }
 
+# --- derived anchors ----------------------------------------------------------
+# An anchor may be a task COLUMN (anchor = "inclusion_date", one date supplied per task)
+# or DERIVED from an event. index_event() is the GENERIC derived anchor -- DESIGN §14's
+# transplant_date()/surgery_date() are domain-specific forms of it: per subject, find the
+# event in `source` whose `code` matches `selector`, and anchor at its `at` date-role
+# ("event_start" = stay start / DATENT, "event_end", or "date"). run_variable resolves it
+# in an anchor PASS -- producing (PATID, anchor_date) before windowing, NOT an inter-
+# channel dependency. Single match per subject for now (multiple -> error;
+# candidate_selection(arrange + limit) is the future multi-match path).
+index_event <- function(source, selector, at = "event_start") {
+    if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
+        stop("index_event() needs one source name.", call. = FALSE)
+    }
+    if (!inherits(selector, "ee_selector")) {
+        stop("index_event() needs a selector (e.g. icd10()/ccam()).", call. = FALSE)
+    }
+    if (!is.character(at) || length(at) != 1L || !nzchar(at)) {
+        stop("index_event() `at` must be one date-role name.", call. = FALSE)
+    }
+    .experimental_spec(list(source = source, selector = selector, at = at),
+                       "ee_index_event")
+}
+
 # --- within-channel reducers --------------------------------------------------
 # A within-channel reducer is just a plain function numeric -> scalar, supplied on
 # the variable's channel activation: use_channel(reducer = function(x) max(x, na.rm =
