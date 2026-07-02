@@ -28,7 +28,8 @@ days_after <- function(from_days = 0L, to_days) {
 # or DERIVED from an event. index_event() is the GENERIC derived anchor -- DESIGN §14's
 # transplant_date()/surgery_date() are domain-specific forms of it: per subject, find the
 # event in `source` whose `code` matches `selector`, and anchor at its `at` date-role
-# ("event_start" = stay start / DATENT, "event_end", or "date"). run_variable resolves it
+# ("event_start" = stay start / DATENT, "event_end", or "point_date" = a point-dated
+# record's own instant, e.g. DATEACTE / DATEXAM). run_variable resolves it
 # in an anchor PASS -- producing (PATID, anchor_date) before windowing, NOT an inter-
 # channel dependency. Single match per subject for now (multiple -> error;
 # candidate_selection(arrange + limit) is the future multi-match path).

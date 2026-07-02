@@ -33,7 +33,7 @@ sg_concept <- function() concept_spec(
         glucose = lab_channel(
             source = "biology",
             selector = analyte("GLU.GLU"),
-            required_roles = c("subject_id", "event_id", "date", "value_num",
+            required_roles = c("subject_id", "event_id", "point_date", "value_num",
                                "value_str", "analyte", "source_item_id",
                                "source_result_id"),
             linkage = "subject")))

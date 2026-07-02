@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 # This is the SOURCE LAYER: the only place raw warehouse column names appear.
 # Each source is a DECLARATION (`source_spec`) mapping raw columns -> canonical
-# roles (subject_id / event_id / source_item_id / date / event_start /
+# roles (subject_id / event_id / source_item_id / point_date / event_start /
 # event_end / value_num / value_str / analyte / code / text / ...); one generic
 # `normalize_source()` applies the shared normalization (Europe/Paris clinical
 # dates, numeric coercion, source-row ids, presence/uniqueness checks). A new
@@ -196,7 +196,7 @@ DOCS_SOURCE <- source_spec("docs index",
         ELTID   = col("ELTID",   "chr",  roles = "source_item_id"),
         PATID   = col("PATID",   "chr",  roles = "subject_id"),
         EVTID   = col("EVTID",   "chr",  roles = "event_id"),
-        RECDATE = col("RECDATE", "date", roles = "date"),
+        RECDATE = col("RECDATE", "date", roles = "point_date"),
         RECTYPE = col("RECTYPE", "chr",  roles = "document_type")),
     unique_cols = "ELTID",
     module = "doceds",
@@ -245,7 +245,7 @@ BIOL_SOURCE <- source_spec("biol results",
         EVTID     = col("EVTID",                 "chr",  roles = "event_id"),
         ELTID     = col("ELTID",                 "chr",  roles = "source_item_id"),
         BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  roles = "source_result_id"),
-        DATEXAM   = col("DATEXAM",               "date", roles = "date"),
+        DATEXAM   = col("DATEXAM",               "date", roles = "point_date"),
         analyte   = col("TYPEANA",               "chr",  roles = "analyte"),
         value_raw = col("NUMRES",                "chr",  roles = "value_str"),
         value     = col("NUMRES",                "num",  roles = "value_num")),
@@ -272,7 +272,7 @@ ACTE_SOURCE <- source_spec("pmsi actes",
         EVTID    = col("EVTID",    "chr",  roles = "event_id"),
         ELTID    = col("ELTID",    "chr",  roles = "source_item_id"),
         CODEACTE = col("CODEACTE", "chr",  roles = "code"),
-        DATEACTE = col("DATEACTE", "date", roles = "date")),
+        DATEACTE = col("DATEACTE", "date", roles = "point_date")),
     source_row_id = "pmsi_actes",
     module = "pmsi",
     table = "actes",

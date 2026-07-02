@@ -43,14 +43,14 @@ diabetes_concept_spec <- function() {
                     "diabete OR diabetique OR insulinotherapie OR insuline"),
                 extractor = diabetes_text_definition(),
                 native_grain = "document_sentence",
-                required_roles = c("subject_id", "event_id", "date", "text",
+                required_roles = c("subject_id", "event_id", "point_date", "text",
                                    "source_item_id"),
                 linkage = "subject"),
             glucose_measurements = lab_channel(
                 source = "biology",
                 selector = analyte("GLU.GLU"),
                 native_grain = "lab_result",
-                required_roles = c("subject_id", "event_id", "date",
+                required_roles = c("subject_id", "event_id", "point_date",
                                    "value_num", "value_str", "analyte",
                                    "source_item_id", "source_result_id"),
                 linkage = "subject")))

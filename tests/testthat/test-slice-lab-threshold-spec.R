@@ -34,7 +34,7 @@ lab_concept <- function() concept_spec(
         glucose = lab_channel(
             source = "biology",
             selector = analyte("GLU.GLU"),
-            required_roles = c("subject_id", "event_id", "date", "value_num",
+            required_roles = c("subject_id", "event_id", "point_date", "value_num",
                                "value_str", "analyte", "source_item_id",
                                "source_result_id"),
             linkage = "subject")))
@@ -72,7 +72,7 @@ test_that("a thresholded lab hit joins a boolean combine with a code channel", {
         channels = list(
             glucose = lab_channel(
                 source = "biology", selector = analyte("GLU.GLU"),
-                required_roles = c("subject_id", "event_id", "date", "value_num",
+                required_roles = c("subject_id", "event_id", "point_date", "value_num",
                                    "value_str", "analyte", "source_item_id",
                                    "source_result_id"),
                 linkage = "subject"),

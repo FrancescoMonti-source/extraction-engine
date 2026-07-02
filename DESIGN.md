@@ -105,7 +105,7 @@ subject_id
 event_id
 source_item_id
 source_row_id
-date
+point_date
 event_start
 event_end
 code
@@ -118,6 +118,8 @@ document_type
 subject_sex
 subject_age
 ```
+
+Time roles describe temporal *structure*, not clinical meaning. A point-dated record (a CCAM act, a lab exam, a record entry) occupies a single instant and carries `point_date`; an interval entity (a stay/encounter — the "event", keyed by `event_id`) has two distinguishable endpoints and carries `event_start`/`event_end`. A source is one shape or the other (`source_time_kind`). The role names the structural slot, so the concept-specific column (`DATEACTE`, `DATEXAM`) is mapped to a generic role in the source layer and never leaks into a `variable_spec`.
 
 `source_spec` also carries source metadata that is not a payload role:
 
@@ -181,7 +183,7 @@ ccam_act_source <- source_spec(
     event_id       = "EVTID",
     source_item_id = "ELTID",
     code           = "CODEACTE",
-    date           = "DATEACTE",
+    point_date     = "DATEACTE",
     event_start    = "DATENT",
     event_end      = "DATSORT",
     subject_sex    = "PATSEX",

@@ -34,7 +34,7 @@ es_concept <- concept_spec(
         stay_acts = act_channel(
             source = "pmsi_actes",
             selector = ccam("JAFA001", match = "exact"),
-            required_roles = c("subject_id", "event_id", "date", "code",
+            required_roles = c("subject_id", "event_id", "point_date", "code",
                                "source_item_id"),
             linkage = "subject")))
 

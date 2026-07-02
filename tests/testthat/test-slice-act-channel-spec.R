@@ -27,7 +27,7 @@ act_var <- function(codes = "JAFA001", match = "exact") {
             transplant_act = act_channel(
                 source = "pmsi_actes",
                 selector = ccam(codes, match = match),
-                required_roles = c("subject_id", "event_id", "date", "code",
+                required_roles = c("subject_id", "event_id", "point_date", "code",
                                    "source_item_id"),
                 linkage = "subject")))
     variable_spec(
