@@ -143,6 +143,12 @@ measure_code_presence <- function(source_table, tasks, codes,
     match <- match.arg(match)
     missing_end <- match.arg(missing_end)
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> whole history
+    # Grain comes from the supplied task universe (DESIGN §7): when tasks carry a
+    # non-NA EVTID (stay grain), evidence is scoped to the task's OWN stay, not just the
+    # subject. Closes the §7 executor-wiring gap ("EVTID is invariant across HDW rows").
+    # Patient-grain tasks (no EVTID column) keep the subject-only join.
+    stay_grain <- "EVTID" %in% names(tasks) && !all(is.na(tasks$EVTID))
+    grain_keys <- if (stay_grain) c("PATID", "EVTID") else "PATID"
     .validate_structured_inputs(
         tasks, source_table,
         unique(c("source_row_id", "PATID", "EVTID", "ELTID",
@@ -157,21 +163,18 @@ measure_code_presence <- function(source_table, tasks, codes,
         code = as.character(.data[[code_col]]),
         t_start = .clinical_date(.data[[start_col]]),
         t_end = .clinical_date(.data[[end_col]]))
-    tkeys <- if (windowed) {
-        tasks %>% transmute(
-            task_id = as.character(task_id), PATID = as.character(PATID),
-            anchor_date = .clinical_date(anchor_date))
-    } else {
-        tasks %>% transmute(
-            task_id = as.character(task_id), PATID = as.character(PATID))
-    }
+    tkeys <- tasks %>%
+        transmute(task_id = as.character(task_id), PATID = as.character(PATID))
+    if (stay_grain) tkeys$EVTID <- as.character(tasks$EVTID)
+    if (windowed)   tkeys$anchor_date <- .clinical_date(tasks$anchor_date)
 
     source_counts <- rows %>%
         filter(!is.na(PATID)) %>%
-        count(PATID, name = "n_source_rows")
+        group_by(across(all_of(grain_keys))) %>%
+        summarise(n_source_rows = n(), .groups = "drop")
 
     scoped <- rows %>%
-        inner_join(tkeys, by = "PATID", relationship = "many-to-many")
+        inner_join(tkeys, by = grain_keys, relationship = "many-to-many")
     if (windowed) {
         scoped <- scoped %>% filter(.overlaps_interval(
             t_start, t_end, anchor_date + from_days, anchor_date + to_days,
@@ -197,7 +200,7 @@ measure_code_presence <- function(source_table, tasks, codes,
             n_matching_rows = sum(is_target),
             .groups = "drop")
     coverage <- tkeys %>%
-        left_join(source_counts, by = "PATID") %>%
+        left_join(source_counts, by = grain_keys) %>%
         left_join(counts, by = "task_id") %>%
         mutate(
             across(c(n_source_rows, n_scope_rows, n_matching_rows),
@@ -246,10 +249,19 @@ measure_code_presence <- function(source_table, tasks, codes,
             status = processing_state,
             error = NA_character_)
 
+    # Candidate rows for a NUMERIC output over a coded/act channel (e.g. COUNT of acts
+    # in a stay): one per matching source row, value = 1L, collapsed by the channel's
+    # plain-function reducer in assembly (length/sum -> count). Additive: the membership
+    # face (values: present/absent) is unchanged -- both faces ride the same result.
+    candidates <- observations %>%
+        filter(is_target) %>%
+        transmute(task_id, source_row_id, value = 1L, measurement_time = t_start)
+
     .assert_evidence_resolves(evidence, observations, rows)
     list(
         coverage = coverage,
         values = values,
+        candidates = candidates,
         evidence = evidence,
         observations = observations,
         derivation = derivation)

@@ -5322,3 +5322,52 @@ assertions; passes the prune filter -- no other test protects the §14.3 overrid
 text threading), `tests/testthat/test-slice-channel-override-spec.R`, `HANDOFF.md`; memories
 `engine-scope-inclusion-and-extraction`, `where-filter-dimension-deferred`,
 `design-is-source-of-truth-code-lags`, `MEMORY.md`.
+
+---
+
+## 2026-07-02 -- Event/stay-grain structured executor (code/act): EVTID scope + numeric count
+
+Closes the code/act half of the DESIGN §7 (~line 570) executor-wiring gap. `measure_code_presence`
+(the neutral code + act membership executor) now does two additive things:
+
+1. **Stay-grain scoping.** Grain comes from the SUPPLIED TASK UNIVERSE (DESIGN §7: "one output row
+   per unit in the supplied task universe"), and it is carried PER TASK -- each task row says which
+   subject AND which stay it is. So when the tasks frame carries a non-NA `EVTID` (stay grain), the
+   executor scopes evidence by `c(PATID, EVTID)` instead of `PATID` alone; patient-grain tasks (no
+   EVTID column) keep the subject-only join. `source_counts`/coverage group by the same `grain_keys`.
+   Important framing: the engine does NOT group-by a column internally -- the caller supplies tasks
+   pre-grained (one task_id per unit) and the executor scopes each task's evidence; the per-task
+   reducer is the "summarise within grain."
+
+2. **Numeric count over a structured channel.** The executor now also returns `candidates` (one row
+   per matching source row, `value = 1L`). A `num_output()` over a code/act channel with
+   `use_channel(reducer = function(x) length(x))` then counts them via the EXISTING numeric assembly
+   (`.single_numeric_variable`). No bespoke count operator -- "reducers are plain functions"
+   (`length`/`sum` both give the count). The membership face (`values`: present/absent) is unchanged;
+   both faces ride the same result list.
+
+**Probe (disposable, in-test).** Patient P1, two stays: EV1 = 2 matching CCAM acts (JAFA001) + 1 decoy
+(HGPC015); EV2 = 1 matching act. Stay-grain tasks (`window = NULL`, event-scoped). EV1 counts 2, EV2
+counts 1 -- a PATID-only join would give BOTH 3 (each stay would see all of P1's matches), so the
+values are the proof of EVTID scoping; the decoy proves count = matching-and-in-stay. Suite 71 -> 73.
+
+**Decisions / deferred (flag for ratification):**
+- **`output_one_row_per` NOT wired this slice.** Grain is task-frame-driven (the correct locus: each
+  task carries its own subject+stay), so no param is needed for the executor to scope correctly.
+  `unit` remains stored-but-unread. Renaming `unit`->`output_one_row_per` AND giving it a job (a
+  validation guard: "the task frame's task_id is 1:1 with the declared grain column, and carries it")
+  is a clean SEPARATE slice -- doing the rename now is label->column churn across ~8 disposable test
+  files without a consumer. Recommend deferring; easy to add.
+- **Lab executor still PATID-only.** `measure_analyte_values` needs the identical `grain_keys` change
+  for stay-grain labs; deferred (no lab-stay-grain consumer/probe yet -- avoid untested code). A
+  mixed code+lab variable at stay grain would currently scope code by stay but lab by subject; no such
+  variable exists yet, and the first one written would catch it via its own probe. Documented so it's
+  not forgotten.
+- **Count of an empty stay = NA, not 0.** `.single_numeric_variable` short-circuits empty candidates
+  to NA/partial (right for max/mean, debatable for count). The probe only asserts non-empty stays.
+  Count-identity (0-fill) is a deferred question; a fix would let the reducer own the empty case
+  (always call it) but that touches the max-glucose NA expectation -- out of scope here.
+
+**Files:** `R/structured.R` (grain_keys scoping + candidates return),
+`tests/testthat/test-slice-event-stay-grain-spec.R`, `HANDOFF.md`; memory
+`design-is-source-of-truth-code-lags`.
