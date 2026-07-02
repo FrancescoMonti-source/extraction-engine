@@ -293,16 +293,18 @@ measure_code_presence <- function(source_table, tasks, codes,
 #
 # source_table: normalized result rows
 #   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
-# tasks: task_id, PATID, anchor_date.
+# tasks: task_id + the grain_keys columns (PATID, or PATID+EVTID for stay grain);
+#   anchor_date only when windowed (a NULL window is event-scoped, no anchor needed).
 measure_analyte_values <- function(source_table, tasks, analytes,
-                                   gt = NULL,
+                                   gt = NULL, grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
                                    field = "analyte_value", source = "biology") {
+    windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> event scope
     .validate_structured_inputs(
         tasks, source_table,
         c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID", "DATEXAM",
           "analyte", "value", "value_raw"),
-        "biology rows")
+        "biology rows", require_anchor = windowed)
 
     biol <- source_table %>% transmute(
         source_row_id = as.character(source_row_id),
@@ -314,20 +316,27 @@ measure_analyte_values <- function(source_table, tasks, analytes,
         analyte = as.character(analyte),
         value = suppressWarnings(as.numeric(value)),
         value_raw = as.character(value_raw))
-    tkeys <- tasks %>% transmute(
-        task_id = as.character(task_id),
-        PATID = as.character(PATID),
-        anchor_date = .clinical_date(anchor_date))
+    # Grain is DECLARED by the variable (output_one_row_per) and passed as grain_keys:
+    # "PATID" scopes by subject; c("PATID","EVTID") scopes each task to its OWN stay
+    # (stay grain), the DESIGN §7 executor gap ("EVTID is invariant across HDW rows").
+    tkeys <- tasks %>%
+        transmute(task_id = as.character(task_id), PATID = as.character(PATID))
+    for (k in setdiff(grain_keys, "PATID")) tkeys[[k]] <- as.character(tasks[[k]])
+    if (windowed) tkeys$anchor_date <- .clinical_date(tasks$anchor_date)
     target_analytes <- toupper(trimws(as.character(analytes)))
 
     source_counts <- biol %>%
         filter(!is.na(PATID)) %>%
-        count(PATID, name = "n_source_rows")
+        group_by(across(all_of(grain_keys))) %>%
+        summarise(n_source_rows = n(), .groups = "drop")
 
-    observations <- biol %>%
-        inner_join(tkeys, by = "PATID", relationship = "many-to-many") %>%
-        filter(.within_point(
-            DATEXAM, anchor_date + from_days, anchor_date + to_days)) %>%
+    scoped <- biol %>%
+        inner_join(tkeys, by = grain_keys, relationship = "many-to-many")
+    if (windowed) {
+        scoped <- scoped %>% filter(.within_point(
+            DATEXAM, anchor_date + from_days, anchor_date + to_days))
+    }
+    observations <- scoped %>%
         mutate(
             field = field,
             source = source,
@@ -336,7 +345,8 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                 toupper(trimws(analyte)) %in% target_analytes &
                 .passes_threshold(value, gt),
             selected_evidence = is_target,     # every candidate is evidence
-            scope_reason = "point time inside the task window",
+            scope_reason = if (windowed) "point time inside the task window"
+                           else "same grain unit (no window)",
             observation_reason = if_else(is_target,
                 "analyte matches the declared concept",
                 "analyte outside the declared concept"),
@@ -353,7 +363,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             .groups = "drop")
 
     coverage <- tkeys %>%
-        left_join(source_counts, by = "PATID") %>%
+        left_join(source_counts, by = grain_keys) %>%
         left_join(counts, by = "task_id") %>%
         mutate(
             across(
@@ -400,12 +410,17 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
 
     threshold_txt <- if (!is.null(gt)) sprintf("value>%g; ", gt) else ""
+    scope_txt <- paste(grain_keys, collapse = "+")
+    window_txt <- if (windowed) {
+        sprintf("point_window[%d,%+d]; ", as.integer(from_days), as.integer(to_days))
+    } else {
+        "event_scope (no window); "
+    }
     rule <- sprintf(
         paste0(
-            "same_subject; point_window[%d,%+d]; analyte=%s; %s",
+            "grain=%s; %sanalyte=%s; %s",
             "candidates reduced by the channel's reducer; unit ignored"),
-        as.integer(from_days), as.integer(to_days),
-        paste(analytes, collapse = ","), threshold_txt)
+        scope_txt, window_txt, paste(analytes, collapse = ","), threshold_txt)
     derivation <- coverage %>%
         transmute(
             task_id,

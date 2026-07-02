@@ -250,17 +250,16 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 end_col = bind$end_col, field = variable$name, source = source)
         },
         lab = {
-            if (!identical(grain_keys, "PATID")) {
-                stop("Lab channel '", channel_name, "' does not yet support a non-",
-                     "patient output_one_row_per (measure_analyte_values is subject-",
-                     "scoped); wire stay-grain lab scoping before using it.",
-                     call. = FALSE)
-            }
-            w <- .window_days(variable)     # neutral analyte executor: scopes candidate
-            measure_analyte_values(         # rows; a thresholded selector (analyte_value)
-                sources[[source]], tasks,   # folds a value predicate into the target set --
-                analytes = .selector_codes(selector, "codes"),  # membership face; the value
-                gt = selector$gt,               # face reduces candidates in assembly
+            # Neutral analyte executor: scopes candidate rows by grain (subject or stay)
+            # and window. A thresholded selector (analyte_value) folds a value predicate
+            # into the target set (membership face); the value face reduces candidates in
+            # assembly. A NULL window is event-scoped (rows sharing the task's grain unit).
+            w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
+                 else .window_days(variable)
+            measure_analyte_values(
+                sources[[source]], tasks,
+                analytes = .selector_codes(selector, "codes"),
+                gt = selector$gt, grain_keys = grain_keys,
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 field = variable$name, source = source)
         },

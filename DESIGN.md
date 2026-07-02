@@ -567,7 +567,7 @@ stays with a diabetes text hit and a glucose result during the same stay-level t
 
 `combine` never takes a grain parameter. It is set algebra over the current task universe, and the `unit` sets that universe.
 
-Current migration gap: event/stay-grain eligibility is not uniformly implemented across all executors yet. The text path can already resolve event-scoped eligibility for event-linked document variables; structured code and lab executors still need explicit event/stay linkage support. That extension should be additive because `EVTID` is invariant across HDW rows — the gap is executor wiring, not missing identifiers.
+Event/stay-grain eligibility is resolved by grain-aware scoping (`grain_keys`): the text path resolves event-scoped eligibility for event-linked document variables, and the structured code/act and lab executors scope each task to its own stay when `output_one_row_per = "EVTID"`. The extension was additive, as expected, because `EVTID` is invariant across HDW rows — it was executor wiring, not missing identifiers.
 
 ------------------------------------------------------------------------
 
