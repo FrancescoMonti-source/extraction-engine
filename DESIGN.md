@@ -1482,3 +1482,19 @@ Future agents should not violate these principles.
 27. Provenance is part of the output contract, not optional documentation.
 28. For single-channel bin_output(), the final value is still observed membership 0/1. Channel hit NA becomes value 0 with incomplete coverage/audit status, not a missing value.
 29. Tests should protect semantic contracts, not incidental implementation structure. Regression tests and migration tests are useful, but they must not freeze temporary wrappers, object layouts, or current code paths as architectural truth.
+
+## 16. Deferred capabilities (gated on consumer)
+
+These are declared parts of the target contract that are **reserved, not built**. Each is gated on a concrete downstream consumer; building it before that consumer exists is speculative and forbidden by invariant discipline. This section replaces the retired `MIGRATION.md` shipped-vs-target tracker — the migration it tracked is complete, and what remained was either done bookkeeping (dropped) or the forward-looking deferrals below.
+
+1. **`.lab_source_binding()` — role-resolved lab columns.** The lab executor (`measure_analyte_values`) still names biology columns directly (`DATEXAM` / `analyte` / `value` / `value_raw` / `BIOL_ID`) because biology is a single source, so nothing forces role-resolution (contrast the code/act path, which is role-driven precisely because it has two coded sources with different physical code columns). *Consumer:* a second biology source — e.g. microbiology results. When it lands, the response is role-resolution parity with the code path, not any `redsan` auto-seeding (no such API exists; the source registry stays hand-declared).
+
+2. **`llm_after_lucene(...)` declarative signature.** The text method is a declarative tag today; its method-specific knobs (`prompt`, `type`, `candidates`, `positive_hit_when`) live in the `extractor` bundle that dispatch consumes, while `inspect()` surfaces the tag. The target folds those knobs *into* the `llm_after_lucene(candidates = llm_candidate_selection(arrange=..., limit=...), prompt=..., type=..., positive_hit_when=...)` signature. `llm_candidate_selection()` is the reserved name for the ordering+limiting rule. *Consumer:* text retrieval running in-engine (today the text source is pre-retrieved, so an arrange/limit knob would be set-but-not-read). An unread knob is not carried in the meantime.
+
+3. **`positive_hit_when` response-to-hit literal.** Response-to-hit mapping is currently the binary parser's `documented` → `present` → hit. The target exposes an explicit literal declaring which response state becomes `hit = TRUE` (see invariant 20). *Consumer:* a variable needing a mapping the parser does not already bake in.
+
+4. **Broadened `inspect()` / `resolve_variable_spec()`.** A minimal experimental form exists for concept, channel, and variable specs. The target exposes inherited channel defaults and the final executable view. *Consumer:* later slices that reveal missing fields; broaden only then.
+
+5. **Public execution surface (temporary adapters).** The runner reuses `measure_*()` / `run_extraction()` as temporary adapters — they are generic over their parameters but are not the intended public execution architecture. *Consumer:* a deliberate design of the public execution surface; until then the adapters stand.
+
+6. **Role-named output columns.** The source layer resolves *inputs* from canonical roles, but emitted frames still use the historical runner column names (the target role vocabulary is exposed through source metadata, not yet on output frames); internal output `$kind` likewise keeps the binary/number/categorical/fields vocabulary. *Consumer:* a downstream reader that needs role-named output columns.

@@ -24,8 +24,7 @@ Rscript tests/testthat.R
 
 Start with:
 
-- **[DESIGN.md](DESIGN.md)** — the target architecture and vocabulary contract.
-- **[MIGRATION.md](MIGRATION.md)** — shipped-vs-target implementation gaps.
+- **[DESIGN.md](DESIGN.md)** — the target architecture and vocabulary contract (§16 lists deferred capabilities gated on a consumer).
 - **[HANDOFF.md](HANDOFF.md)** — chronological collaboration log for maintainers.
 
 In one sentence: ellmer handles LLM transport; this project gathers dated clinical
