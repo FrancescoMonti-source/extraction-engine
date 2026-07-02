@@ -5117,8 +5117,9 @@ Migration to the target vocab is complete, so the inspectable back-compat labels
   role-driven because it *had* to be (two coded sources, different code columns); biology has a
   **single source**, so there is no second consumer forcing role-resolution. Add the binding
   when a second biology source appears. NOT built speculatively.
-- `redsan::edsan_sources()` seeding -- specs are hand-declared; wire when a real multi-warehouse
-  consumer exists.
+- Source-registry auto-seeding: NOT a thing. `redsan` (v0.1.0) exposes only `get_edsan`,
+  `process_pmsi`, `process_biol` -- there is no source-registry API to seed from, and auto-seeding
+  is not planned. Source specs are and stay hand-declared (`EE_SOURCES`).
 
 **Design note:** output frames deliberately keep physical/runner column names. "Executors consume
 roles" means the executor resolves physical names *from* the spec's roles (as the code path does),

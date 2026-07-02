@@ -94,7 +94,7 @@ variable_spec answers: "How should those signals be transformed into this protoc
 
 A `source_spec` maps a raw or prepared HDW source to canonical engine roles.
 
-The package may provide default source specifications for the known REDSaN/HDW structure. The operational source registry is `redsan::edsan_sources()`: it defines known modules/tables, identifier columns, point-versus-interval time semantics, query date keys, batch keys, and normalizers. Users may override default mappings when their dataset uses different column names or when they provide custom prepared views.
+The package provides default source specifications for the known REDSaN/HDW structure. The source registry is hand-declared (`EE_SOURCES`): each entry defines its module/table, identifier columns, point-versus-interval time semantics, query date keys, batch keys, and payload roles. `redsan` normalizes the raw warehouse into these shapes (e.g. `process_pmsi()`, `process_biol()`) but does not itself expose a source-registry API, so the specs are declared here, not derived. Users may override default mappings when their dataset uses different column names or when they provide custom prepared views.
 
 A source specification should use canonical role names. Raw column names remain source-specific; role names should not.
 
