@@ -5268,7 +5268,10 @@ variable: `combine` produces 0/1 (bin) only; a `num`/`str`/`cat`/`struct` output
 `bin`+combine cohort and a `num`+reducer value -- composed by a DOWNSTREAM row-filter
 (`value[cohort == 1]`), NOT a spec sequence/dependency (that fear was a misread; the columns are
 independent). Corrected my own earlier framing: "combine-gated numeric" is NOT a missing capability;
-DESIGN deliberately excludes it (cohort selection out of scope, §~955). The lab side of the cohort
+DESIGN excludes it on MECHANICS -- the §8 validity matrix makes `combine` 0/1 (`bin`) only -- NOT
+because cohorts are out of scope (they are core: inclusion + extraction IS the engine's job; §955
+names cohort *selection* as the use-case `value` serves; §15's out-of-scope item is cohort
+*governance*). [corrected 2026-07-02, see below] The lab side of the cohort
 still needs the §8 lab hit-predicate (`analyte_value(gt/lt ...)` → hit), which IS the real unwired gap.
 
 Owner WANTS the one-spec form eventually -- `num_output(mean Hb) where (text_anemia & lab_anemia)`, a
@@ -5279,4 +5282,43 @@ Naming ratified: **`output_one_row_per`** (output grain, frees `unit` for measur
 **`level`** (per-channel attachment, was DESIGN's `linkage`).
 
 **Files:** `HANDOFF.md`; memories `where-filter-dimension-deferred`, `variable-spec-boilerplate-explicit-names`,
+`design-is-source-of-truth-code-lags`, `MEMORY.md`.
+
+---
+
+## 2026-07-02 -- Engine scope clarified + channel-override at activation shipped
+
+**Scope correction (owner).** We ARE doing electronic-cohort work -- **inclusion (who qualifies) +
+data extraction (what values) is the engine's whole job.** Out of scope is the layer ABOVE: analysis,
+cohort GOVERNANCE, study-lifecycle/platform (DESIGN §15: "a higher research platform may later use this
+engine"). I had drifted and written "cohort selection is out of scope" (memory + the HANDOFF line
+corrected just above): that misread §15 (which lists cohort *governance*, not selection) and §955
+(which names cohort *selection* as the very use-case `value` serves; §1193 treats cohort membership as
+first-class engine correctness). Consequence: the deferred `where` axis is held on **mechanics**
+(combine->0/1), not scope -- gating a value by an inclusion is squarely our job. New memory
+`engine-scope-inclusion-and-extraction`.
+
+**Slice: channel-override at activation (DESIGN §14.3).** `use_channel(selector = ...)` now locally
+overrides a concept's baseline channel selector for ONE variable, without mutating the concept. The
+execution path (`.run_selected_channel`) already did inline `activation %||% concept` for `extractor`;
+`selector` now follows the SAME pattern -- resolved ONCE at the top and used by every branch
+(code/act/lab/text extraction), AND threaded into `.resolve_text_inputs`/`.retrieve_text_channel` so a
+text override applies to BOTH retrieval and extraction. (A half-applied selector would retrieve on the
+baseline query but match/extract on the override -- a silent correctness bug; that's why the seam is
+uniform, not just the code branch the probe exercises.) `selector` promoted to a first-class
+`use_channel()` param (was riding `...`), per boilerplate-explicit-names + DESIGN §14.3's own
+`use_channel(selector = lucene_query(...))`.
+
+NB the earlier plan ("wire through `.inherit_from_activation` like reducer/extractor") was modeled on
+the WRONG path: that helper feeds only `inspect()`/`resolve_variable_spec`; the EXECUTOR reads the
+concept channel directly and resolves overrides inline with `%||%`. Followed the code, not the memory.
+
+**Probe (disposable, in-test).** One E13 subject; same spec run twice -- baseline `icd10("^E1[0-4]")`
+hits (1), local override `icd10("^E1[0-2]")` misses (0). The contrast is the only proof the activation
+selector -- not the concept's -- drove the executor. Suite 69 -> 71 (one test, two discriminating
+assertions; passes the prune filter -- no other test protects the §14.3 override invariant).
+
+**Files:** `R/spec.R` (use_channel selector param), `R/run_variable.R` (uniform selector resolution +
+text threading), `tests/testthat/test-slice-channel-override-spec.R`, `HANDOFF.md`; memories
+`engine-scope-inclusion-and-extraction`, `where-filter-dimension-deferred`,
 `design-is-source-of-truth-code-lags`, `MEMORY.md`.

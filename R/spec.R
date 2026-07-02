@@ -132,10 +132,10 @@ concept_spec <- function(name, channels) {
 #                numeric -> scalar, e.g. function(x) max(x, na.rm = TRUE)
 #   extractor -> optional override of the concept-owned answer definition
 use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
-                        prompt = NULL, ...) {
+                        selector = NULL, prompt = NULL, ...) {
     .experimental_spec(
         c(list(method = method, reducer = reducer, extractor = extractor,
-               prompt = prompt), list(...)),
+               selector = selector, prompt = prompt), list(...)),
         "ee_channel_use")
 }
 

@@ -50,12 +50,12 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # tests/debugging) or are produced by REAL retrieval from raw documents
 # (corpus + docs_index). This is the seam that makes run_variable() a real entry
 # point into retrieval instead of always being handed coverage/candidates.
-.resolve_text_inputs <- function(src, channel_def, variable, tasks) {
+.resolve_text_inputs <- function(src, channel_def, variable, tasks, selector) {
     if (is.list(src) && all(c("coverage", "candidates") %in% names(src))) {
         return(list(coverage = src$coverage, candidates = src$candidates))
     }
     if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
-        return(.retrieve_text_channel(channel_def, variable, tasks, src))
+        return(.retrieve_text_channel(channel_def, variable, tasks, src, selector))
     }
     stop("A documents source must be pre-retrieved {coverage, candidates} or raw ",
          "{corpus, docs_index}.", call. = FALSE)
@@ -71,7 +71,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
 #                                the whole-history structured code path.
 # Then the existing retrieve() runs the channel's Lucene query and assembles
 # candidates + coverage.
-.retrieve_text_channel <- function(channel_def, variable, tasks, src) {
+.retrieve_text_channel <- function(channel_def, variable, tasks, src, selector) {
     linkage <- channel_def$linkage
     if (!is.null(linkage) && "event" %in% linkage) {
         if (!all(c("PATID", "EVTID") %in% names(tasks))) {
@@ -83,7 +83,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
                        by = c("PATID", "EVTID"), relationship = "many-to-many") %>%
             transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
         return(retrieve(src$corpus, tasks, eligibility,
-                        query = channel_def$selector$query))
+                        query = selector$query))
     }
     # Whole-history subject text: no window -> the subject's entire record, no date
     # filter. Whole-history tasks carry no anchor_date, so none is joined (it rides
@@ -98,7 +98,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             inner_join(keys, by = "PATID", relationship = "many-to-many") %>%
             transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
         return(retrieve(src$corpus, tasks, eligibility,
-                        query = channel_def$selector$query))
+                        query = selector$query))
     }
     if (!inherits(variable$window, "ee_window")) {
         stop("Real retrieval needs a date window (subject linkage) or an event ",
@@ -111,7 +111,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         filter(RECDATE >= anchor_date + w[["from_days"]],
                RECDATE <= anchor_date + w[["to_days"]]) %>%
         transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
-    retrieve(src$corpus, tasks, eligibility, query = channel_def$selector$query)
+    retrieve(src$corpus, tasks, eligibility, query = selector$query)
 }
 
 # Resolve a coded channel's PHYSICAL columns from its source's roles (registry):
@@ -137,6 +137,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
                                   caller, model_name) {
     channel_def <- variable$concept$channels[[channel_name]]
+    # Activation may locally override the concept's baseline selector (DESIGN §14.3):
+    # use_channel(selector = ...) replaces the inherited selector for THIS variable
+    # without mutating the concept -- the same activation-overrides-concept pattern
+    # used for `extractor` below. Resolved ONCE and used by every branch (and threaded
+    # into text retrieval) so the override is uniform: a half-applied selector would
+    # retrieve on one query and match/extract on another.
+    selector <- variable$channels[[channel_name]]$selector %||% channel_def$selector
     source <- channel_def$source
     if (!source %in% names(sources)) {
         stop("Missing source data for channel '", channel_name,
@@ -150,7 +157,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         act = {
             # code (CIM-10 over pmsi$diag) and act (CCAM over pmsi$actes) share the
             # neutral membership executor; only the source binding differs.
-            sel <- channel_def$selector
+            sel <- selector
             bind <- .code_source_binding(source)
             w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
                  else .window_days(variable)
@@ -164,7 +171,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             w <- .window_days(variable)     # neutral analyte executor: scopes candidate
             measure_analyte_values(         # rows; the reduction is the channel's reducer
                 sources[[source]], tasks,   # function, applied in assembly (numeric output)
-                analytes = .selector_codes(channel_def$selector, "codes"),
+                analytes = .selector_codes(selector, "codes"),
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 field = variable$name, source = source)
         },
@@ -182,11 +189,11 @@ suppressWarnings(suppressMessages(library(dplyr)))
                      "' has no extractor (activation or concept).", call. = FALSE)
             }
             text_inputs <- .resolve_text_inputs(sources[[source]], channel_def,
-                                                variable, tasks)
+                                                variable, tasks, selector)
             run_extraction(
                 text_inputs$coverage, text_inputs$candidates,
                 extractor, caller, model_name,
-                query = channel_def$selector$query)
+                query = selector$query)
         },
         stop("No experimental executor for channel type: ", channel_def$type,
              call. = FALSE))
