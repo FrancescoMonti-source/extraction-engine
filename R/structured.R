@@ -86,6 +86,15 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
 
+# Value predicate for a thresholded analyte selector (DESIGN §8): strict, independent
+# bounds. A missing value never passes; a NULL bound leaves that side unconstrained.
+.passes_threshold <- function(value, gt, lt) {
+    ok <- !is.na(value)
+    if (!is.null(gt)) ok <- ok & value > gt
+    if (!is.null(lt)) ok <- ok & value < lt
+    ok
+}
+
 .overlaps_interval <- function(start, end, lo, hi,
                                missing_datsort = c("use_start", "exclude")) {
     missing_datsort <- match.arg(missing_datsort)
@@ -268,9 +277,13 @@ measure_code_presence <- function(source_table, tasks, codes,
 }
 
 # --- generic analyte candidates: valued rows of an analyte in a point-window -----
-# Neutral lab/analyte executor behind the run_variable() lab branch. Per task it
-# SCOPES the declared analyte concept's rows to a point-window around the anchor and
-# returns them as CANDIDATES (source_row_id + numeric value) -- it does NOT reduce.
+# Neutral lab/analyte executor behind the run_variable() lab branch, serving BOTH lab
+# faces (DESIGN §8). Per task it SCOPES the declared analyte's rows to a point-window
+# around the anchor. A thresholded selector (analyte_value(gt/lt)) folds a value
+# predicate into the target set, so the target rows are the measurements past the
+# threshold. It returns those targets two ways: as CANDIDATES (source_row_id + numeric
+# value) for the VALUE face, and as a present/absent `values` frame for the MEMBERSHIP
+# face (bin_output / combine) -- it does NOT reduce the value face itself.
 # The within-channel reduction is a plain function on the value vector supplied by the
 # variable_spec's channel activation (use_channel(reducer = function(x) max(x, na.rm =
 # TRUE))), applied downstream in assembly; a bespoke "max" executor / max_value()
@@ -284,6 +297,7 @@ measure_code_presence <- function(source_table, tasks, codes,
 #   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
 # tasks: task_id, PATID, anchor_date.
 measure_analyte_values <- function(source_table, tasks, analytes,
+                                   gt = NULL, lt = NULL,
                                    from_days = -7L, to_days = 7L,
                                    field = "analyte_value", source = "biology") {
     .validate_structured_inputs(
@@ -321,7 +335,8 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             source = source,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
-                toupper(trimws(analyte)) %in% target_analytes,
+                toupper(trimws(analyte)) %in% target_analytes &
+                .passes_threshold(value, gt, lt),
             selected_evidence = is_target,     # every candidate is evidence
             scope_reason = "point time inside the task window",
             observation_reason = if_else(is_target,
@@ -351,6 +366,23 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                 n_candidate_rows == 0L ~ "no_candidate",
                 TRUE ~ "measured"))
 
+    # Membership face (bin_output / combine): a task is "present" iff it has >=1
+    # thresholded candidate. A subject with in-scope measurements but none past the
+    # threshold is no_candidate -> the assembler reads that as an observed FALSE
+    # (complete coverage); a subject with no biology at all is no_eligible_source
+    # -> unevaluable (NA / partial). Same present/absent contract as the code executor,
+    # so a lab hit means the same thing as a code hit inside a hit-set expression.
+    values <- coverage %>%
+        filter(processing_state == "measured") %>%
+        mutate(normalized_value = if_else(n_candidate_rows > 0L, "present", "absent")) %>%
+        transmute(
+            task_id,
+            field = field,
+            normalized_value,
+            accepted_value = normalized_value,
+            n_scope_rows,
+            n_candidate_rows)
+
     # The value vector the channel's reducer collapses to one number, ordered so the
     # assembler can carry a stable measurement_time alongside the reduced value.
     candidates <- observations %>%
@@ -369,12 +401,15 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                 DATEXAM),
             PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
 
+    threshold_txt <- paste0(
+        if (!is.null(gt)) sprintf("value>%g; ", gt) else "",
+        if (!is.null(lt)) sprintf("value<%g; ", lt) else "")
     rule <- sprintf(
         paste0(
-            "same_subject; point_window[%d,%+d]; analyte=%s; ",
+            "same_subject; point_window[%d,%+d]; analyte=%s; %s",
             "candidates reduced by the channel's reducer; unit ignored"),
         as.integer(from_days), as.integer(to_days),
-        paste(analytes, collapse = ","))
+        paste(analytes, collapse = ","), threshold_txt)
     derivation <- coverage %>%
         transmute(
             task_id,
@@ -389,6 +424,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
     .assert_evidence_resolves(evidence, observations, biol)
     list(
         coverage = coverage,
+        values = values,
         candidates = candidates,
         evidence = evidence,
         observations = observations,

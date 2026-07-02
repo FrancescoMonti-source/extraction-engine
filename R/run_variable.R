@@ -257,9 +257,10 @@ suppressWarnings(suppressMessages(library(dplyr)))
                      call. = FALSE)
             }
             w <- .window_days(variable)     # neutral analyte executor: scopes candidate
-            measure_analyte_values(         # rows; the reduction is the channel's reducer
-                sources[[source]], tasks,   # function, applied in assembly (numeric output)
-                analytes = .selector_codes(selector, "codes"),
+            measure_analyte_values(         # rows; a thresholded selector (analyte_value)
+                sources[[source]], tasks,   # folds a value predicate into the target set --
+                analytes = .selector_codes(selector, "codes"),  # membership face; the value
+                gt = selector$gt, lt = selector$lt,  # face reduces candidates in assembly
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 field = variable$name, source = source)
         },

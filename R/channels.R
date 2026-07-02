@@ -89,3 +89,28 @@ analyte <- function(codes) {
     .experimental_spec(list(kind = "analyte", codes = as.character(codes)),
                        "ee_selector")
 }
+
+# Thresholded analyte selector (DESIGN §8/§14.6): the same analyte identity as
+# analyte() PLUS a value predicate, so the lab channel's target signal becomes "an
+# in-scope measurement of this analyte whose value passes the threshold" -- the
+# MEMBERSHIP face (bin_output / combine). `gt`/`lt` are strict, independent bounds
+# (either or both). `unit` is carried for provenance/inspectability only: HDW results
+# are unit-normalized upstream (redsan), so the executor does not convert.
+analyte_value <- function(codes, gt = NULL, lt = NULL, unit = NULL) {
+    num1 <- function(x, nm) {
+        if (is.null(x)) return(NULL)
+        if (!is.numeric(x) || length(x) != 1L || is.na(x)) {
+            stop("analyte_value() `", nm, "` must be one number.", call. = FALSE)
+        }
+        as.numeric(x)
+    }
+    if (is.null(gt) && is.null(lt)) {
+        stop("analyte_value() needs a threshold (gt and/or lt); ",
+             "use analyte() for an unthresholded selector.", call. = FALSE)
+    }
+    .experimental_spec(
+        list(kind = "analyte", codes = as.character(codes),
+             gt = num1(gt, "gt"), lt = num1(lt, "lt"),
+             unit = if (is.null(unit)) NULL else as.character(unit)),
+        "ee_selector")
+}
