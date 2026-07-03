@@ -4,7 +4,7 @@
 
 This project is an HDW-aware, protocol-agnostic extraction framework for building study analytical variables from a stable hospital data warehouse structure.
 
-It is a framework where researchers define study-specific analytical variables by selecting concepts, signal channels, units, anchors, windows, extraction methods, reducers, transformations, output types, and audit requirements. The engine executes those definitions against known HDW sources and returns auditable analytical variables.
+It is a framework where researchers define study-specific analytical variables by selecting concepts, signal channels, output grains, anchors, windows, extraction methods, reducers, transformations, output types, and audit requirements. The engine executes those definitions against known HDW sources and returns auditable analytical variables.
 
 Researchers remain responsible for scientific validity, protocol design, and operational definitions. The engine is responsible for explicit execution, mechanical consistency, reproducibility, and provenance.
 
@@ -14,7 +14,7 @@ At the LLM boundary, the engine does not promise that the model output is accura
 
 Out of scope: full protocol design, scientific justification, cohort governance, clinical trial management, physician workflow management, and global study lifecycle management. A higher research platform may later use this engine, but the engine itself only builds auditable analytical variables from stable HDW sources using explicit study-specific definitions.
 
-Status: this document is the target design contract. It states the destination vocabulary even where the current experimental code still carries migration-era names or envelopes. Transitional shipped surfaces such as `binary_output()` / `number_output()`, public `decision` / `decision_state`, and role-tagged audit rows should be treated as migration gaps unless a later design decision revalidates them. Keep shipped-vs-target progress in `MIGRATION.md` or `HANDOFF.md`, not by weakening this contract.
+Status: this document is the target design contract, and the migration it once tracked is complete: the transitional surfaces it used to tolerate (`binary_output()` / `number_output()`, public `decision` / `decision_state`, role-tagged audit rows) have been removed from the code. Capabilities that remain declared-but-unbuilt are deferred in §16, each gated on a concrete consumer. Keep chronological shipped-progress notes in `HANDOFF.md` (or commit messages), not by weakening this contract.
 
 ------------------------------------------------------------------------
 
@@ -36,7 +36,7 @@ VARIABLE LAYER
   variable_spec
     -> activates selected concept channels
     -> inherits or replaces channel defaults locally
-    -> defines unit, anchor, window, output, combine, and audit behavior
+    -> defines grain, anchor, window, output, combine, and audit behavior
 
 RUNTIME LAYER
   run_variable(variable_spec, runtime)
@@ -202,7 +202,7 @@ biology_source <- source_spec(
     value_num      = "NUMRES",
     value_str      = "STRRES",
     unit           = "UNIT",
-    date           = "DATEXAM",
+    point_date     = "DATEXAM",
     subject_sex    = "PATSEX",
     subject_age    = "PATAGE"
   )
@@ -216,7 +216,7 @@ documents_source <- source_spec(
     source_item_id = "ELTID",
     text           = "RECTXT",
     document_type  = "RECTYPE",
-    date           = "RECDATE",
+    point_date     = "RECDATE",
     subject_sex    = "PATSEX",
     subject_age    = "PATAGE"
   )
@@ -365,14 +365,14 @@ A `variable_spec` is the final executable analytical definition for one protocol
 
 It answers:
 
-> In this study, for this unit, using these channels, in this time window or event scope, with these extraction/reduction/transformation/combination rules, produce this output variable.
+> In this study, at this output grain, using these channels, in this time window or event scope, with these extraction/reduction/transformation/combination rules, produce this output variable.
 
 It declares:
 
 ``` text
 name
 concept
-unit
+output_one_row_per
 anchor
 time window or event scope
 selected channels
@@ -393,7 +393,7 @@ diabete_pre_anchor <- variable_spec(
   name = "diabete_pre_anchor",
   concept = diabetes,
 
-  unit = "PATID",
+  output_one_row_per = "PATID",
   anchor = "inclusion_date",
   window = period(anchor - 365, anchor),
 
@@ -431,7 +431,7 @@ diabete_type2_pre_anchor <- variable_spec(
   name = "diabete_type2_pre_anchor",
   concept = diabetes,
 
-  unit = "PATID",
+  output_one_row_per = "PATID",
   anchor = "inclusion_date",
   window = period(anchor - 365, anchor),
 
@@ -489,9 +489,9 @@ use_channel(
 
 Method-specific parameters live inside the method. For example, prompt, structured-output type, candidate-selection rule, and response-to-hit mapping belong inside `llm_after_lucene()`, not as global `use_channel()` parameters.
 
-## 7. Units, anchors, windows, and linkage
+## 7. Grain, anchors, windows, and linkage
 
-The unit defines the task universe and output grain: what one output row represents.
+`output_one_row_per` — the unit of analysis — defines the task universe and output grain: what one output row represents.
 
 Examples:
 
@@ -506,12 +506,12 @@ donor-recipient pair
 timepoint
 ```
 
-The unit is first-class because many errors come from measuring the right signal at the wrong grain.
+The grain axis is first-class because many errors come from measuring the right signal at the wrong grain.
 
-For example, `unit = "PATID"` means one output row per patient in the supplied task universe. It does not imply access to the patient's complete real-world history. It means “across all patient-level data supplied to this run,” further restricted by anchor/window.
+For example, `output_one_row_per = "PATID"` means one output row per patient in the supplied task universe. It does not imply access to the patient's complete real-world history. It means “across all patient-level data supplied to this run,” further restricted by anchor/window.
 
 ``` text
-unit = PATID
+output_one_row_per = PATID
 window = anchor - 365 -> anchor
 
 meaning:
@@ -520,7 +520,7 @@ meaning:
   restrict evidence to the 365 days before the anchor
 ```
 
-Channels expose linkage affordances; the `variable_spec` decides which unit, anchor, and window to use. The engine checks whether selected channels can be mechanically linked to the requested unit/window.
+Channels expose linkage affordances; the `variable_spec` decides which grain, anchor, and window to use. The engine checks whether selected channels can be mechanically linked to the requested grain/window.
 
 ``` text
 lab channel:
@@ -547,9 +547,9 @@ text channel:
 
 Some variables are event-scoped rather than date-windowed. For example, operative-report anastomoses may be linked by subject + surgical event and declare `window = NULL`. The runner should not force a misleading placeholder date window onto event-scoped variables.
 
-### Grain is the `unit`; `combine` is grain-agnostic
+### Grain is `output_one_row_per`; `combine` is grain-agnostic
 
-The variable's `unit` picks the task universe. That is what makes the same expression mean different things at different grains:
+The variable's `output_one_row_per` picks the task universe. That is what makes the same expression mean different things at different grains:
 
 ``` text
 combine = "text_diabet & glucose"
@@ -567,7 +567,7 @@ At stay grain, it means:
 stays with a diabetes text hit and a glucose result during the same stay-level task universe/window
 ```
 
-`combine` never takes a grain parameter. It is set algebra over the current task universe, and the `unit` sets that universe.
+`combine` never takes a grain parameter. It is set algebra over the current task universe, and `output_one_row_per` sets that universe.
 
 Event/stay-grain eligibility is resolved by grain-aware scoping (`grain_keys`): the text path resolves event-scoped eligibility for event-linked document variables, and the structured code/act and lab executors scope each task to its own stay when `output_one_row_per = "EVTID"`. The extension was additive, as expected, because `EVTID` is invariant across HDW rows — it was executor wiring, not missing identifiers.
 
@@ -1091,7 +1091,7 @@ Example resolved view:
 ``` text
 variable: diabete_pre_anchor
 concept: diabetes
-unit: PATID
+output_one_row_per: PATID
 anchor: inclusion_date
 window: anchor - 365 -> anchor
 
@@ -1124,7 +1124,7 @@ activated channels:
      source_item_id = ELTID
      text           = RECTXT
      document_type  = RECTYPE
-     date           = RECDATE
+     point_date     = RECDATE
    selector:
      lucene_query("diabete OR diabetique OR insulinotherapie OR insuline")
    method:
@@ -1178,7 +1178,7 @@ Versioning is operationally annoying but scientifically valuable. It is part of 
 
 The test suite should protect semantic contracts, not incidental implementation structure.
 
-A contract test should describe observable behavior that must remain true even if internal operators, filenames, wrappers, or object layouts change. For example: a channel hit means selector membership at the declared unit/grain; combine evaluates hit-set algebra over activated channels; output declares the final value shape; channel_coverage carries evaluability.
+A contract test should describe observable behavior that must remain true even if internal operators, filenames, wrappers, or object layouts change. For example: a channel hit means selector membership at the declared grain; combine evaluates hit-set algebra over activated channels; output declares the final value shape; channel_coverage carries evaluability.
 
 A regression test may protect a bug fix tied to a current implementation detail, but it should be labeled as such and should not be mistaken for a design invariant.
 
@@ -1253,7 +1253,7 @@ diabete_pre_anchor <- variable_spec(
   name = "diabete_pre_anchor",
   concept = diabetes,
 
-  unit = "PATID",
+  output_one_row_per = "PATID",
   anchor = "inclusion_date",
   window = period(anchor - 365, anchor),
 
@@ -1327,7 +1327,7 @@ diabete_pre_greffe <- variable_spec(
   name = "diabete_pre_greffe",
   concept = diabetes,
 
-  unit = transplant_unit(),
+  output_one_row_per = "PATID",
   anchor = transplant_date(),
   window = before_anchor(days = 3650),
 
@@ -1350,7 +1350,7 @@ diabete_type2_pre_greffe <- variable_spec(
   name = "diabete_type2_pre_greffe",
   concept = diabetes,
 
-  unit = transplant_unit(),
+  output_one_row_per = "PATID",
   anchor = transplant_date(),
   window = before_anchor(days = 3650),
 
@@ -1395,7 +1395,7 @@ perioperative_max_glucose <- variable_spec(
   name = "perioperative_max_glucose",
   concept = diabetes,
 
-  unit = surgery_unit(),
+  output_one_row_per = "PATID",
   anchor = surgery_date(),
   window = days_after(0, 2),
 
@@ -1418,7 +1418,7 @@ has_glucose_measurement <- variable_spec(
   name = "has_glucose_measurement",
   concept = diabetes,
 
-  unit = patient_unit(),
+  output_one_row_per = "PATID",
 
   channels = list(
     glucose_measurements = use_channel()
@@ -1437,7 +1437,7 @@ has_hyperglycaemia <- variable_spec(
   name = "has_hyperglycaemia",
   concept = diabetes,
 
-  unit = patient_unit(),
+  output_one_row_per = "PATID",
 
   channels = list(
     glucose_measurements = use_channel(
@@ -1466,7 +1466,7 @@ Future agents should not violate these principles.
 9.  No concept channel is used unless a `variable_spec` or template explicitly activates it.
 10. `variable_spec` is the concrete executable protocol-specific analytical variable definition.
 11. `variable_template` is concept-specific; generic computational pieces are operators/helpers.
-12. The unit defines the output grain and task universe. `combine` is grain-agnostic.
+12. `output_one_row_per` defines the output grain and task universe. `combine` is grain-agnostic.
 13. A channel `hit` means the selected definition matched at least one in-scope signal.
 14. An unthresholded lab channel hits when a measurement exists; thresholded lab membership is represented by a thresholded selector.
 15. Boolean combine is observed hit-set algebra over explicit hit sets, not clinical ontology and not Kleene logic.

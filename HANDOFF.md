@@ -5453,3 +5453,58 @@ deferred); anchor resolved per SUBJECT (PATID), stay-grain index_event out of sc
 **Files:** `R/operators.R` (`index_event()` constructor), `R/run_variable.R` (`.resolve_anchor` pass +
 call), `tests/testthat/test-slice-index-event-spec.R`, `HANDOFF.md`; memory
 `index-event-derived-anchor`, `MEMORY.md`.
+
+---
+
+## 2026-07-03 -- Backfill: point_date rename + act-anchor composition probe
+
+Two commits landed with their full rationale in commit messages only (`d20dffc`, `89b4da0`);
+summarized here so HANDOFF stays the complete chronological record:
+
+- **Time role `date` -> `point_date` (`d20dffc`).** `date` was a type name masquerading as a role
+  (every temporal column is a date). `point_date` names the structural slot -- the single instant a
+  point-dated record occupies -- as the honest sibling of `event_start`/`event_end`. Concept-agnostic
+  by construction: the same role is worn by DATEACTE, DATEXAM, and RECDATE. Pure token rename; no
+  logic keys on the literal (executors resolve dates via `source_time_*`, `.resolve_anchor` reads
+  `roles[[at]]` generically).
+- **Act-anchored forward-window probe (`89b4da0`).** Disposable variable_spec (test-local, not a
+  shipped concept) proving three shipped-but-never-co-exercised axes compose in one realistic spec:
+  act-anchored derived anchor (`index_event(pmsi_actes, ccam(), at = "point_date")`), a forward
+  window (`days_after(1, 30)`), and a cross-source combine (`"pmsi_complication | redo_act"`).
+  Green first try -> no engine gap; the shape was already expressible. Retires the stale
+  "act-anchored variant pending" note: the act anchor needs the `point_date` role, not `event_start`.
+
+---
+
+## 2026-07-03 -- DESIGN reconciled to two shipped ratified renames (fresh-eyes review, Claude Fable)
+
+A cold re-entry review (README -> DESIGN -> HANDOFF tail -> code) found DESIGN.md lagging the CODE in
+the non-licensed direction: §1 allows the doc to be AHEAD of the code ("states the destination
+vocabulary even where code lags"), not behind it. Doc-only commit; suite green at **99** before and
+after (no code touched). Also verified during the review: `outputs/` is fully gitignored (zero
+tracked files), so the local run artifacts honor the no-clinical-data rule.
+
+- **`unit` -> `output_one_row_per`** (ratified + shipped 2026-07-02) had landed in §7's grain-scoping
+  paragraph but NOT in the §6 declaration list, the §6/§13/§14 examples, the §12 resolved view, §2's
+  layer diagram, or invariant 12 -- so the doc used `unit` for BOTH grain (§6) and measurement unit
+  (§8 `unit = "mmol/L"`), the exact ambiguity the rename was ratified to kill. All grain-meaning
+  `unit` occurrences now read `output_one_row_per`; §7 retitled "Grain, anchors, windows, and
+  linkage". §14's fictional `transplant_unit()`/`surgery_unit()`/`patient_unit()` constructors became
+  `output_one_row_per = "PATID"`, per the shipped migration's own finding that those labels named the
+  ANCHOR event, not the output grain. The `unit` payload role (labs, line ~115/`UNIT`) keeps the name
+  -- that IS the freed measurement meaning.
+- **`date` -> `point_date`** (`d20dffc`) had updated the §4 role vocabulary + note but missed the
+  worked examples: the biology/documents `source_spec` examples and the §12 resolved view still
+  mapped `date =`. Now `point_date =`.
+- **§1 status paragraph described the completed migration as ongoing:** it referenced the retired
+  `MIGRATION.md` and named `binary_output()`/`number_output()`/public `decision`/`decision_state` --
+  all deleted 2026-07-01 -- as transitional shipped surfaces. Rewritten: migration complete,
+  declared-but-unbuilt capabilities live in §16, chronological progress lives here.
+
+Raised in the same review but NOT acted on (owner to decide): (a) the §12 five-test floor predates
+~6 newer decided invariants -- stay-grain scoping in particular fits the ratified silent/decided/
+invisible-to-real-validation gate and is a promotion candidate; (b) HANDOFF at ~5.5k lines no longer
+supports the "re-enter cold by reading this file" premise -- consider folding closed history into an
+archive and keeping protocol + current-state + recent entries.
+
+**Files:** `DESIGN.md`, `HANDOFF.md`.
