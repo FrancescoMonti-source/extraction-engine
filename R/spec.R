@@ -342,13 +342,19 @@ inspect.default <- function(x, ...) {
                                        "default_method")
     extractor <- .inherit_from_activation(channel_def, channel_use, "extractor")
     reducer <- .inherit_from_activation(channel_def, channel_use, "reducer")
+    # The selector inherits like every other activation field (DESIGN §14.3): a
+    # use_channel(selector = ...) override IS the executed definition, so the
+    # resolved view -- and the provenance built from it -- must record it, not the
+    # concept baseline.
+    selector <- .inherit_from_activation(channel_def, channel_use, "selector")
 
     .experimental_spec(
         list(
             name = name,
             type = channel_def$type,
             source = channel_def$source,
-            selector = channel_def$selector,
+            selector = selector$value,
+            selector_source = selector$source,
             native_grain = channel_def$native_grain,
             required_roles = channel_def$required_roles,
             linkage = channel_def$linkage,

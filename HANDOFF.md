@@ -630,3 +630,40 @@ the current code. Nothing was reworded in the archive; do not append there.
 
 **Verification.** Suite green before and after: `[ FAIL 0 | WARN 0 | SKIP 0 | PASS 99 ]`
 (doc-only change; no code touched).
+
+## Produced-dataset provenance object shipped; floor candidate closed -- Claude Fable (2026-07-03)
+
+**What.** Invariant 27 ("Provenance is part of the output contract, not optional
+documentation") made concrete, owner-directed ("please take care of the offered
+slice"). `run_variable()` output now carries `run$provenance`, a serializable
+`ee_provenance` record assembled from `resolve_variable_spec()`: identity (variable /
+concept / template), the RESOLVED definition (grain, anchor snapshot, window days,
+combine expression, output shape, and per channel the type, source, resolved
+source-role mapping, and the resolved selector WITH its origin: activation override vs
+concept default), plus execution facts (model name, timestamp). Per-attempt LLM
+provenance (provider/seed/prompt/schema/query hashes) already rides on
+`channel_results[[ch]]$attempts` and is not duplicated. Deferred until knowable (§16
+discipline): code commit, source export date, runtime settings beyond model, template
+versioning.
+
+**Bug found and fixed on the way.** `.resolve_channel_activation()` resolved
+method/extractor/reducer through the activation but pinned `selector =
+channel_def$selector` -- so `resolve_variable_spec()` (and anything built on it)
+reported the concept BASELINE selector while the executor ran the §14.3 activation
+override. Exactly the invariant-27 silent failure: values right, trail lying. The
+selector now inherits like every other activation field, with `selector_source`
+("activation"/"channel") exposed.
+
+**Floor promotion (§12).** New disposable probe
+`test-slice-provenance-spec.R`: #1 pins that provenance records the override
+(`^E1[0-2]`, source "activation") and not the baseline (`^E1[0-4]`), plus the resolved
+definition; #2 pins execution facts + resolved source-role mappings. `provenance #1`
+passes the floor gate (silent; decided -- ratified today in §12; invisible to physician
+review, since the values are computed correctly from the override either way) and
+joins the floor. The "one open floor candidate" clause is closed in DESIGN §12.
+
+**Files.** `R/spec.R` (selector resolution + selector_source), `R/run_variable.R`
+(`.build_provenance()` + envelope field), `DESIGN.md` (§12 ratified object subsection,
+floor bullet, candidate closed), `tests/testthat/test-slice-provenance-spec.R` (new).
+
+**Verification.** Suite green: `[ FAIL 0 | WARN 0 | SKIP 0 | PASS 119 ]` (was 99).

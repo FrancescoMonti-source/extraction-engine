@@ -653,6 +653,78 @@ suppressWarnings(suppressMessages(library(dplyr)))
         overlap = overlap)
 }
 
+# --- produced-dataset provenance (DESIGN §12, invariant 27) --------------------
+# Provenance is part of the output contract: `run$provenance` is a serializable
+# snapshot of the RESOLVED definition that actually executed (post concept-default /
+# activation-override inheritance) plus the execution facts the engine knows (model,
+# timestamp, resolved source-role mappings). It is assembled from
+# resolve_variable_spec(), so the audit trail and the executor read the SAME
+# resolution -- a trail recording the concept baseline while the executor ran a
+# local override would be a silent audit lie no review of the values can catch.
+# Per-attempt LLM provenance (provider/seed/prompt/schema/query hashes) already
+# rides on channel_results[[channel]]$attempts and is not duplicated here.
+
+# Snapshot a selector as a plain named list (kind + identity fields, NULLs dropped):
+# a serializable record, not a live spec object.
+.provenance_selector <- function(selector) {
+    if (is.null(selector)) return(NULL)
+    snap <- unclass(selector)
+    attributes(snap) <- list(names = names(snap))
+    snap[!vapply(snap, is.null, logical(1))]
+}
+
+.provenance_anchor <- function(anchor) {
+    if (is.null(anchor)) return(NULL)
+    if (inherits(anchor, "ee_index_event")) {
+        return(list(kind = "index_event", source = anchor$source,
+                    selector = .provenance_selector(anchor$selector),
+                    at = anchor$at))
+    }
+    list(kind = "task_column", column = as.character(anchor))
+}
+
+.build_provenance <- function(variable, model_name) {
+    resolved <- resolve_variable_spec(variable)
+    channels <- lapply(resolved$channels, function(ch) {
+        spec <- if (ch$source %in% names(EE_SOURCES)) EE_SOURCES[[ch$source]]
+                else NULL
+        list(
+            type = ch$type,
+            source = ch$source,
+            source_roles = if (is.null(spec)) NULL else source_roles(spec),
+            selector = .provenance_selector(ch$selector),
+            selector_source = ch$selector_source,
+            method_source = ch$method_source,
+            reducer_source = ch$reducer_source,
+            extractor_source = ch$extractor_source)
+    })
+    window <- if (inherits(variable$window, "ee_window")) {
+        list(from_days = variable$window$from_days,
+             to_days = variable$window$to_days,
+             relation = variable$window$relation)
+    } else NULL
+    output <- if (is.null(variable$output)) NULL else {
+        out <- list(kind = variable$output$kind)
+        if (!is.null(variable$output$levels)) out$levels <- variable$output$levels
+        if (!is.null(variable$output$fields)) out$fields <- variable$output$fields
+        out
+    }
+    structure(
+        list(
+            variable = variable$name,
+            concept = variable$concept$name,
+            template = variable$template,
+            output_one_row_per = variable$output_one_row_per,
+            anchor = .provenance_anchor(variable$anchor),
+            window = window,
+            combine = resolved$combine_rule,
+            output = output,
+            channels = channels,
+            model = model_name,
+            executed_at = Sys.time()),
+        class = c("ee_provenance", "list"))
+}
+
 run_variable <- function(variable, tasks, sources, caller = NULL,
                          model_name = "fake") {
     if (!inherits(variable, "ee_variable_spec")) {
@@ -726,7 +798,9 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
     # variable, which has no cross-channel combine (its value comes from output()).
     combine_rule <- if (inherits(combine, "ee_combiner")) combine$expr else NA_character_
     c(list(spec = variable, selected_channels = selected,
-           combine_rule = combine_rule, channel_results = channel_results), out)
+           combine_rule = combine_rule,
+           provenance = .build_provenance(variable, model_name),
+           channel_results = channel_results), out)
 }
 
 run_variables <- function(variables, tasks, sources, caller = NULL,

@@ -1174,6 +1174,16 @@ execution timestamp
 
 Versioning is operationally annoying but scientifically valuable. It is part of the engine's execution and traceability responsibility.
 
+### The produced-dataset provenance object (ratified 2026-07-03)
+
+`run_variable()` output carries `provenance`, a serializable `ee_provenance` record of what actually executed (invariant 27 made concrete):
+
+- **identity** — variable, concept, template (if used);
+- **the resolved definition** — `output_one_row_per`, anchor (task column or `index_event` snapshot), window (relative days), combine expression, output shape, and per activated channel: type, source, the resolved source-role mapping, and the **resolved selector with its origin** (activation override vs concept default). It is assembled from `resolve_variable_spec()`, so the audit trail and the executor read the same resolution — a trail recording the concept baseline while the executor ran a local override would be a silent audit lie;
+- **execution facts** — model name and execution timestamp.
+
+Per-attempt LLM provenance (provider, seed, prompt/schema/query hashes) already rides on `channel_results[[channel]]$attempts` and is not duplicated. Still deferred until the engine can actually know them (§16 discipline): code commit, source export date, runtime settings beyond the model name, and template versioning.
+
 ### Testing philosophy
 
 The test suite should protect semantic contracts, not incidental implementation structure.
@@ -1205,8 +1215,9 @@ Extended 2026-07-03 (owner-ratified): five invariants decided and shipped after 
 - `index-event #2` — anchor resolution is fail-closed: multiple matching index events per subject ERROR. Silently resolving to an arbitrary event would shift every window and flip cohort membership invisibly.
 - `lab-threshold #1` — the thresholded-analyte tri-state (§8): above-cutoff hit, measured-below (value 0, coverage complete), no measurement (value 0, coverage partial). A silent flip feeds wrong availability into the observed hit-set algebra.
 - `whole-history #2` — no-window subject eligibility reaches a document any date window would exclude: a window default silently reintroduced removes candidates before anyone can review them.
+- `provenance #1` — the produced-dataset provenance object records the **resolved** definition (invariant 27): the selector recorded for each channel is the one that executed (an activation override, not the concept baseline). The values are computed correctly either way, so a lying trail is invisible to physician review of the output.
 
-Everything outside the floor is cuttable without ceremony. The coverage matrix above is a **design-freezing discipline applied once, when a validity-matrix or public-API rule is locked** — not a standing requirement that each shape keep a permanent test. Provenance / source-traceability is the one open floor *candidate*: it becomes a floor test only once a concrete produced-dataset provenance object is ratified; until then evidence refs, `selected_channels`, and the source-role mapping cover the pieces that exist.
+Everything outside the floor is cuttable without ceremony. The coverage matrix above is a **design-freezing discipline applied once, when a validity-matrix or public-API rule is locked** — not a standing requirement that each shape keep a permanent test. The provenance floor candidate closed 2026-07-03: the produced-dataset provenance object was ratified (§12 above) and `provenance #1` joined the floor with it.
 
 The original five-test core was ratified by the owner with Claude and Codex independently concurring; the 2026-07-03 extension was owner-ratified after a fresh-eyes review found the floor under-inclusive relative to invariants decided since 2026-06-30. Deliberately not promoted: the `output-grain-guard` test (the guard failing is only harmful jointly with a second bug, so the failure is not silent on its own) and everything structural/loud (envelope shape, spec constructors).
 
