@@ -1186,7 +1186,7 @@ A migration test may temporarily protect old spellings or transitional compatibi
 
 Before locking a validity matrix or public API rule, test it against at least one code channel, one text channel, one thresholded lab channel, one unthresholded lab channel, one patient-grain variable, and one event/stay-grain variable. This prevents the implementation from optimizing around a narrow current use case and freezing a local maximum.
 
-### The protected test floor (ratified 2026-06-30)
+### The protected test floor (ratified 2026-06-30; extended 2026-07-03)
 
 After pruning ~400 tests down to a handful, the suite was re-derived from a single gate: in this phase a test earns its place only if the failure it catches is (a) **silent**, (b) on a deterministic invariant we have actually **decided**, and (c) **invisible to the real validation** — real-model-on-real-data runs reviewed by a physician. The LLM node carries the clinical risk and is human-reviewed by design, so tests cannot adjudicate its answers; loud failures self-surface on the next real run. The suite is therefore a set of tripwires on decided silent regressions plus a refactoring safety net — it is not the validation story.
 
@@ -1198,9 +1198,17 @@ The **protected floor** (do not delete without re-opening this decision):
 - `smoking #3` — D1 citation keep-and-flag: a value grounded by ≥1 real id is kept and flagged when the model also cites an invented id; an only-invented citation is rejected.
 - `anastomoses #2` — field-level acceptance: a valid field survives an invalid sibling and routes to review (the §9 accept-only-grounded promise made concrete).
 
-Everything outside the floor is cuttable without ceremony. The coverage matrix above is a **design-freezing discipline applied once, when a validity-matrix or public-API rule is locked** — not a standing requirement that each shape keep a permanent test; by that reading the declined thresholded-lab test is not a gap. Provenance / source-traceability is the one open floor *candidate*: it becomes a floor test only once a concrete produced-dataset provenance object is ratified; until then evidence refs, `selected_channels`, and the source-role mapping cover the pieces that exist.
+Extended 2026-07-03 (owner-ratified): five invariants decided and shipped after the original ratification pass the same gate, so their tests join the floor:
 
-Ratified by the owner with Claude and Codex independently concurring on this five-test core.
+- `event-stay-grain #1` / `lab-stay-grain #1` — grain-key scoping, both executor branches: candidates are scoped to the task's own `EVTID`, not just the subject. A PATID-only join silently inflates every stay-grain value with the subject's other stays.
+- `channel-override #1` — the activation selector drives the executor (§14.3): a silent fallback to the concept baseline would make every locally-overridden variable measure the wrong definition.
+- `index-event #2` — anchor resolution is fail-closed: multiple matching index events per subject ERROR. Silently resolving to an arbitrary event would shift every window and flip cohort membership invisibly.
+- `lab-threshold #1` — the thresholded-analyte tri-state (§8): above-cutoff hit, measured-below (value 0, coverage complete), no measurement (value 0, coverage partial). A silent flip feeds wrong availability into the observed hit-set algebra.
+- `whole-history #2` — no-window subject eligibility reaches a document any date window would exclude: a window default silently reintroduced removes candidates before anyone can review them.
+
+Everything outside the floor is cuttable without ceremony. The coverage matrix above is a **design-freezing discipline applied once, when a validity-matrix or public-API rule is locked** — not a standing requirement that each shape keep a permanent test. Provenance / source-traceability is the one open floor *candidate*: it becomes a floor test only once a concrete produced-dataset provenance object is ratified; until then evidence refs, `selected_channels`, and the source-role mapping cover the pieces that exist.
+
+The original five-test core was ratified by the owner with Claude and Codex independently concurring; the 2026-07-03 extension was owner-ratified after a fresh-eyes review found the floor under-inclusive relative to invariants decided since 2026-06-30. Deliberately not promoted: the `output-grain-guard` test (the guard failing is only harmful jointly with a second bug, so the failure is not silent on its own) and everything structural/loud (envelope shape, spec constructors).
 
 ## 13. Variable templates
 

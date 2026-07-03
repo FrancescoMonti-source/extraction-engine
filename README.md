@@ -25,7 +25,7 @@ Rscript tests/testthat.R
 Start with:
 
 - **[DESIGN.md](DESIGN.md)** — the target architecture and vocabulary contract (§16 lists deferred capabilities gated on a consumer).
-- **[HANDOFF.md](HANDOFF.md)** — chronological collaboration log for maintainers.
+- **[HANDOFF.md](HANDOFF.md)** — chronological collaboration log for maintainers (closed 2026-06 history in [HANDOFF-archive.md](HANDOFF-archive.md)).
 
 In one sentence: ellmer handles LLM transport; this project gathers dated clinical
 evidence, constructs auditable cohort variables, and evaluates them.
