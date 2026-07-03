@@ -667,3 +667,30 @@ joins the floor. The "one open floor candidate" clause is closed in DESIGN §12.
 floor bullet, candidate closed), `tests/testthat/test-slice-provenance-spec.R` (new).
 
 **Verification.** Suite green: `[ FAIL 0 | WARN 0 | SKIP 0 | PASS 119 ]` (was 99).
+
+## Three real-run scripts collapsed into one generic driver -- Claude Fable (2026-07-03)
+
+**What.** `run_variable_{diabetes,smoking,anastomoses}_real.R` shared one spine
+(config -> engine sourcing -> build -> real caller -> run_variable -> PHI detail to
+outputs/ -> aggregate-only report) and differed only in data assembly + report shape.
+Replaced by `scripts/run_variable_real.R <case>`: the spine is generic; each case is a
+CASES registry entry (removable scaffolding) supplying engine_files, bounding defaults,
+and build(cfg) -> {tasks, sources, spec, save_extra}. The report needed NO per-case
+code: it dispatches on the run envelope (multi-channel combine -> per-channel
+contribution + positive attribution over ALL channels; categorical -> levels from
+spec$output$levels; fields -> per-field acceptance). Env unified: REAL_N (per-case
+default), MAX_DOCS, SMOKE_SEED, DATASETS_DIR. Privacy posture unchanged: console
+aggregates only, per-row PHI -> outputs/ (gitignored).
+
+**Latent bug surfaced.** The old diabetes script's engine chain lacked `R/hitset.R`,
+so it would have died at spec build ever since any_positive() started lowering to
+hit_set_expr() -- evidence the copies had already drifted. The driver's base chain
+includes it.
+
+**Verified with real runs** (gemma3:4b, local Ollama): smoking REAL_N=2 (categorical,
+2/2 grounded), diabetes REAL_N=2 (OR path; contribution report negative/signal +
+silent, positive attributed to the code channel), anastomoses REAL_N=1 (event-scoped
+fields; 5 fields valid not_documented, evidence present). Suite untouched:
+`[ FAIL 0 | WARN 0 | SKIP 0 | PASS 119 ]`.
+
+**Files.** `scripts/run_variable_real.R` (new), the three per-concept scripts deleted.
