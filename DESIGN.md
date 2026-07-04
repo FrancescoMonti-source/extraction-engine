@@ -49,7 +49,7 @@ Core inheritance rule:
 ``` text
 concept_spec supplies named channel defaults.
 variable_spec activates selected channels.
-use_channel() inherits by default.
+a bare string activates a concept channel as-is; use_channel() is only for overrides.
 any field supplied in use_channel() replaces the inherited field for that variable only.
 unlisted concept channels are not used.
 ```
@@ -59,6 +59,34 @@ There is no selector-refinement semantics for now. A supplied selector replaces 
 The general rule is:
 
 > Channels observe, combiners calculate, researchers interpret.
+
+### The pipeline reading (ratified 2026-07-04)
+
+A `variable_spec` is a declarative recipe for a small, reproducible data-science pipeline. The reference mental model is ordinary dplyr:
+
+``` r
+lab_results %>%
+  filter(EVTID %in% filtered_docs$EVTID, hb < threshold) %>%   # channels + combine
+  group_by(EVTID) %>%                                          # output_one_row_per
+  summarise(mean_hb = mean(hb))                                # output payload
+```
+
+Mapped onto the spec axes:
+
+``` text
+channel            = a FILTERED ROW SET of one source (selector + predicates + window).
+                     Its rows ARE its hits (spine keys = membership) and CARRY its
+                     values (payload columns). One row set, not two faces.
+combine_channels   = set algebra on identity-spine keys at a stated level
+                     (& = semi-join, ! = anti-join, | = union)
+                     -> the SURVIVING row set.
+output             = consumes the surviving rows:
+                     bin_output()  membership per output-grain group (any row -> 1)
+                     num_output()  group_by(output_one_row_per) + summarise(reduce)
+                                   over the payload channel's surviving rows.
+```
+
+What the spec buys over writing that dplyr by hand: reproducibility, anchors and windows, observed-coverage semantics, provenance, and review routing around the same relational verbs.
 
 ------------------------------------------------------------------------
 
@@ -127,6 +155,7 @@ Time roles describe temporal *structure*, not clinical meaning. A point-dated re
 module
 table
 identifiers
+kind                <- channel kind this source serves: code / act / lab / text
 source_time_kind
 source_time_start
 source_time_end
@@ -134,6 +163,8 @@ query_date_keys
 default_batch_key
 normalizer
 ```
+
+`kind` (ratified 2026-07-04) declares which channel type a source serves (`pmsi_diag` → code, `pmsi_actes` → act, `biology` → lab, `documents` → text). It exists so typed channel constructors can resolve an omitted `source =` against the registry — see §5.
 
 Every HDW source row carries the same canonical provenance spine:
 
@@ -157,7 +188,9 @@ For deterministic structured sources, `source_item_id` is mainly useful for opti
 
 For LLM text extraction, candidate `evidence_id`s are generated only for the snippets shown to the model. These citation IDs map back to the source item, usually a document `ELTID`.
 
-Identifier spine: for default REDSaN/HDW sources, patient-level and stay/event-level linkage can rely on `PATID`, `EVTID`, and the mapped `source_item_id` being present; no defensive missing-id semantics are needed for those sources. Preserve the triplet in prepared views because it supports linkage and provenance. A custom non-HDW source may still need an explicit `source_spec` caveat if it cannot satisfy the same role contract. These identifiers are not the same thing as LLM `evidence_id`s.
+Identifier spine: for default REDSaN/HDW sources, patient-level and stay/event-level linkage can rely on `PATID`, `EVTID`, and the mapped `source_item_id` being present; no defensive missing-id semantics are needed for those sources. A custom non-HDW source may still need an explicit `source_spec` caveat if it cannot satisfy the same role contract. These identifiers are not the same thing as LLM `evidence_id`s.
+
+The spine is not linkage bookkeeping; it is the **combination substrate** (ratified 2026-07-04). Rows from different tables never coexist on one row — text hits, coded rows, and lab results meet *only* through the containment hierarchy `PATID ⊃ EVTID ⊃ source_item_id`. Rolling a hit up to any coarser grain is free because every row carries all three keys, and `combine_channels` at any level (§10) is pure set algebra on those keys. Consequences: preserve the triplet end-to-end in prepared views — dropping `EVTID` or `source_item_id` in an intermediate step silently amputates combine levels; and a source that cannot supply the triplet cannot participate in level algebra at all.
 
 Example default source specifications:
 
@@ -253,6 +286,10 @@ A concept channel declares a reusable source route and its defaults. Typical cha
 
 The channel constructor implies the emitted signal shape. Users do not normally declare `emits` or `produces`.
 
+Typed constructors stay because their signatures are the honest home for type-specific parameters (a text channel's extraction definition, a lab channel's value predicate); most nonsense combinations are unwritable at authoring time. They are definers: they may appear in a `concept_spec` or inline in a variable's channel list (§6), and wherever they appear they bind location. Activations never do.
+
+**`source` is optional on typed constructors (ratified 2026-07-04): resolution is unique-or-error, never a default.** Each registered source declares the channel `kind` it serves (§4). `lab_channel(selector = ...)` with `source` omitted resolves to the sole registered lab-kind source; the day a second lab-kind source registers (e.g. microbiology), omission becomes a build-time error naming the candidates — every affected spec is forced loud rather than silently reinterpreted. This is the same philosophy as `index_event()` match resolution (§7). Explicit `source =` stays writable throughout, and is required for sources outside the registry. The generic `channel(source =, type =)` remains the escape hatch for custom sources.
+
 Example:
 
 ``` r
@@ -260,19 +297,17 @@ diabetes <- concept_spec(
   name = "diabetes",
 
   channels = list(
-    pmsi_diag_e10_e14 = code_channel(
-      source = "pmsi_diag",
+    pmsi_diag_e10_e14 = code_channel(        # source resolves -> "pmsi_diag"
       selector = icd10("^E1[0-4]")
     ),
 
-    text_diabetes_mentions = text_channel(
-      source = "documents",
+    text_diabetes_mentions = text_channel(   # source resolves -> "documents"
       selector = lucene_query("diabete OR diabetique OR insulinotherapie OR insuline"),
 
       default_method = llm_after_lucene(
-        candidates = candidate_selection(
-          arrange = arrange(desc(n_query_hits), desc(document_date)),
-          limit = 20
+        candidates = \(d) head(
+          dplyr::arrange(d, dplyr::desc(n_query_hits), dplyr::desc(document_date)),
+          20
         ),
 
         prompt = "
@@ -310,18 +345,16 @@ diabetes <- concept_spec(
       )
     ),
 
-    glucose_measurements = lab_channel(
-      source = "biology",
+    glucose_measurements = lab_channel(      # source resolves -> "biology"
       selector = analyte("GLU.GLU")
     ),
 
     hba1c_measurements = lab_channel(
-      source = "biology",
       selector = analyte("HBA1C")
     ),
 
     antidiabetic_prescriptions = code_channel(
-      source = "prescriptions",
+      source = "prescriptions",              # outside the default registry: explicit
       selector = drug_class("antidiabetic")
     )
   )
@@ -378,15 +411,24 @@ time window or event scope
 selected channels
 per-channel activation options
 retrieval/extraction method
-reducers
 transforms
-combination rule
-output type
+combine_channels expression + combine_at_level
+output type (including the payload pick for value outputs)
 absence/audit policy
 audit requirements
 ```
 
 Only channels listed in `channels` are activated. If a concept has three possible channels and the variable activates only two, the third is ignored.
+
+The channels list admits three entry forms (ratified 2026-07-04):
+
+``` text
+"channel_name"                          plain activation: inherit everything
+channel_name = use_channel(...)         activation with local replacements
+channel_name = lab_channel(...) etc.    INLINE DEFINITION of a variable-local channel
+```
+
+A bare string activates the concept channel as-is — empty `use_channel()` calls are noise and not required. An inline typed definer declares a channel that exists only for this variable (promote it into the concept the day a second variable wants it); its name must not collide with a concept channel name — §14.3-style override through `use_channel()` is the only deviation path for inherited channels, and full redefinition-by-shadowing is rejected.
 
 ``` r
 diabete_pre_anchor <- variable_spec(
@@ -395,16 +437,13 @@ diabete_pre_anchor <- variable_spec(
 
   output_one_row_per = "PATID",
   anchor = "inclusion_date",
-  window = period(anchor - 365, anchor),
+  window = c(-365, 0),
 
-  channels = list(
-    pmsi_diag_e10_e14 = use_channel(),
-    text_diabetes_mentions = use_channel()
-    # lab_channel not invoked
-  ),
+  channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
+  # lab channel not invoked
 
   output = bin_output(),
-  combine = "pmsi_diag_e10_e14 | text_diabetes_mentions"
+  combine_channels = "pmsi_diag_e10_e14 | text_diabetes_mentions"
 )
 ```
 
@@ -433,17 +472,14 @@ diabete_type2_pre_anchor <- variable_spec(
 
   output_one_row_per = "PATID",
   anchor = "inclusion_date",
-  window = period(anchor - 365, anchor),
+  window = c(-365, 0),
 
   channels = list(
     text_diabetes_mentions = use_channel(
       selector = lucene_query("diabete type 2 OR DNID OR insuline"),
 
       method = llm_after_lucene(
-        candidates = candidate_selection(
-          arrange = arrange(desc(document_date)),
-          limit = 50
-        ),
+        candidates = \(d) head(dplyr::arrange(d, dplyr::desc(document_date)), 50),
 
         prompt = "
           Determine whether the candidate text documents type 2 diabetes.
@@ -479,13 +515,16 @@ The minimal activation grammar is:
 
 ``` r
 use_channel(
-  source = NULL,     # optional local replacement, if allowed
   selector = NULL,   # optional local replacement
   method = NULL,     # optional execution/extraction method
-  reducer = NULL,    # optional structured-value reducer
   transform = NULL   # optional value transformation
 )
 ```
+
+Two parameters are deliberately absent (ratified 2026-07-04):
+
+- **`source` — never.** An activation is a reference plus deltas; letting it re-declare where a channel lives would give the same channel two competing definitions that drift, and would dissolve the concept layer's define-once reuse. Location belongs to definers only (typed constructors, wherever they appear).
+- **`reducer` — moved to the output.** The reducer is the variable's question ("mean Hb"), not a channel property; it lives on `num_output(values_from =, reduce =)` (§8), which also names the payload channel explicitly.
 
 Method-specific parameters live inside the method. For example, prompt, structured-output type, candidate-selection rule, and response-to-hit mapping belong inside `llm_after_lucene()`, not as global `use_channel()` parameters.
 
@@ -512,7 +551,7 @@ For example, `output_one_row_per = "PATID"` means one output row per patient in 
 
 ``` text
 output_one_row_per = PATID
-window = anchor - 365 -> anchor
+window = c(-365, 0)
 
 meaning:
   one row per patient in the supplied task universe
@@ -547,12 +586,54 @@ text channel:
 
 Some variables are event-scoped rather than date-windowed. For example, operative-report anastomoses may be linked by subject + surgical event and declare `window = NULL`. The runner should not force a misleading placeholder date window onto event-scoped variables.
 
-### Grain is `output_one_row_per`; `combine` is grain-agnostic
+### Windows are plain day offsets (ratified 2026-07-04)
+
+A dated window is two numbers relative to the anchor, in days, negative = before:
+
+``` r
+window = c(-365, 0)     # the year before the anchor
+window = c(0, 180)      # six months after
+window = c(-3650, 7)    # ten-year lookback plus a grace week
+window = c(-Inf, 0)     # all recorded history before the anchor
+```
+
+There is no window constructor: `days_after()` / `before_anchor()` wrapped exactly two integers and are retired (the wrapper razor, invariant 33). `-Inf`/`Inf` are legal bounds, which is what makes "antécédent = whole recorded history" expressible. Event-scoped variables keep `window = NULL`.
+
+Two epistemology flags researchers must set knowingly (they are rules, not defects):
+
+- Each channel windows on **its own time role**: text on document date, acts on act date, coded stays on the stay interval. "Mentioned in-window" is not "happened in-window" — a post-anchor letter describing a pre-anchor surgery falls outside a lookback window.
+- `c(0, n)` from an act-derived anchor puts the **index stay itself in-window**; start at 1, or gate it out, if the index stay must not score.
+
+### Derived anchors: `index_event()` (shipped 2026-07-02; `select_event` ratified 2026-07-04)
+
+An anchor is either a task column (`anchor = "T0"`, one date supplied per task row) or derived from the data:
+
+``` r
+anchor = index_event("pmsi_actes", ccam(SPINAL_SURGERY_ACTS), at = "point_date")
+```
+
+Per subject, find the rows in `source` matching `selector`, and anchor at the `at` date role (`event_start` / `event_end` for interval sources, `point_date` for point sources — an act is a point event). Resolution is a **pass** that runs before windowing and injects per-subject anchor dates into the task frame; it is not an inter-channel dependency graph.
+
+Match-multiplicity control is a plain closure over the matched rows (the wrapper razor — no `candidate_selection()`-style wrapper):
+
+``` r
+select_event = \(d) dplyr::slice_min(d, point_date, n = 1)   # earliest
+select_event = \(d) dplyr::slice_max(d, point_date, n = 1)   # latest
+select_event = \(d) dplyr::arrange(d, point_date)[2, ]       # exactly the 2nd
+select_event = identity                                      # all events
+# omitted -> single match or build-time ERROR (fail-closed default)
+```
+
+**Accepting a multi-row selection is accepting more than one output row per patient** (ratified 2026-07-04, one entailed decision): the anchor pass emits one task per selected event, each with its own anchor date and the index event's spine identity in provenance, and `output_one_row_per` must then name the event-grain key. The existing output-grain guard enforces the match — `select_event = identity` with `output_one_row_per = "PATID"` fails loudly. Flag for researchers: consecutive events with overlapping forward windows can score the same downstream stay more than once; correct per-event semantics, double-counting if naively summed.
+
+A subject with **no** matching event is an error, not an NA: derive the task list from an upstream inclusion variable (a bin variable over the same selector — cohort inclusion is engine scope), so anchor resolution only ever runs on subjects that have the event.
+
+### Grain is `output_one_row_per`; combine evaluates at `combine_at_level`
 
 The variable's `output_one_row_per` picks the task universe. That is what makes the same expression mean different things at different grains:
 
 ``` text
-combine = "text_diabet & glucose"
+combine_channels = "text_diabet & glucose"
 ```
 
 At patient grain, this means:
@@ -567,7 +648,14 @@ At stay grain, it means:
 stays with a diabetes text hit and a glucose result during the same stay-level task universe/window
 ```
 
-`combine` never takes a grain parameter. It is set algebra over the current task universe, and `output_one_row_per` sets that universe.
+The evaluation grain of the expression is `combine_at_level`, which **defaults to `output_one_row_per`** — the two readings above are the default case, and every pre-2026-07-04 spec keeps its meaning. Declaring it decouples the two grains (ratified 2026-07-04):
+
+``` text
+combine_at_level   = "EVTID"    the expression is evaluated per stay
+output_one_row_per = "PATID"    one row per patient
+```
+
+means: qualify stays where the expression holds, then **exists-lift** to the output grain — the patient scores 1 if at least one of their stays qualifies. This is the difference between same-stay co-occurrence and the weaker cross-encounter conjunction (a text hit in stay 1 plus a lab hit in stay 3 satisfies patient-level `&`, but no stay-level `&`). See §10 for the row-set semantics and §14.8 for the worked example.
 
 Event/stay-grain eligibility is resolved by grain-aware scoping (`grain_keys`): the text path resolves event-scoped eligibility for event-linked document variables, and the structured code/act and lab executors scope each task to its own stay when `output_one_row_per = "EVTID"`. The extension was additive, as expected, because `EVTID` is invariant across HDW rows — it was executor wiring, not missing identifiers.
 
@@ -575,7 +663,7 @@ Event/stay-grain eligibility is resolved by grain-aware scoping (`grain_keys`): 
 
 ## 8. Channel hits, outputs, and lab semantics
 
-A channel activation is the variable-specific use of a concept channel. It may replace inherited fields, choose an extraction method, set a reducer, request an output shape, or define audit requirements.
+A channel activation is the variable-specific use of a concept channel. It may replace inherited fields, choose an extraction method, or define audit requirements.
 
 A channel's `hit` means:
 
@@ -617,14 +705,7 @@ This means:
 has at least one in-scope glucose measurement above 11 mmol/L
 ```
 
-A lab channel has two faces:
-
-``` text
-membership face: hit TRUE/FALSE/NA, usable in bin_output() and combine expressions
-value face: measurement values from matched rows, usable by num_output() and a plain reducer function, e.g. function(x) max(x, na.rm = TRUE)
-```
-
-Thus a structured lab channel can support either membership output or numeric output depending on the variable activation.
+A lab channel is **one filtered row set, consumed two ways** (refined 2026-07-04; supersedes the older "two faces" wording): its rows are simultaneously the membership hits (spine keys, usable in `bin_output()` and `combine_channels` expressions) and the value carriers (payload columns, usable by `num_output(values_from =, reduce =)`). Which values enter a reduction is therefore controlled by how the channel is *defined* — an unthresholded channel carries every in-scope measurement, a predicate-filtered channel carries only the rows meeting its rule — not by a separate value face.
 
 ### Output shapes and inference
 
@@ -635,11 +716,29 @@ bin_output() produces observed membership:
   hit == TRUE  -> value = 1
   hit == FALSE -> value = 0
   hit == NA    -> value = 0, with incomplete/partial coverage preserved in audit
-num_output()     numeric value
+num_output(values_from =, reduce =)
+                 numeric value: the named payload channel's rows, grouped at
+                 output_one_row_per, summarised by the plain function `reduce`
 str_output()     unconstrained string
 cat_output()     categorical value
 struct_output()  fixed-schema multi-field record; one task -> one record
 ```
+
+The reducer is a plain R function `numeric -> scalar` (e.g. `\(x) max(x, na.rm = TRUE)`), not a tagged operator, and it lives on the output — not on the activation — because it is the variable's question, not a channel property. `values_from` names the payload channel; with several channels in play the pick is real, non-derivable information (it is dplyr's choice of primary table, SQL's `SELECT avg(hb) FROM lab SEMI JOIN docs`).
+
+**The payload invariant (ratified 2026-07-04): the output payload is always drawn from the post-combine row set. "Raw" has no spelling.** Three cases:
+
+``` text
+payload channel in the combine expression      -> its surviving rows
+payload channel NOT in the expression          -> still scoped to the combine's
+                                                  qualifying keys (the expression
+                                                  decides who DEFINES the keys;
+                                                  every channel is CONSTRAINED
+                                                  by them)
+no combine (single channel)                    -> the channel's own filtered rows
+```
+
+An unconstrained payload alongside a gate would silently mix gated and ungated semantics in one variable, so it is deliberately inexpressible: that demand is two variables and a downstream join.
 
 The value type is inferred from the selected channel where possible:
 
@@ -653,19 +752,20 @@ Explicit `output =` is mainly an override, especially `bin_output()` when the re
 
 ### Dispatch and validity
 
-`combine` means hit algebra over channel hit sets and produces `0/1`. Single-channel non-boolean shaping is output assembly with `combine = NULL`, dispatched by output shape.
+`combine_channels` is set algebra over channel row sets at `combine_at_level` (§10). `bin_output()` surfaces the result as membership `0/1`; `num_output(values_from =, reduce =)` uses it as the constraint on the payload. Single-channel non-boolean shaping is output assembly with `combine_channels = NULL`, dispatched by output shape.
 
 Validity matrix:
 
 ``` text
-channels  combine      output                       valid?
->=1       expression   bin_output()                 yes   hit algebra -> 0/1
-1         NULL         bin_output()                 yes   value = that channel's hit
-1         NULL         num/str/cat/struct_output()  yes   single-channel output assembly
->=2       NULL         any                          no    no reconcile rule
-any       expression   non-binary output            no    hit algebra only makes 0/1
-1         expression   any                          no    use NULL
-any       any          missing and not inferable     no    cannot validate shape
+channels  combine_channels  output                               valid?
+>=1       expression        bin_output()                          yes  membership of surviving rows -> 0/1
+1         NULL              bin_output()                          yes  value = that channel's hit
+1         NULL              num/str/cat/struct_output()           yes  single-channel output assembly
+>=2       expression        num_output(values_from =, reduce =)   yes  gate + payload (ratified 2026-07-04)
+>=2       NULL              any                                   no   no reconcile rule
+1         expression        any                                   no   use NULL
+any       expression        str/cat/struct_output()               no   not yet ratified; revisit with a consumer
+any       any               missing and not inferable             no   cannot validate shape
 ```
 
 ------------------------------------------------------------------------
@@ -710,12 +810,12 @@ n_query_hits
 query_label
 ```
 
-Candidate selection can use an `arrange`-like rule over standardized candidate columns:
+The selection rule is a plain function over the standardized candidate table (the wrapper razor, invariant 33 — no `candidate_selection()` wrapper object):
 
 ``` r
-candidate_selection(
-  arrange = arrange(desc(n_query_hits), desc(document_date)),
-  limit = 20
+candidates = \(d) head(
+  dplyr::arrange(d, dplyr::desc(n_query_hits), dplyr::desc(document_date)),
+  20
 )
 ```
 
@@ -723,13 +823,12 @@ This means:
 
 ``` text
 1. run the Lucene-like query
-2. build the candidate table
-3. order candidates by the declared arrange rule
-4. keep the first `limit` candidates
-5. pass selected candidates to the extraction method
+2. build the standardized candidate table
+3. apply the declared selection function
+4. pass the surviving candidates to the extraction method
 ```
 
-No implicit Lucene score is assumed unless the backend actually provides one or the engine explicitly defines one.
+Ordering and limiting are still declared — they are simply declared in the researcher's own vocabulary (dplyr/base R) instead of a bespoke object, and the function is deparsed into provenance. No implicit Lucene score is assumed unless the backend actually provides one or the engine explicitly defines one.
 
 ### Text LLM methods and ellmer structured extraction
 
@@ -767,9 +866,9 @@ Example method declaration:
 
 ``` r
 llm_after_lucene(
-  candidates = candidate_selection(
-    arrange = arrange(desc(n_query_hits), desc(document_date)),
-    limit = 20
+  candidates = \(d) head(
+    dplyr::arrange(d, dplyr::desc(n_query_hits), dplyr::desc(document_date)),
+    20
   ),
 
   prompt = "
@@ -892,15 +991,20 @@ It promises that around that one call, the deterministic pipeline:
 
 Accuracy or gold-label scoring of model answers is out of scope for the engine's guarantees. A run where the model extracts little, abstains, or makes an ungrounded claim that is routed to review is the pipeline working as promised. Validation targets the mechanism, not the model's clinical correctness.
 
-## 10. Boolean hit-set algebra
+## 10. Combining channels: set algebra on the spine
 
-The public boolean-combine surface is a bare string expression over activated channel names:
+The public combine surface is a bare string expression over activated channel names, plus an evaluation level:
 
 ``` r
-combine = "(transplant_act | transplant_status) & !dialysis_signal"
+combine_channels = "(transplant_act | transplant_status) & !dialysis_signal"
+combine_at_level = "EVTID"   # optional; defaults to output_one_row_per
 ```
 
-Boolean logic is set algebra over explicit hit sets, not clinical ontology and not Kleene truth logic. A hit set is the set of task ids matched by one channel activation under the current `variable_spec`.
+(Ratified 2026-07-04: the parameter is named `combine_channels`, the expression stays a flat string — no constructor wraps it — and `combine_at_level` decouples the evaluation grain from the output grain, §7. A single-channel variable has no combine: its filtered rows already are the surviving set, and combine exists only when two or more row sets need algebra.)
+
+Under the pipeline model (§2), each channel is a filtered row set carrying the identity spine, and the expression is relational algebra on spine keys at the stated level: `&` = semi-join, `!` = anti-join, `|` = union. The result is the **surviving row set**; the output kind decides what happens to it — `bin_output()` takes membership per output-grain group, `num_output(values_from =, reduce =)` summarises the payload channel's surviving rows (§8).
+
+For boolean variables this specializes to set algebra over explicit hit sets, not clinical ontology and not Kleene truth logic. A hit set is the set of keys at `combine_at_level` matched by one channel activation under the current `variable_spec` (at the default level those keys are the task ids).
 
 ``` text
 A | B  = union(A, B)
@@ -1093,7 +1197,7 @@ variable: diabete_pre_anchor
 concept: diabetes
 output_one_row_per: PATID
 anchor: inclusion_date
-window: anchor - 365 -> anchor
+window: c(-365, 0) days around anchor
 
 activated channels:
 
@@ -1130,8 +1234,7 @@ activated channels:
    method:
      llm_after_lucene
        candidates:
-         arrange = desc(n_query_hits), desc(document_date)
-         limit = 20
+         \(d) head(arrange(d, desc(n_query_hits), desc(document_date)), 20)
        prompt:
          Determine whether the candidate text documents diabetes...
        type:
@@ -1150,8 +1253,10 @@ activated channels:
 final output:
   bin_output()
 
-combine:
+combine_channels:
   pmsi_diag_e10_e14 | text_diabetes_mentions
+combine_at_level:
+  PATID (default = output_one_row_per)
 ```
 
 Every produced dataset should be traceable to:
@@ -1259,8 +1364,9 @@ threshold_binary()
 collect_fields()
 ```
 
-Within-channel reduction is not an operator: it is a plain function on the channel's
-candidate values, supplied on the activation, e.g. reducer = function(x) max(x, na.rm = TRUE).
+Within-channel reduction is not an operator: it is a plain function on the payload
+channel's rows, supplied on the output, e.g. num_output(values_from = "glucose_measurements",
+reduce = \(x) max(x, na.rm = TRUE)).
 
 Example snippet-style template:
 
@@ -1274,15 +1380,12 @@ diabete_pre_anchor <- variable_spec(
 
   output_one_row_per = "PATID",
   anchor = "inclusion_date",
-  window = period(anchor - 365, anchor),
+  window = c(-365, 0),
 
-  channels = list(
-    pmsi_diag_e10_e14 = use_channel(),
-    text_diabetes_mentions = use_channel()
-  ),
+  channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
 
   output = bin_output(),
-  combine = "pmsi_diag_e10_e14 | text_diabetes_mentions"
+  combine_channels = "pmsi_diag_e10_e14 | text_diabetes_mentions"
 )
 ```
 
@@ -1297,19 +1400,17 @@ diabetes <- concept_spec(
   name = "diabetes",
 
   channels = list(
-    pmsi_diag_e10_e14 = code_channel(
-      source = "pmsi_diag",
+    pmsi_diag_e10_e14 = code_channel(        # source resolves -> "pmsi_diag"
       selector = icd10("^E1[0-4]")
     ),
 
-    text_diabetes_mentions = text_channel(
-      source = "documents",
+    text_diabetes_mentions = text_channel(   # source resolves -> "documents"
       selector = lucene_query("diabete OR diabetique OR insulinotherapie OR insuline"),
 
       default_method = llm_after_lucene(
-        candidates = candidate_selection(
-          arrange = arrange(desc(n_query_hits), desc(document_date)),
-          limit = 20
+        candidates = \(d) head(
+          dplyr::arrange(d, dplyr::desc(n_query_hits), dplyr::desc(document_date)),
+          20
         ),
 
         prompt = "Determine whether the candidate text documents diabetes.",
@@ -1331,8 +1432,7 @@ diabetes <- concept_spec(
       )
     ),
 
-    glucose_measurements = lab_channel(
-      source = "biology",
+    glucose_measurements = lab_channel(      # source resolves -> "biology"
       selector = analyte("GLU.GLU")
     )
   )
@@ -1348,15 +1448,12 @@ diabete_pre_greffe <- variable_spec(
 
   output_one_row_per = "PATID",
   anchor = transplant_date(),
-  window = before_anchor(days = 3650),
+  window = c(-3650, 0),
 
-  channels = list(
-    pmsi_diag_e10_e14 = use_channel(),
-    text_diabetes_mentions = use_channel()
-  ),
+  channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
 
   output = bin_output(), # Because output = bin_output(), the LLM response is collapsed into observed hit membership using positive_hit_when. To keep the LLM response itself as the analytical value, use cat_output() or struct_output() instead.
-  combine = "pmsi_diag_e10_e14 | text_diabetes_mentions"
+  combine_channels = "pmsi_diag_e10_e14 | text_diabetes_mentions"
 )
 ```
 
@@ -1371,17 +1468,14 @@ diabete_type2_pre_greffe <- variable_spec(
 
   output_one_row_per = "PATID",
   anchor = transplant_date(),
-  window = before_anchor(days = 3650),
+  window = c(-3650, 0),
 
   channels = list(
     text_diabetes_mentions = use_channel(
       selector = lucene_query("diabete type 2 OR DNID OR antidiabetique"),
 
       method = llm_after_lucene(
-        candidates = candidate_selection(
-          arrange = arrange(desc(document_date)),
-          limit = 50
-        ),
+        candidates = \(d) head(dplyr::arrange(d, dplyr::desc(document_date)), 50),
 
         prompt = "Determine whether the candidate text documents type 2 diabetes.",
 
@@ -1416,19 +1510,18 @@ perioperative_max_glucose <- variable_spec(
 
   output_one_row_per = "PATID",
   anchor = surgery_date(),
-  window = days_after(0, 2),
+  window = c(0, 2),
 
-  channels = list(
-    glucose_measurements = use_channel(
-      reducer = function(x) max(x, na.rm = TRUE)
-    )
-  ),
+  channels = c("glucose_measurements"),
 
-  output = num_output()
+  output = num_output(
+    values_from = "glucose_measurements",
+    reduce = \(x) max(x, na.rm = TRUE)
+  )
 )
 ```
 
-This variable uses the value face of the lab channel and returns a numeric summary.
+This variable summarises the lab channel's rows numerically; with a single channel and no combine, the payload is the channel's own filtered rows.
 
 ### 14.5 Single-channel membership variable
 
@@ -1439,9 +1532,7 @@ has_glucose_measurement <- variable_spec(
 
   output_one_row_per = "PATID",
 
-  channels = list(
-    glucose_measurements = use_channel()
-  ),
+  channels = c("glucose_measurements"),
 
   output = bin_output()
 )
@@ -1470,6 +1561,145 @@ has_hyperglycaemia <- variable_spec(
 
 This variable asks whether at least one in-scope glucose result above the threshold exists.
 
+### 14.7 History variable with a task-column anchor (antécédent de cholécystectomie)
+
+Validated as a target-surface stress test 2026-07-04. Deliberately the common case: no level machinery, whole-history lookback, researcher-precomputed anchor.
+
+``` r
+cholecystectomy <- concept_spec(
+  name = "cholecystectomy",
+  channels = list(
+    text_mentions = text_channel(          # source resolves -> "documents"
+      selector  = lucene_query('cholecystectomie OR "ablation de la vesicule"'),
+      default_method = llm_after_lucene(
+        prompt = "Identify only an explicitly documented cholecystectomy in the
+                  supplied snippets. Do not infer absence from silence.",
+        type = ellmer::type_object(
+          response = ellmer::type_enum(
+            values = c("documented", "not_documented", "uncertain")
+          )
+        ),
+        positive_hit_when = "documented",
+        require_evidence = TRUE
+      )
+    ),
+    ccam_act = act_channel(                # source resolves -> "pmsi_actes"
+      selector = ccam("HMFC004")           # placeholder act code
+    )
+  )
+)
+
+atcd_cholecystectomie <- variable_spec(
+  name    = "atcd_cholecystectomie",
+  concept = cholecystectomy,
+
+  channels = c("text_mentions", "ccam_act"),
+
+  anchor = "T0",                # researcher-precomputed inclusion date, one per task row
+  window = c(-Inf, 0),          # all recorded history before T0
+
+  combine_channels   = "text_mentions | ccam_act",
+  output_one_row_per = "PATID",
+  output  = bin_output()
+)
+```
+
+Reminder from §7: the text channel windows on document date — this measures "mentioned before T0" (safe for a lookback: pre-T0 documents can only describe pre-T0 surgery), not "happened before T0."
+
+### 14.8 Act-anchored forward complication with same-stay combine (SSI post spinal surgery)
+
+Validated as a target-surface stress test 2026-07-04. This is the canonical consumer of `combine_at_level` and `select_event`.
+
+``` r
+ssi <- concept_spec(
+  name = "surgical_site_infection",
+  channels = list(
+    text_ssi = text_channel(
+      selector  = lucene_query('"infection du site" OR ISO OR abces OR "reprise pour sepsis"'),
+      default_method = llm_after_lucene(
+        prompt = "Identify only an explicitly documented surgical site infection
+                  in the supplied snippets. Do not infer absence from silence.",
+        type = ellmer::type_object(
+          response = ellmer::type_enum(
+            values = c("documented", "not_documented", "uncertain")
+          )
+        ),
+        positive_hit_when = "documented",
+        require_evidence = TRUE
+      )
+    ),
+    cim10_ssi    = code_channel(selector = icd10("^T81\\.4")),   # placeholder codes
+    act_revision = act_channel(
+      selector = ccam(c("ACT_LAVAGE", "ACT_DRAINAGE", "ACT_REPRISE"))  # placeholders
+    )
+  )
+)
+
+ssi_6mo_post_spinal <- variable_spec(
+  name    = "ssi_6mo_post_spinal_surgery",
+  concept = ssi,
+
+  channels = c("text_ssi", "cim10_ssi", "act_revision"),
+
+  anchor = index_event("pmsi_actes", ccam(SPINAL_SURGERY_ACTS),  # placeholder set
+                       at = "point_date",
+                       select_event = \(d) dplyr::slice_min(d, point_date, n = 1)),
+  window = c(0, 180),
+
+  combine_channels   = "text_ssi & (cim10_ssi | act_revision)",  # researcher's rule;
+                       # strict variant "text_ssi & cim10_ssi & act_revision" is a
+                       # one-line swap — which is right is a methods decision, not
+                       # the engine's
+  combine_at_level   = "EVTID",     # co-occurrence within the SAME stay
+  output_one_row_per = "PATID",     # 1 if any qualifying stay in the window
+  output  = bin_output()
+)
+```
+
+Task list posture: subjects come from an upstream inclusion variable over `SPINAL_SURGERY_ACTS`, so anchor no-match stays a loud error (§7). "Who scored" per row is the membership/UpSet audit (§10); the LLM's justification is its grounded evidence (§9).
+
+### 14.9 Gated numeric payload (mean haemoglobin in anaemic stays)
+
+The canonical `values_from` example — the reference dplyr pipeline from §2, as one spec.
+
+``` r
+anemia <- concept_spec(
+  name = "anemia",
+  channels = list(
+    text_anemia = text_channel(
+      selector = lucene_query("anemie OR anemique")
+      # default_method as in 14.7-14.8, omitted here for brevity
+    ),
+    hb_low = lab_channel(
+      selector = analyte_value("HGB", lt = 12, unit = "g/dL")  # the concept's lab
+    ),                                                          # definition of anaemia
+    hb_all = lab_channel(
+      selector = analyte("HGB")                                 # every Hb measurement
+    )
+  )
+)
+
+mean_hb_anemic_stays <- variable_spec(
+  name    = "mean_hb_anemic_stays",
+  concept = anemia,
+
+  channels = c("text_anemia", "hb_low", "hb_all"),
+
+  anchor = "T0",
+  window = c(-365, 0),
+
+  combine_channels   = "text_anemia & hb_low",
+  combine_at_level   = "EVTID",
+  output_one_row_per = "EVTID",    # or "PATID": pooled over all qualifying rows
+  output = num_output(
+    values_from = "hb_all",        # not in the expression -> still key-scoped (§8):
+    reduce      = mean             # ALL Hb values within qualifying stays
+  )
+)
+```
+
+Swap `values_from = "hb_low"` to average only the sub-threshold values instead: which values enter the mean is controlled by which channel is the payload, never by an unconstrained escape from the gate.
+
 ## 15. Design invariants
 
 Future agents should not violate these principles.
@@ -1485,7 +1715,7 @@ Future agents should not violate these principles.
 9.  No concept channel is used unless a `variable_spec` or template explicitly activates it.
 10. `variable_spec` is the concrete executable protocol-specific analytical variable definition.
 11. `variable_template` is concept-specific; generic computational pieces are operators/helpers.
-12. `output_one_row_per` defines the output grain and task universe. `combine` is grain-agnostic.
+12. `output_one_row_per` defines the output grain and task universe. `combine_channels` evaluates at `combine_at_level`, which defaults to that grain; qualifying keys exists-lift to output rows.
 13. A channel `hit` means the selected definition matched at least one in-scope signal.
 14. An unthresholded lab channel hits when a measurement exists; thresholded lab membership is represented by a thresholded selector.
 15. Boolean combine is observed hit-set algebra over explicit hit sets, not clinical ontology and not Kleene logic.
@@ -1503,6 +1733,12 @@ Future agents should not violate these principles.
 27. Provenance is part of the output contract, not optional documentation.
 28. For single-channel bin_output(), the final value is still observed membership 0/1. Channel hit NA becomes value 0 with incomplete coverage/audit status, not a missing value.
 29. Tests should protect semantic contracts, not incidental implementation structure. Regression tests and migration tests are useful, but they must not freeze temporary wrappers, object layouts, or current code paths as architectural truth.
+30. A channel is a filtered row set carrying the identity spine; its rows are simultaneously membership hits and value carriers. Cross-source, cross-channel combination happens only through spine keys (`PATID ⊃ EVTID ⊃ source_item_id`).
+31. `combine_channels` is set algebra at `combine_at_level` producing the surviving row set; the output kind decides what is done with those rows. A single-channel variable has no combine.
+32. Output payloads are always drawn from the post-combine row set; "raw" has no spelling. An unconstrained payload alongside a gate is two variables, never one.
+33. A spec constructor earns its place only if it encodes semantics the engine must interpret (dispatch keys, role/selector bindings). Anything the researcher could write as plain R data, a plain function, or plain ellmer stays plain (the wrapper razor).
+34. Definers bind location; activations never do. Typed channel constructors may appear in a `concept_spec` or inline in a variable's channel list under non-colliding names; `use_channel()` carries no `source`, and an omitted `source` on a definer resolves against the registry unique-or-error, never by default.
+35. Accepting a multi-row `select_event` is accepting per-event output rows: anchor multiplicity sets task multiplicity, `output_one_row_per` must name the event-grain key, and the output-grain guard enforces the match.
 
 ## 16. Deferred capabilities (gated on consumer)
 
@@ -1510,7 +1746,7 @@ These are declared parts of the target contract that are **reserved, not built**
 
 1. **`.lab_source_binding()` — role-resolved lab columns.** The lab executor (`measure_analyte_values`) still names biology columns directly (`DATEXAM` / `analyte` / `value` / `value_raw` / `BIOL_ID`) because biology is a single source, so nothing forces role-resolution (contrast the code/act path, which is role-driven precisely because it has two coded sources with different physical code columns). *Consumer:* a second biology source — e.g. microbiology results. When it lands, the response is role-resolution parity with the code path, not any `redsan` auto-seeding (no such API exists; the source registry stays hand-declared).
 
-2. **`llm_after_lucene(...)` declarative signature.** The text method is a declarative tag today; its method-specific knobs (`prompt`, `type`, `candidates`, `positive_hit_when`) live in the `extractor` bundle that dispatch consumes, while `inspect()` surfaces the tag. The target folds those knobs *into* the `llm_after_lucene(candidates = llm_candidate_selection(arrange=..., limit=...), prompt=..., type=..., positive_hit_when=...)` signature. `llm_candidate_selection()` is the reserved name for the ordering+limiting rule. *Consumer:* text retrieval running in-engine (today the text source is pre-retrieved, so an arrange/limit knob would be set-but-not-read). An unread knob is not carried in the meantime.
+2. **`llm_after_lucene(...)` declarative signature.** The text method is a declarative tag today; its method-specific knobs (`prompt`, `type`, `candidates`, `positive_hit_when`) live in the `extractor` bundle that dispatch consumes, while `inspect()` surfaces the tag. The target folds those knobs *into* the `llm_after_lucene(candidates = ..., prompt = ..., type = ..., positive_hit_when = ...)` signature, where `candidates` is a plain function over the standardized candidate table (§9; the previously reserved `llm_candidate_selection()` wrapper was dropped by the wrapper razor, 2026-07-04). *Consumer:* text retrieval running in-engine (today the text source is pre-retrieved, so a selection knob would be set-but-not-read). An unread knob is not carried in the meantime.
 
 3. **`positive_hit_when` response-to-hit literal.** Response-to-hit mapping is currently the binary parser's `documented` → `present` → hit. The target exposes an explicit literal declaring which response state becomes `hit = TRUE` (see invariant 20). *Consumer:* a variable needing a mapping the parser does not already bake in.
 
@@ -1519,3 +1755,28 @@ These are declared parts of the target contract that are **reserved, not built**
 5. **Public execution surface (temporary adapters).** The runner reuses `measure_*()` / `run_extraction()` as temporary adapters — they are generic over their parameters but are not the intended public execution architecture. *Consumer:* a deliberate design of the public execution surface; until then the adapters stand.
 
 6. **Role-named output columns.** The source layer resolves *inputs* from canonical roles, but emitted frames still use the historical runner column names (the target role vocabulary is exposed through source metadata, not yet on output frames); internal output `$kind` likewise keeps the binary/number/categorical/fields vocabulary. *Consumer:* a downstream reader that needs role-named output columns.
+
+### Ratified surface pending wiring (2026-07-04 batch)
+
+The pipeline-model surface above (§2, §5–§8, §10) is ratified contract but not yet wired; shipped code still speaks the previous spellings. Unlike the consumer-gated capabilities, the renames are gated only on touching the code; the semantic additions have named consumers:
+
+``` text
+combine -> combine_channels; window ctors -> c(from, to);
+channels string/inline forms; source-kind registry resolution;
+required_roles / native_grain / linkage derived from type + registry
+                                    gate: next touch of the spec layer
+combine_at_level + exists-lift      consumer: 14.8 (same-stay SSI, patient rows)
+num_output(values_from =, reduce =)
+  + the payload constraint          consumer: 14.9 (mean Hb in anaemic stays)
+index_event(select_event = ) +
+  per-event task emission           consumer: 14.8 (earliest of several surgeries)
+lab value predicates with subject
+  context (sex/age thresholds)      consumer: 14.9's hb_low channel; the predicate
+                                    is a plain closure — how subject attributes
+                                    reach it (task columns vs demographics join)
+                                    is decided at build time
+provenance: candidate counts
+  pre/post combine constraint       rides with the values_from wiring
+```
+
+When a piece lands, note it in `HANDOFF.md` and delete its line here; do not fork the contract text.

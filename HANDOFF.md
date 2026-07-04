@@ -694,3 +694,47 @@ fields; 5 fields valid not_documented, evidence present). Suite untouched:
 `[ FAIL 0 | WARN 0 | SKIP 0 | PASS 119 ]`.
 
 **Files.** `scripts/run_variable_real.R` (new), the three per-concept scripts deleted.
+
+## The pipeline model ratified into DESIGN -- Claude Fable (2026-07-04)
+
+**What.** A two-day design conversation (owner-driven, stress-tested on three worked
+examples) is now contract text. The core reframe: a variable_spec is a declarative
+recipe for a small data-science pipeline (owner's ground truth: `lab %>%
+filter(EVTID %in% docs$EVTID, hb < threshold) %>% group_by(EVTID) %>%
+summarise(mean(hb))`). Channels are FILTERED ROW SETS carrying the identity spine --
+their rows are simultaneously membership hits and value carriers; combine is set
+algebra on spine keys at a stated level producing the SURVIVING row set; the output
+kind decides what happens to those rows.
+
+**Ratified surface (DESIGN sections in parentheses).**
+- `combine` -> `combine_channels` flat expr string + `combine_at_level` defaulting to
+  `output_one_row_per` (SS7/SS10); exists-lift to output rows; single-channel variables
+  have no combine.
+- Payload invariant (SS8): `num_output(values_from =, reduce =)` -- reducer moves off
+  the activation onto the output; payloads are ALWAYS post-combine, "raw" has no
+  spelling; gate + unconstrained payload = two variables.
+- Channels list forms (SS6): bare strings activate; use_channel() only for overrides
+  (loses `source` forever and `reducer`); inline typed definers declare variable-local
+  channels under non-colliding names.
+- Source resolution (SS4/SS5): source_spec gains `kind`; typed definers may omit
+  `source =`, resolved unique-or-error (a 2nd lab-kind source makes omission a loud
+  error, never a silent default).
+- Wrapper razor (invariant 33): window ctors retired -> `window = c(from, to)` days
+  (`-Inf` legal, dissolving the whole-history gap); index_event multi-match ->
+  `select_event` plain closure (multi-row selection ENTAILS per-event output rows,
+  owner-ratified; grain guard enforces); candidate selection -> plain closure over the
+  standardized candidate table (`llm_candidate_selection()` reserved name dropped).
+- Identity spine upgraded to "combination substrate" (SS4); invariants 30-35 added,
+  12 amended; three worked examples added (SS14.7 antecedent de cholecystectomie,
+  SS14.8 SSI 6mo post spinal surgery = the combine_at_level/select_event consumer,
+  SS14.9 mean Hb in anaemic stays = the values_from consumer); SS16 gains the
+  "ratified surface pending wiring" backlog with named consumers.
+
+**Why.** Every piece traces to an owner ruling in-session: the where axis was
+proposed, then DISSOLVED by the pipeline reframe (no separate gate axis); the
+reduce-scope question flip-flopped until the owner's dplyr line settled it
+(reducer sees filtered, join-surviving rows only); channel_hits()/surviving*()
+spellings and lab_anemia-as-second-channel were each rejected and the surface
+re-derived. Code still speaks the previous spellings -- wiring is gated per SS16.
+
+**Files.** `DESIGN.md` only (375 insertions, 114 deletions). Suite untouched.
