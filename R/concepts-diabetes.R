@@ -61,9 +61,9 @@ diabetes_baseline_status_template <- function(concept = diabetes_concept_spec())
         name = "diabetes_baseline_status_template",
         concept = concept,
         defaults = list(
-            window = before_anchor(days = 1825L, grace_days = 7L),
+            window = c(-1825, 7),
             channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
             text_method = llm_after_lucene(),
             output = bin_output(),
-            combine = any_positive()))   # build = .default_template_build(concept)
+            combine_channels = any_positive()))   # build = .default_template_build(concept)
 }

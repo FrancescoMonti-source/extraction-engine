@@ -9,19 +9,12 @@
 # =============================================================================
 
 # --- relative windows ---------------------------------------------------------
-before_anchor <- function(days, grace_days = 0L) {
-    .experimental_spec(
-        list(kind = "relative_window", from_days = -as.integer(days),
-             to_days = as.integer(grace_days), relation = "before_anchor"),
-        "ee_window")
-}
-
-days_after <- function(from_days = 0L, to_days) {
-    .experimental_spec(
-        list(kind = "relative_window", from_days = as.integer(from_days),
-             to_days = as.integer(to_days), relation = "days_after"),
-        "ee_window")
-}
+# The ratified spelling is a plain vector on the variable: window = c(from_days,
+# to_days) relative to the anchor (0 = the anchor day; negative = lookback;
+# c(-Inf, 0) = unbounded lookback; NULL = no window at all). The old ctors
+# (days_after / before_anchor) were wrapper-razor casualties (DESIGN invariant
+# 33): they interpreted nothing the two numbers do not already say. variable_spec
+# normalizes the vector into the internal ee_window record the runner reads.
 
 # --- derived anchors ----------------------------------------------------------
 # An anchor may be a task COLUMN (anchor = "inclusion_date", one date supplied per task)

@@ -22,9 +22,9 @@ hx_var <- function(expr = "transplant_act & !dialysis_signal",
     variable_spec(
         name = "transplant_without_dialysis", concept = hx_concept(),
         output_one_row_per = "PATID", anchor = "anchor_date",
-        window = before_anchor(days = 1825L, grace_days = 7L),
+        window = c(-1825, 7),
         channels = channels, output = bin_output(),
-        combine = expr)
+        combine_channels = expr)
 }
 
 hx_tasks <- tibble::tibble(

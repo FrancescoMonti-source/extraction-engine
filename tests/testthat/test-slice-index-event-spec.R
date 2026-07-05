@@ -41,7 +41,7 @@ test_that("index_event derives a per-subject anchor from the matched event", {
         output_one_row_per = "PATID",
         anchor = index_event(source = "pmsi_diag", selector = icd10("^Z94"),
                              at = "event_start"),
-        window = before_anchor(days = 30L, grace_days = 0L),
+        window = c(-30, 0),
         channels = list(dm_code = use_channel()),
         output = bin_output())
 
@@ -67,7 +67,7 @@ test_that("index_event errors on multiple matching events per subject", {
         name = "dm_before_index_stay", concept = ix_concept,
         output_one_row_per = "PATID",
         anchor = index_event("pmsi_diag", icd10("^Z94"), at = "event_start"),
-        window = before_anchor(days = 30L, grace_days = 0L),
+        window = c(-30, 0),
         channels = list(dm_code = use_channel()), output = bin_output())
     expect_error(
         run_variable(spec, tibble::tibble(task_id = "P1::t", PATID = "P1"),

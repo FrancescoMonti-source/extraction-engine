@@ -65,7 +65,7 @@ test_that("a combine expression gates rows and cat_output reads the survivors' c
         output_one_row_per = "PATID",
         channels = list(dialysis_diag = use_channel(),
                         dialysis_act = use_channel()),
-        combine = "dialysis_diag & dialysis_act",
+        combine_channels = "dialysis_diag & dialysis_act",
         output = cat_output(levels = c("hemodialysis", "peritoneal"),
                             values_from = "dialysis_act",
                             reduce = gc_rule))
@@ -94,7 +94,7 @@ test_that("num_output(values_from =, reduce =) rides the same gate", {
         output_one_row_per = "PATID",
         channels = list(dialysis_diag = use_channel(),
                         dialysis_act = use_channel()),
-        combine = "dialysis_diag & dialysis_act",
+        combine_channels = "dialysis_diag & dialysis_act",
         output = num_output(values_from = "dialysis_act", reduce = length))
 
     run <- run_variable(spec, gc_tasks, gc_sources)
@@ -118,7 +118,7 @@ test_that("an empty payload behind a passing gate yields NA without calling redu
         output_one_row_per = "PATID",
         channels = list(dialysis_diag = use_channel(),
                         dialysis_act = use_channel()),
-        combine = "dialysis_diag | dialysis_act",
+        combine_channels = "dialysis_diag | dialysis_act",
         output = num_output(values_from = "dialysis_act", reduce = length))
 
     run <- run_variable(spec, gc_tasks, gc_sources)
@@ -154,7 +154,7 @@ test_that("the payload rule is enforced at build time", {
             output_one_row_per = "PATID",
             channels = list(dialysis_diag = use_channel(),
                             dialysis_act = use_channel()),
-            combine = "dialysis_diag & dialysis_act",
+            combine_channels = "dialysis_diag & dialysis_act",
             output = cat_output(levels = c("hemodialysis", "peritoneal"))),
         "combine gates rows")
     # values_from must name an activated channel.
@@ -164,7 +164,7 @@ test_that("the payload rule is enforced at build time", {
             output_one_row_per = "PATID",
             channels = list(dialysis_diag = use_channel(),
                             dialysis_act = use_channel()),
-            combine = "dialysis_diag & dialysis_act",
+            combine_channels = "dialysis_diag & dialysis_act",
             output = num_output(values_from = "nope", reduce = length)),
         "values_from must name an activated channel")
     # With several channels the payload pick is not derivable.
@@ -174,7 +174,7 @@ test_that("the payload rule is enforced at build time", {
             output_one_row_per = "PATID",
             channels = list(dialysis_diag = use_channel(),
                             dialysis_act = use_channel()),
-            combine = "dialysis_diag & dialysis_act",
+            combine_channels = "dialysis_diag & dialysis_act",
             output = num_output(reduce = length)),
         "must declare values_from")
     # Reduction lives on the output, never on the activation (wrapper razor).

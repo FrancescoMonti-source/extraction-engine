@@ -73,7 +73,7 @@ CASES$diabetes <- list(
         set.seed(cfg$seed)
         ch <- ch[sample(nrow(ch), min(cfg$n, nrow(ch))), , drop = FALSE]
         tasks <- ch %>% transmute(task_id = PATID, PATID, anchor_date)
-        win <- before_anchor(days = 1825L, grace_days = 7L)   # template's window
+        win <- c(-1825, 7)   # template's window
 
         diag <- load_pmsi_diag(pmsi_p) %>%
             filter(as.character(PATID) %in% tasks$PATID)

@@ -60,7 +60,7 @@ smoking_periop <- function() {
         name = "tabac_statut_periop", output_one_row_per = "PATID", anchor = "anchor_date")
 }
 
-# Why: single-channel categorical assembly (combine = NULL, output = categorical)
+# Why: single-channel categorical assembly (combine_channels = NULL, output = categorical)
 # must carry a CATEGORICAL value and keep the three non-positive outcomes distinct --
 # indetermine (model judged evidence inconclusive) is a real ascertained value, while
 # no_candidate (nothing retrieved) and invalid (definitive without grounding) are not.

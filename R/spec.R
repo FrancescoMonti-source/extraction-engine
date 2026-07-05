@@ -30,16 +30,96 @@ suppressWarnings(suppressMessages(library(dplyr)))
     invisible(TRUE)
 }
 
-# Normalize a combine= value into an ee_combiner. A bare string is a hit-set
-# expression (combine = "(a | b) & !c"); operator records pass through; NULL is
-# allowed (single-channel direct specs). See hit_set_expr() in operators.R.
+# Normalize a combine_channels= value into an ee_combiner. A bare string is a
+# hit-set expression (combine_channels = "(a | b) & !c"); operator records pass
+# through; NULL is allowed (single-channel direct specs). See hit_set_expr().
 .as_combiner <- function(combine) {
     if (is.null(combine) || inherits(combine, "ee_combiner")) return(combine)
     if (is.character(combine) && length(combine) == 1L && nzchar(combine)) {
         return(hit_set_expr(combine))
     }
-    stop("combine must be a combiner operator or a hit-set expression string.",
-         call. = FALSE)
+    stop("combine_channels must be a combiner operator or a hit-set expression ",
+         "string.", call. = FALSE)
+}
+
+# Normalize the ratified window spelling (DESIGN §7): c(from_days, to_days)
+# relative to the anchor -- c(0, 180) = forward 6 months, c(-1825, 7) = 5-year
+# lookback with a week of grace, c(-Inf, 0) = unbounded lookback. NULL = no
+# window (whole history / event scope). Internal ee_window records pass through
+# (template defaults built before merging).
+.as_window <- function(window) {
+    if (is.null(window) || inherits(window, "ee_window")) return(window)
+    if (is.numeric(window) && length(window) == 2L && !anyNA(window) &&
+        window[[1]] <= window[[2]]) {
+        return(.experimental_spec(
+            list(kind = "relative_window",
+                 from_days = as.numeric(window[[1]]),
+                 to_days = as.numeric(window[[2]]),
+                 relation = "days_after"),
+            "ee_window"))
+    }
+    stop("window must be NULL or c(from_days, to_days) relative to the anchor ",
+         "(from <= to; e.g. c(0, 180), c(-1825, 7), c(-Inf, 0)).", call. = FALSE)
+}
+
+# Normalize the three ratified channel entry forms (DESIGN §5) into activations
+# plus variable-local inline definitions:
+#   "name"                       plain activation, inherit everything
+#   name = use_channel(...)      activation with local replacements
+#   name = lab_channel(...) etc. INLINE definition of a variable-local channel
+# Inline names must not collide with concept channels (§14.3 overrides are the
+# only deviation path for inherited channels); promote inline -> concept when a
+# second variable wants the same channel.
+.normalize_variable_channels <- function(channels, concept) {
+    if (is.character(channels)) channels <- as.list(channels)
+    if (!is.list(channels)) {
+        stop("channels must be a character vector or a list (names, ",
+             "use_channel() activations, inline typed definitions).",
+             call. = FALSE)
+    }
+    nms <- names(channels)
+    if (is.null(nms)) nms <- rep("", length(channels))
+    act_names <- character(length(channels))
+    acts <- vector("list", length(channels))
+    inline <- list()
+    for (i in seq_along(channels)) {
+        x <- channels[[i]]
+        nm <- nms[[i]]
+        if (is.character(x) && length(x) == 1L && nzchar(x) && !nzchar(nm)) {
+            act_names[[i]] <- x
+            acts[[i]] <- use_channel()
+        } else if (inherits(x, "ee_channel_use")) {
+            if (!nzchar(nm)) {
+                stop("use_channel() entries must be named after the channel ",
+                     "they activate.", call. = FALSE)
+            }
+            act_names[[i]] <- nm
+            acts[[i]] <- x
+        } else if (inherits(x, "ee_channel")) {
+            if (!nzchar(nm)) {
+                stop("inline channel definitions must be named.", call. = FALSE)
+            }
+            if (nm %in% names(concept$channels)) {
+                stop("inline channel '", nm, "' collides with a concept ",
+                     "channel of the same name; override inherited channels ",
+                     "with use_channel(...) replacements instead (DESIGN ",
+                     "§14.3).", call. = FALSE)
+            }
+            act_names[[i]] <- nm
+            inline[[nm]] <- x
+            acts[[i]] <- use_channel()
+        } else {
+            stop("channels entries must be channel names, use_channel() ",
+                 "activations, or named inline typed channel definitions.",
+                 call. = FALSE)
+        }
+    }
+    if (anyDuplicated(act_names)) {
+        stop("channels activates a channel more than once: ",
+             paste(unique(act_names[duplicated(act_names)]), collapse = ", "),
+             call. = FALSE)
+    }
+    list(activations = setNames(acts, act_names), inline = inline)
 }
 
 # Lower any_positive() to a raw hit-set expression and enforce the combine / channel
@@ -54,15 +134,15 @@ suppressWarnings(suppressMessages(library(dplyr)))
     if (inherits(combine, "ee_combiner") && identical(combine$kind, "any_positive")) {
         if (n < 2L) {
             stop("any_positive() needs >=2 channels; for a single channel drop ",
-                 "combine (combine = NULL) and let output() shape the value.",
+                 "combine_channels and let output() shape the value.",
                  call. = FALSE)
         }
         combine <- hit_set_expr(paste(channel_names, collapse = " | "))
     }
     if (inherits(combine, "ee_combiner") && identical(combine$kind, "hit_set_expr")) {
         if (n < 2L) {
-            stop("A combine expression needs >=2 channels; a single channel must ",
-                 "use combine = NULL.", call. = FALSE)
+            stop("A combine expression needs >=2 channels; a single channel ",
+                 "drops combine_channels.", call. = FALSE)
         }
         # A combine expression gates ROWS; it never produces the value itself
         # (DESIGN §8). bin_output() lifts membership directly; num/cat read the
@@ -94,9 +174,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }
     # combine is NULL from here.
     if (n >= 2L) {
-        stop("combine = NULL requires a single channel; supply a combine ",
-             "expression (hit-set algebra) for >=2 channels -- there is no ",
-             "reconcile rule otherwise.", call. = FALSE)
+        stop("Missing combine_channels: >=2 activated channels need a hit-set ",
+             "expression -- there is no reconcile rule otherwise.", call. = FALSE)
     }
     if (n == 1L && is.null(output)) {
         stop("A single-channel variable needs an output() ",
@@ -271,7 +350,7 @@ use_channel <- function(method = NULL, extractor = NULL,
                 text_method = params$text_method,
                 text_extractor = params$text_extractor),
             output = params$output,
-            combine = params$combine,
+            combine_channels = params$combine_channels,
             template_name = params$template_name)
     }
 }
@@ -299,13 +378,22 @@ variable_template <- function(name, concept, defaults = list(), build = NULL) {
 # It may be built from a template (template=) or written directly (concept=).
 variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PATID",
                           anchor = NULL, window = NULL, channels = list(),
-                          output = NULL, combine = NULL, combine_at_level = NULL,
+                          output = NULL, combine_channels = NULL,
+                          combine_at_level = NULL,
                           template = NULL, template_name = NULL, ...) {
+    extras <- list(...)
+    # Renamed 2026-07-05 (ratified 2026-07-04, DESIGN §7): the expression is set
+    # algebra over CHANNELS at a level -- the old name is rejected loudly, not
+    # silently accepted alongside the new one.
+    if ("combine" %in% names(extras)) {
+        stop("variable_spec() `combine` was renamed: use combine_channels = ",
+             "\"expr\" (+ optional combine_at_level =).", call. = FALSE)
+    }
     if (!is.null(template)) {
         if (!inherits(template, "ee_variable_template")) {
             stop("template must be created with variable_template().", call. = FALSE)
         }
-        overrides <- list(...)
+        overrides <- extras
         if ("absence_policy" %in% names(overrides)) {
             stop("absence_policy is no longer a variable_spec() argument; ",
                  "use output type plus channel coverage/audit status instead.",
@@ -317,14 +405,14 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
         if (!missing(window)) overrides$window <- window
         if (!missing(channels)) overrides$channels <- channels
         if (!missing(output)) overrides$output <- output
-        if (!missing(combine)) overrides$combine <- combine
+        if (!missing(combine_channels)) overrides$combine_channels <- combine_channels
         if (!missing(combine_at_level)) overrides$combine_at_level <- combine_at_level
         params <- utils::modifyList(template$defaults, overrides, keep.null = TRUE)
         params$template_name <- template$name
         return(template$build(params))
     }
 
-    unused <- names(list(...))
+    unused <- names(extras)
     if (length(unused)) {
         stop("Unused variable_spec() argument(s): ",
              paste(unused, collapse = ", "), call. = FALSE)
@@ -347,17 +435,20 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
         stop("variable_spec() output_one_row_per must be one non-empty column name ",
              "(e.g. \"PATID\" or \"EVTID\").", call. = FALSE)
     }
-    .require_named_list(channels, "channels")
-    bad <- !vapply(channels, inherits, logical(1), "ee_channel_use")
-    if (any(bad)) stop("channels must use use_channel().", call. = FALSE)
+    normalized <- .normalize_variable_channels(channels, concept)
+    channels <- normalized$activations
+    inline_channels <- normalized$inline
 
-    unknown <- setdiff(names(channels), names(concept$channels))
+    unknown <- setdiff(names(channels),
+                       c(names(concept$channels), names(inline_channels)))
     if (length(unknown)) {
-        stop("Selected channel(s) not declared by concept_spec: ",
+        stop("Selected channel(s) not declared by concept_spec or inline: ",
              paste(unknown, collapse = ", "), call. = FALSE)
     }
 
-    combine <- .as_combiner(combine)            # bare string -> hit_set_expr()
+    window <- .as_window(window)
+
+    combine <- .as_combiner(combine_channels)   # bare string -> hit_set_expr()
     combine <- .resolve_variable_combine(combine, names(channels), output)
     combine_at_level <- .check_combine_at_level(combine_at_level, combine,
                                                 output_one_row_per)
@@ -371,7 +462,8 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
     .experimental_spec(
         list(name = name, concept = concept, output_one_row_per = output_one_row_per,
              anchor = anchor,
-             window = window, channels = channels, output = output,
+             window = window, channels = channels,
+             inline_channels = inline_channels, output = output,
              combine = combine, combine_at_level = combine_at_level,
              template = template_name),
         "ee_variable_spec")
@@ -433,8 +525,11 @@ inspect.default <- function(x, ...) {
     list(value = value, source = source)
 }
 
-.resolve_channel_activation <- function(name, concept, channel_use) {
-    channel_def <- concept$channels[[name]]
+# `catalog` is the variable's full channel catalog: concept channels plus any
+# variable-local inline definitions (they resolve identically; an inline definer
+# binds wherever it appears, DESIGN §5).
+.resolve_channel_activation <- function(name, catalog, channel_use) {
+    channel_def <- catalog[[name]]
     if (is.null(channel_def)) {
         stop("Cannot resolve unknown channel: ", name, call. = FALSE)
     }
@@ -470,10 +565,11 @@ resolve_variable_spec <- function(variable) {
     if (!inherits(variable, "ee_variable_spec")) {
         stop("resolve_variable_spec() requires a variable_spec().", call. = FALSE)
     }
+    catalog <- c(variable$concept$channels, variable$inline_channels)
     resolved_channels <- lapply(
         names(variable$channels),
         function(name) .resolve_channel_activation(
-            name, variable$concept, variable$channels[[name]]))
+            name, catalog, variable$channels[[name]]))
     names(resolved_channels) <- names(variable$channels)
 
     combine_rule <- if (inherits(variable$combine, "ee_combiner") &&

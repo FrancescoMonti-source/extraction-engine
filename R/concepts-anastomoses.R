@@ -43,6 +43,6 @@ recipient_anastomoses_template <- function(concept = anastomoses_concept_spec())
             channels = c("text_operative_report"),
             text_method = llm_after_lucene(),
             text_extractor = anastomoses_definition(),        # multi-field answer schema
-            output = struct_output(names(ANASTOMOSES_FIELDS)))) # single channel -> combine = NULL;
+            output = struct_output(names(ANASTOMOSES_FIELDS)))) # single channel -> combine_channels = NULL;
                                                                # output drives assembly
 }

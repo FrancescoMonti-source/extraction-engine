@@ -13,7 +13,7 @@ og_diag <- tibble::tibble(
 og_spec <- function(grain) variable_spec(
     name = "grain_guard_probe", concept = diabetes_concept_spec(),
     output_one_row_per = grain, anchor = "anchor_date",
-    window = before_anchor(days = 1825L, grace_days = 7L),
+    window = c(-1825, 7),
     channels = list(pmsi_diag_e10_e14 = use_channel()),
     output = bin_output())
 

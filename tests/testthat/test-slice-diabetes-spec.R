@@ -61,7 +61,7 @@ test_that("direct glucose variable_spec reduces the channel with a plain functio
         concept = concept,
         output_one_row_per = "PATID",
         anchor = "anchor_date",
-        window = days_after(0L, 2L),
+        window = c(0, 2),
         channels = list(glucose_measurements = use_channel()),
         output = num_output(reduce = function(x) max(x, na.rm = TRUE)))
 
@@ -101,9 +101,9 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
     esrd_var <- variable_spec(
         name = "esrd_status", concept = esrd_concept, output_one_row_per = "PATID",
         anchor = "anchor_date",
-        window = before_anchor(days = 1825L, grace_days = 7L),
+        window = c(-1825, 7),
         channels = list(esrd_code = use_channel()),
-        output = bin_output())          # single channel -> combine = NULL (membership)
+        output = bin_output())          # single channel -> combine_channels = NULL (membership)
 
     tasks <- tibble::tibble(
         task_id = c("N1::t", "N2::t"), PATID = c("N1", "N2"),

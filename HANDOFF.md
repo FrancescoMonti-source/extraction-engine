@@ -900,3 +900,30 @@ still refuses loudly, with the reason in the error: a text hit is an LLM answer
 grounded on cited rows, so a group rule that empties the citations must overturn
 the answer (ascertained absent? unevaluable?) -- fork deliberately left to a real
 consumer, recorded in SS8. Suite 180/0/0.
+
+## Spec-layer renames landed: the ratified spellings are the only spellings -- Claude Fable (2026-07-05)
+
+Owner: "Also renames." The SS16 rename batch (gated on "next touch of the spec
+layer" -- touched twice today) is done; DESIGN prose and code now agree:
+- `combine` -> `combine_channels` (variable_spec formal + template defaults +
+  every test/concept/script; the old name is REJECTED LOUDLY, not aliased).
+- Window ctors DELETED (wrapper razor): `window = c(from_days, to_days)` is the
+  only spelling -- c(0, 180) forward, c(-1825, 7) lookback+grace, c(-Inf, 0)
+  unbounded lookback (rule strings switched to %g so Inf prints; executors takes
+  numeric day offsets). before_anchor(days=D, grace_days=G) migrated as c(-D, G).
+- Channels entry forms (SS5): `channels = c("a", "b")` plain string activations;
+  named use_channel() replacements; named INLINE typed definitions
+  (`hb_all = lab_channel(...)` in the variable's list -- SS14.9's shape, now
+  exercised by the stay-combine probe with hb_all inline instead of on the
+  concept). Inline names colliding with concept channels are rejected; the
+  runner resolves defs via .channel_def() (inline-or-concept catalog).
+- required_roles / native_grain were ALREADY optional declaration metadata and
+  linkage already defaults to the subject path -- noted in SS16, nothing to wire.
+  Source-kind resolution (channel omitting source=) remains SS16-pending: it
+  needs a content-kind facet on source_spec; gate = a consumer that cannot name
+  its source.
+
+Suite 180/0/0 on the first post-migration run. Next: select_event (owner
+greenlit) -- scoping rule settled by inspection: every windowed consumer is
+subject-scoped, every grain-unit consumer is windowless, so per-event tasks
+(windowed, EVTID identity) scope by PATID + window.

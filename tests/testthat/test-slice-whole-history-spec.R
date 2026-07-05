@@ -29,7 +29,7 @@ wh_variable <- function() {
         anchor = NULL,                 # no anchor
         window = NULL,                 # whole history
         channels = list(pmsi_diag_e10_e14 = use_channel()),
-        output = bin_output())         # single channel -> combine = NULL (membership)
+        output = bin_output())         # single channel -> combine_channels = NULL (membership)
 }
 
 # Why: a whole-history variable must execute with no anchor and no date window,

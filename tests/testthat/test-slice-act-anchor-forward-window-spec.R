@@ -41,10 +41,10 @@ aw_var <- variable_spec(
     output_one_row_per = "PATID",
     anchor = index_event(source = "pmsi_actes", selector = ccam("HGFA011"),
                          at = "point_date"),
-    window = days_after(from_days = 1L, to_days = 30L),
+    window = c(1, 30),
     channels = list(pmsi_complication = use_channel(), redo_act = use_channel()),
     output = bin_output(),
-    combine = "pmsi_complication | redo_act")
+    combine_channels = "pmsi_complication | redo_act")
 
 aw_tasks <- tibble::tibble(
     task_id = paste0(c("P1", "P2", "P3", "P4"), "::t"),

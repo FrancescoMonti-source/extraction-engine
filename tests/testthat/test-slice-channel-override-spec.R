@@ -23,9 +23,9 @@ co_spec <- function(use) variable_spec(
     concept = diabetes_concept_spec(),
     output_one_row_per = "PATID",
     anchor = "anchor_date",
-    window = before_anchor(days = 1825L, grace_days = 7L),
+    window = c(-1825, 7),
     channels = list(pmsi_diag_e10_e14 = use),
-    output = bin_output())          # single channel -> combine = NULL (membership)
+    output = bin_output())          # single channel -> combine_channels = NULL (membership)
 
 test_that("activation selector overrides the concept's baseline selector in the executor", {
     baseline <- run_variable(co_spec(use_channel()), co_tasks, co_sources)

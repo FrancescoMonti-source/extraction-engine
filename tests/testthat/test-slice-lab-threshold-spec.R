@@ -43,7 +43,7 @@ test_that("a thresholded analyte selector hits above the cutoff, observed-negati
     var <- variable_spec(
         name = "hyperglycaemia", concept = lab_concept(),
         output_one_row_per = "PATID", anchor = "anchor_date",
-        window = days_after(-7L, 7L),
+        window = c(-7, 7),
         channels = list(glucose = use_channel(selector = analyte_value("GLU.GLU", gt = 11))),
         output = bin_output())
 
@@ -84,11 +84,11 @@ test_that("a thresholded lab hit joins a boolean combine with a code channel", {
     var <- variable_spec(
         name = "diabetic_with_hyperglycaemia", concept = concept,
         output_one_row_per = "PATID", anchor = "anchor_date",
-        window = days_after(-7L, 7L),
+        window = c(-7, 7),
         channels = list(
             glucose = use_channel(selector = analyte_value("GLU.GLU", gt = 11)),
             diabetes_dx = use_channel()),
-        combine = "glucose & diabetes_dx",
+        combine_channels = "glucose & diabetes_dx",
         output = bin_output())
 
     diag <- tibble::tibble(

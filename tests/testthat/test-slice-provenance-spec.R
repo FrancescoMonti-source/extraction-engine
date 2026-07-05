@@ -43,11 +43,11 @@ pv_concept <- concept_spec(
 pv_spec <- variable_spec(
     name = "pv_diabetes_or_glucose", concept = pv_concept,
     output_one_row_per = "PATID", anchor = "anchor_date",
-    window = days_after(-30L, 30L),
+    window = c(-30, 30),
     channels = list(
         dx = use_channel(selector = icd10("^E1[0-2]")),   # local override (§14.3)
         glucose = use_channel()),                          # concept baseline
-    combine = "dx | glucose",
+    combine_channels = "dx | glucose",
     output = bin_output())
 
 pv_run <- run_variable(pv_spec, pv_tasks,

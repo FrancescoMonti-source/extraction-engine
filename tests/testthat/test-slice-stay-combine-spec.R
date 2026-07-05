@@ -101,11 +101,9 @@ sc_ssi_var <- function(..., output_one_row_per = "PATID") {
         concept = sc_ssi_concept,
         output_one_row_per = output_one_row_per,
         anchor = "anchor_date",
-        window = days_after(0L, 180L),
-        channels = list(text_ssi = use_channel(),
-                        cim10_ssi = use_channel(),
-                        act_revision = use_channel()),
-        combine = "text_ssi & (cim10_ssi | act_revision)",
+        window = c(0, 180),
+        channels = c("text_ssi", "cim10_ssi", "act_revision"),   # plain activations
+        combine_channels = "text_ssi & (cim10_ssi | act_revision)",
         output = bin_output(),
         ...)
 }
@@ -200,25 +198,28 @@ sc_anemia_concept <- concept_spec(
             linkage = "subject"),
         hb_low = lab_channel(
             source = "biology",
-            selector = analyte_value("HGB", lt = 12)),  # the concept's lab
-        hb_all = lab_channel(                           # definition of anaemia
-            source = "biology",
-            selector = analyte("HGB"))))
+            selector = analyte_value("HGB", lt = 12))))  # the concept's lab
+                                                         # definition of anaemia
 
-# Only the payload channel is exempt from the dead-weight rule: activating
-# hb_all while reducing hb_low would be an unused activation (build error), so
-# the channel list follows the payload pick.
+# hb_all is not a concept channel: this variable declares it INLINE in its
+# channels list (the ratified §14.9 shape -- a payload channel one variable
+# wants, promoted to the concept only when a second variable needs it). Only
+# the payload channel is exempt from the dead-weight rule, so the channel list
+# follows the payload pick; the others are plain string activations.
 sc_anemia_var <- function(values_from) {
-    channels <- list(text_anemia = use_channel(), hb_low = use_channel())
-    if (identical(values_from, "hb_all")) channels$hb_all <- use_channel()
+    channels <- list("text_anemia", "hb_low")
+    if (identical(values_from, "hb_all")) {
+        channels$hb_all <- lab_channel(source = "biology",
+                                       selector = analyte("HGB"))
+    }
     variable_spec(
         name = "mean_hb_anemic_stays",
         concept = sc_anemia_concept,
         output_one_row_per = "PATID",
         anchor = "anchor_date",
-        window = days_after(-365L, 0L),
+        window = c(-365, 0),
         channels = channels,
-        combine = "text_anemia & hb_low",
+        combine_channels = "text_anemia & hb_low",
         combine_at_level = "EVTID",
         output = num_output(values_from = values_from, reduce = mean))
 }

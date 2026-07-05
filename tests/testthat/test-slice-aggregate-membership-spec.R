@@ -95,7 +95,7 @@ test_that("group-filtered rows feed the level algebra (anaemic stay & same-stay 
         output_one_row_per = "PATID",
         channels = list(hb_anemic_stay = use_channel(),
                         transfusion = use_channel()),
-        combine = "hb_anemic_stay & transfusion",
+        combine_channels = "hb_anemic_stay & transfusion",
         combine_at_level = "EVTID",
         output = bin_output())
     tasks <- tibble::tibble(task_id = c("AM5::t", "AM6::t"),

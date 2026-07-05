@@ -2,7 +2,7 @@
 # concepts-dialysis.R -- dialysis: multi-source OR with TRANSPARENT contribution
 # -----------------------------------------------------------------------------
 # This slice is NOT about reconcile/precedence/corroboration. It is the same
-# multi-source OR shape as diabetes (combine = any_positive), used to make SOURCE
+# multi-source OR shape as diabetes (combine_channels = any_positive), used to make SOURCE
 # CONTRIBUTION transparent: which channel(s) carried the signal, which were silent
 # and WHY (no_candidate vs no rows for the subject vs no source), evidence refs for
 # the positive channel(s), and the researcher-selected combine rule. The engine
@@ -54,10 +54,10 @@ dialysis_status_template <- function(concept = dialysis_concept_spec()) {
         name = "dialysis_status_template",
         concept = concept,
         defaults = list(
-            window = before_anchor(days = 3650L, grace_days = 7L),
+            window = c(-3650, 7),
             channels = c("pmsi_diag_dialysis", "text_dialysis_mentions"),
             text_method = llm_after_lucene(),
             text_extractor = dialysis_text_definition(),
             output = bin_output(),
-            combine = any_positive()))   # build = .default_template_build(concept)
+            combine_channels = any_positive()))   # build = .default_template_build(concept)
 }

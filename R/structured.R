@@ -286,8 +286,8 @@ measure_code_presence <- function(source_table, tasks, codes,
             PATID, EVTID, ELTID, code, t_start, t_end)
 
     rule <- if (windowed) {
-        sprintf("same_subject; interval_overlap[%d,%+d]; %s match {%s}",
-                as.integer(from_days), as.integer(to_days), match,
+        sprintf("same_subject; interval_overlap[%g,%+g]; %s match {%s}",
+                from_days, to_days, match,   # %g: c(-Inf, 0) legal
                 paste(codes, collapse = ","))
     } else {
         sprintf("whole_history; %s match {%s}", match, paste(codes, collapse = ","))
@@ -473,7 +473,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
         } else "")
     scope_txt <- paste(grain_keys, collapse = "+")
     window_txt <- if (windowed) {
-        sprintf("point_window[%d,%+d]; ", as.integer(from_days), as.integer(to_days))
+        sprintf("point_window[%g,%+g]; ", from_days, to_days)   # %g: c(-Inf, 0) legal
     } else {
         "event_scope (no window); "
     }

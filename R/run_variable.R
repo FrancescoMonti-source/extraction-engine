@@ -27,12 +27,20 @@
 
 suppressWarnings(suppressMessages(library(dplyr)))
 
+# A variable's channel catalog = the concept's channels plus any variable-local
+# inline definitions (DESIGN §5 entry forms); inline shadows nothing (name
+# collisions are rejected at build).
+.channel_def <- function(variable, channel_name) {
+    variable$inline_channels[[channel_name]] %||%
+        variable$concept$channels[[channel_name]]
+}
+
 .source_name_for_channel <- function(channel_name, variable) {
-    variable$concept$channels[[channel_name]]$source
+    .channel_def(variable, channel_name)$source
 }
 
 .channel_type <- function(channel_name, variable) {
-    variable$concept$channels[[channel_name]]$type
+    .channel_def(variable, channel_name)$type
 }
 
 .window_days <- function(variable) {
@@ -226,7 +234,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
                                   caller, model_name, grain_keys = "PATID") {
-    channel_def <- variable$concept$channels[[channel_name]]
+    channel_def <- .channel_def(variable, channel_name)
     # Activation may locally override the concept's baseline selector (DESIGN §14.3):
     # use_channel(selector = ...) replaces the inherited selector for THIS variable
     # without mutating the concept -- the same activation-overrides-concept pattern
@@ -959,8 +967,9 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
     channel_names <- names(variable$channels)
     selected_sources <- unname(vapply(channel_names, .source_name_for_channel,
                                       character(1), variable = variable))
-    selected_produces <- vapply(variable$concept$channels[channel_names],
-                                function(ch) ch$produces, character(1))
+    selected_produces <- vapply(channel_names, function(nm) {
+        .channel_def(variable, nm)$produces
+    }, character(1))
     selected <- tibble::tibble(
         variable = variable$name,
         channel = channel_names,

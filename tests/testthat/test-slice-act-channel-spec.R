@@ -33,7 +33,7 @@ act_var <- function(codes = "JAFA001", match = "exact") {
     variable_spec(
         name = "transplant_act", concept = concept, output_one_row_per = "PATID",
         anchor = "anchor_date",
-        window = before_anchor(days = 30L, grace_days = 0L),
+        window = c(-30, 0),
         channels = list(transplant_act = use_channel()),
         output = bin_output())
 }

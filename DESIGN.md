@@ -420,7 +420,7 @@ audit requirements
 
 Only channels listed in `channels` are activated. If a concept has three possible channels and the variable activates only two, the third is ignored.
 
-The channels list admits three entry forms (ratified 2026-07-04):
+The channels list admits three entry forms (ratified 2026-07-04; landed 2026-07-05):
 
 ``` text
 "channel_name"                          plain activation: inherit everything
@@ -1784,13 +1784,13 @@ These are declared parts of the target contract that are **reserved, not built**
 
 ### Ratified surface pending wiring (2026-07-04 batch)
 
-The pipeline-model surface above (§2, §5–§8, §10) is ratified contract but not yet wired; shipped code still speaks the previous spellings. Unlike the consumer-gated capabilities, the renames are gated only on touching the code; the semantic additions have named consumers:
+The pipeline-model surface above (§2, §5–§8, §10) is ratified contract; most spellings landed 2026-07-05. Still pending, each with its gate:
 
 ``` text
-combine -> combine_channels; window ctors -> c(from, to);
-channels string/inline forms; source-kind registry resolution;
-required_roles / native_grain / linkage derived from type + registry
-                                    gate: next touch of the spec layer
+source-kind registry resolution     a channel omitting source= resolves it from a
+  (channel without source=)         registry kind (e.g. the one documents source);
+                                    needs a content-kind facet on source_spec --
+                                    gate: a consumer that cannot name its source
 index_event(select_event = ) +
   per-event task emission           consumer: 14.8 (earliest of several surgeries)
 lab value predicates with subject
@@ -1800,6 +1800,6 @@ lab value predicates with subject
                                     is decided at build time
 ```
 
-`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open). The aggregate membership predicate (former item 7, the HAVING shape) landed the same day — §8 records the `group_at_level` + `keep_group_when` spelling and its fail-closed rules.
+`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open). The aggregate membership predicate (former item 7, the HAVING shape) landed the same day — §8 records the `group_at_level` + `keep_group_when` spelling and its fail-closed rules. The spec-layer renames landed the same day: `combine_channels` (old name rejected loudly), `window = c(from, to)` (ctors deleted; `c(-Inf, 0)` = unbounded lookback), and the three channel entry forms of §5 including variable-local inline definitions (collisions with concept names rejected; `required_roles` / `native_grain` were already optional declaration metadata, and a channel without `linkage` takes the subject path).
 
 When a piece lands, note it in `HANDOFF.md` and delete its line here; do not fork the contract text.
