@@ -295,6 +295,7 @@ measure_code_presence <- function(source_table, tasks, codes,
 measure_analyte_values <- function(source_table, tasks, analytes,
                                    gt = NULL, lt = NULL, grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
+                                   group_at_level = NULL, keep_group_when = NULL,
                                    field = "analyte_value", source = "biology") {
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> event scope
     .validate_structured_inputs(
@@ -341,12 +342,45 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes &
                 .passes_threshold(value, gt, lt),
+            group_demoted = FALSE)
+
+    # Aggregate membership predicate (the HAVING shape, DESIGN §16.7): group the
+    # task's target rows at `group_at_level`, apply the plain closure to each
+    # group's values, and keep only qualifying groups' ORIGINAL rows -- a grouped
+    # row filter, never a synthetic aggregate row. Demoted rows stay in the
+    # observations audit with their reason. A closure breaking its contract (not
+    # exactly one TRUE/FALSE) is a hard error, same rule as a payload reduce.
+    if (!is.null(keep_group_when)) {
+        grp_key <- paste(observations$task_id,
+                         observations[[group_at_level]], sep = "\r")
+        tgt <- observations$is_target
+        kept <- character()
+        if (any(tgt)) {
+            groups <- split(observations$value[tgt], grp_key[tgt])
+            keep <- vapply(groups, function(v) {
+                res <- keep_group_when(v)
+                if (!is.logical(res) || length(res) != 1L || is.na(res)) {
+                    stop("keep_group_when for '", field, "' must return exactly ",
+                         "one TRUE/FALSE; a group predicate breaking its ",
+                         "contract is a bug.", call. = FALSE)
+                }
+                res
+            }, logical(1))
+            kept <- names(keep)[keep]
+        }
+        observations$group_demoted <- tgt & !(grp_key %in% kept)
+        observations$is_target <- tgt & (grp_key %in% kept)
+    }
+
+    observations <- observations %>%
+        mutate(
             selected_evidence = is_target,     # every candidate is evidence
             scope_reason = if (windowed) "point time inside the task window"
                            else "same grain unit (no window)",
-            observation_reason = if_else(is_target,
-                "analyte matches the declared concept",
-                "analyte outside the declared concept"),
+            observation_reason = case_when(
+                is_target ~ "analyte matches the declared concept",
+                group_demoted ~ "group aggregate predicate not satisfied",
+                TRUE ~ "analyte outside the declared concept"),
             # Non-target rows establish source/scope coverage; their unrelated
             # result values are unnecessary in persisted structured artifacts.
             value_raw = if_else(is_target, value_raw, NA_character_),
@@ -411,7 +445,10 @@ measure_analyte_values <- function(source_table, tasks, analytes,
 
     threshold_txt <- paste0(
         if (!is.null(gt)) sprintf("value>%g; ", gt) else "",
-        if (!is.null(lt)) sprintf("value<%g; ", lt) else "")
+        if (!is.null(lt)) sprintf("value<%g; ", lt) else "",
+        if (!is.null(keep_group_when)) {
+            sprintf("group(%s) kept when predicate holds; ", group_at_level)
+        } else "")
     scope_txt <- paste(grain_keys, collapse = "+")
     window_txt <- if (windowed) {
         sprintf("point_window[%d,%+d]; ", as.integer(from_days), as.integer(to_days))

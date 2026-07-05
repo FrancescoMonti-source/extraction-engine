@@ -242,6 +242,17 @@ suppressWarnings(suppressMessages(library(dplyr)))
     # The window is only meaningful for date/interval-scoped structured channels;
     # text eligibility (date-window OR event membership) is resolved upstream, so a
     # text-only variable (e.g. event-scoped anastomoses) need not declare a window.
+    #
+    # Aggregate membership predicates (keep_group_when, DESIGN §16.7) are wired
+    # where their consumer lives: the lab executor. A coded-source group predicate
+    # (e.g. ">=2 acts in one stay") waits for its own consumer -- rejected loudly,
+    # not silently ignored.
+    if (!is.null(channel_def$keep_group_when) &&
+        !identical(channel_def$type, "lab")) {
+        stop("keep_group_when on channel '", channel_name, "' (type '",
+             channel_def$type, "'): aggregate membership predicates are wired ",
+             "for lab channels only; revisit with a consumer.", call. = FALSE)
+    }
     switch(channel_def$type,
         code = ,
         act = {
@@ -270,6 +281,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 analytes = .selector_codes(selector, "codes"),
                 gt = selector$gt, lt = selector$lt, grain_keys = grain_keys,
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
+                group_at_level = channel_def$group_at_level,
+                keep_group_when = channel_def$keep_group_when,
                 field = variable$name, source = source)
         },
         text = {
@@ -868,7 +881,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
             selector = .provenance_selector(ch$selector),
             selector_source = ch$selector_source,
             method_source = ch$method_source,
-            extractor_source = ch$extractor_source)
+            extractor_source = ch$extractor_source,
+            # Aggregate membership predicate (§16.7): the executed group rule,
+            # serializable -- level + deparsed closure, like the output's reduce.
+            group_at_level = ch$channel$group_at_level,
+            keep_group_when = if (is.function(ch$channel$keep_group_when)) {
+                paste(deparse(ch$channel$keep_group_when), collapse = " ")
+            } else NULL)
     })
     window <- if (inherits(variable$window, "ee_window")) {
         list(from_days = variable$window$from_days,

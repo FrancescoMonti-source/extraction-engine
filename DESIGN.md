@@ -707,7 +707,20 @@ This means:
 has at least one in-scope glucose measurement above 11 mmol/L
 ```
 
-A lab channel is **one filtered row set, consumed two ways** (refined 2026-07-04; supersedes the older "two faces" wording): its rows are simultaneously the membership hits (spine keys, usable in `bin_output()` and `combine_channels` expressions) and the value carriers (payload columns, usable by `num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)`). Which values enter a reduction is therefore controlled by how the channel is *defined* — an unthresholded channel carries every in-scope measurement, a predicate-filtered channel carries only the rows meeting its rule — not by a separate value face.
+A lab channel is **one filtered row set, consumed two ways** (refined 2026-07-04; supersedes the older "two faces" wording): its rows are simultaneously the membership hits (spine keys, usable in `bin_output()` and `combine_channels` expressions) and the value carriers (payload columns, usable by `num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)`). Which values enter a reduction is therefore controlled by how the channel is *defined* — an unthresholded channel carries every in-scope measurement, a predicate-filtered channel carries only the rows meeting its rule — not by a separate value face. `analyte_value` takes `gt` and/or `lt` (strict bounds; at least one).
+
+**Aggregate membership predicates** (the SQL `HAVING` shape; owner-requested 2026-07-05, landed the same day): a channel filter usually tests each row alone, but some protocols decide membership by a **group aggregate** — "anaemic stay = the stay's *mean* Hb < 10". This is still a grouped row *filter*, never an output reduction: qualifying groups keep their ORIGINAL source rows (hits, evidence, provenance all point at real rows; no synthetic aggregate rows), and everything downstream — level algebra, exists-lift, payload — consumes them unchanged. It lives on the channel definition as two plain params (no wrapper):
+
+``` r
+hb_anemic_stay = lab_channel(
+  source   = "biology",
+  selector = analyte("HGB"),
+  group_at_level  = "EVTID",                  # the spine key whose groups are tested
+  keep_group_when = \(v) mean(v) < 10         # plain closure: group values -> one TRUE/FALSE
+)
+```
+
+The closure sees the group's target values *within the task's scope* (window rows only — a stay straddling the window edge is aggregated over its in-window rows: researcher-rule flag, not a defect). A closure breaking its contract (not exactly one `TRUE`/`FALSE`) is a hard error, same rule as a payload `reduce`. A task with measurements but no qualifying group is an ascertained negative (`hit = FALSE`, complete coverage), distinct from having no measurements at all. Reduction-as-*value* stays output-only; this is the one shape where a reduction participates in *membership*. Wired for lab channels (the consumer); a coded-source group predicate (e.g. "≥2 acts in one stay") is rejected loudly until its own consumer arrives.
 
 ### Output shapes and inference
 
@@ -1769,8 +1782,6 @@ These are declared parts of the target contract that are **reserved, not built**
 
 6. **Role-named output columns.** The source layer resolves *inputs* from canonical roles, but emitted frames still use the historical runner column names (the target role vocabulary is exposed through source metadata, not yet on output frames); internal output `$kind` likewise keeps the binary/number/categorical/fields vocabulary. *Consumer:* a downstream reader that needs role-named output columns.
 
-7. **Aggregate membership predicates (the SQL `HAVING` shape; flagged 2026-07-05).** A channel filter today tests each row alone; some protocols define membership by a **group aggregate** — "anemic stay = the stay's *mean* Hb < 10". In pipeline terms this is still a row *filter*, not an output reduction: `group_by(EVTID) |> filter(mean(value) < 10)` keeps the qualifying groups' original source rows, so hits, evidence, and provenance keep pointing at real rows; what the executor lacks is group-aware filtering (a grouping level + a plain predicate closure over the group's values). Reduction-as-*value* stays output-only; this is the one shape where a reduction participates in *membership*. *Consumer:* a variable whose qualifying rule aggregates within a group. *Interim workaround (owner-endorsed):* compute the aggregate upstream as a column by hand and feed the engine the derived frame.
-
 ### Ratified surface pending wiring (2026-07-04 batch)
 
 The pipeline-model surface above (§2, §5–§8, §10) is ratified contract but not yet wired; shipped code still speaks the previous spellings. Unlike the consumer-gated capabilities, the renames are gated only on touching the code; the semantic additions have named consumers:
@@ -1789,6 +1800,6 @@ lab value predicates with subject
                                     is decided at build time
 ```
 
-`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open).
+`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open). The aggregate membership predicate (former item 7, the HAVING shape) landed the same day — §8 records the `group_at_level` + `keep_group_when` spelling and its fail-closed rules.
 
 When a piece lands, note it in `HANDOFF.md` and delete its line here; do not fork the contract text.

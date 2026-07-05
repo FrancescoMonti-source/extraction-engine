@@ -27,6 +27,38 @@ channel <- function(source, selector, type = "generic",
             stop(arg, " must be one non-empty string.", call. = FALSE)
         }
     }
+    # Aggregate membership predicate (the HAVING shape, DESIGN §16.7 -> landed
+    # 2026-07-05): membership decided by a group aggregate ("anaemic stay = the
+    # stay's mean Hb < 10"). Still a row FILTER -- qualifying groups keep their
+    # ORIGINAL rows -- so it lives on the channel definition as a pair of plain
+    # params, validated here for every typed constructor:
+    #   group_at_level  = the identity-spine key whose groups are tested
+    #   keep_group_when = plain closure, group values -> one TRUE/FALSE
+    extra <- list(...)
+    has_pred <- !is.null(extra$keep_group_when)
+    has_lvl <- !is.null(extra$group_at_level)
+    if (has_pred || has_lvl) {
+        if (has_pred && !is.function(extra$keep_group_when)) {
+            stop("keep_group_when must be a plain function ",
+                 "(the group's values -> one TRUE/FALSE).", call. = FALSE)
+        }
+        if (has_pred && !has_lvl) {
+            stop("keep_group_when needs group_at_level: the closure decides ",
+                 "which GROUPS keep their rows.", call. = FALSE)
+        }
+        if (has_lvl && !has_pred) {
+            stop("group_at_level without keep_group_when is dead weight; ",
+                 "declare the predicate or drop the level.", call. = FALSE)
+        }
+        if (!is.character(extra$group_at_level) ||
+            length(extra$group_at_level) != 1L ||
+            !extra$group_at_level %in% c("PATID", "EVTID", "ELTID")) {
+            stop("group_at_level must be an identity-spine key ",
+                 "(PATID/EVTID/ELTID); got '",
+                 paste(extra$group_at_level, collapse = ", "), "'.",
+                 call. = FALSE)
+        }
+    }
     produces <- unname(.channel_produces[type])
     if (is.na(produces)) produces <- paste0(type, "_signal")
     .experimental_spec(

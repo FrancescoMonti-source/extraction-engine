@@ -842,3 +842,48 @@ researcher-supplied anchors); lab subject-context predicates (14.9's sexe/age
 threshold); the spec-layer renames (combine -> combine_channels, window ctors ->
 c(from, to), channels string/inline forms) -- this slice touched the spec layer,
 so their gate is due at the next natural opportunity.
+
+## Aggregate membership predicates wired: hit if the GROUP's aggregate says so -- Claude Fable (2026-07-05)
+
+**Trigger.** The second half of the owner's "we need to do both": SS16 item 7, the
+HAVING shape, from the owner's own ask -- "hit if mean hb < 10... It's something
+the engine must be capable to do" (workaround until now: precompute the aggregate
+column by hand upstream).
+
+**Spelling (proposed by me, on the channel definition, two plain params -- flag
+for owner rename if the names don't sit right):**
+    group_at_level  = "EVTID"                   the spine key whose groups are tested
+    keep_group_when = \(v) mean(v) < 10         plain closure, group values -> one TRUE/FALSE
+No wrapper (razor: the engine interprets both parts, but a ctor would add
+nothing); validated for every typed channel constructor (pair required together;
+spine key only; function only). Semantics = a grouped row FILTER
+(`group_by(EVTID) |> filter(mean(value) < 10)`): qualifying groups keep their
+ORIGINAL rows; hits/evidence/provenance point at real rows; level algebra,
+exists-lift and payload consume them unchanged. SS8 (lab channels) records the
+contract; SS16 item 7 deleted.
+
+**The probe** (`test-slice-aggregate-membership-spec.R`, disposable): anaemic
+stay = mean Hb < 10. Ascertained-negative vs silence kept distinct (measurements
+with no qualifying group = hit FALSE/complete; no measurements = NA/partial); the
+hit's evidence = ONLY the qualifying stay's rows (the mixed patient's normal stay
+contributes nothing); group-filtered rows feed combine_at_level ("anaemic stay &
+same-stay transfusion" discriminates same-stay vs cross-stay); contract-breaking
+closure = hard error; declaration-time pair validation. Rejection surface before
+wiring was the DANGEROUS kind: channel() accepted the unknown params silently and
+the engine returned a WRONG cohort (mean-11.5 patient scored 1) -- exactly the
+silent-wrong-member failure this slice closes.
+
+**Wired.**
+- `channels.R`: pair validation in `channel()` (all typed ctors).
+- `structured.R`: `measure_analyte_values(group_at_level =, keep_group_when =)`
+  -- group filter between target-marking and the presentational fields; demoted
+  rows stay in observations audit ("group aggregate predicate not satisfied");
+  derivation rule records the group clause.
+- `run_variable.R`: lab dispatch passes the pair through; non-lab channels with
+  a group predicate rejected loudly (consumer discipline); provenance channel
+  snapshot gains `group_at_level` + deparsed `keep_group_when`.
+
+**Tests.** 176 pass (from 161), 0 fail, 0 warn. Interim hand-precomputed-column
+workaround no longer needed. Open on this family: subject-context predicates
+(sexe/age thresholds, SS16); coded-source group predicates (loud error reserves
+the seam); activation-level override of the group pair (inherit-only for now).
