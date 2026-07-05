@@ -133,9 +133,21 @@ concept_spec <- function(name, channels) {
 #   extractor -> optional override of the concept-owned answer definition
 use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
                         selector = NULL, prompt = NULL, ...) {
+    extra <- list(...)
+    # An activation NEVER carries source: the name binding IS the reference to the
+    # concept-declared channel, and re-declaring the source there lets definitions
+    # drift (DESIGN §6). Rejected loudly rather than silently ignored.
+    if ("source" %in% names(extra)) {
+        stop("use_channel() does not take source: an activation references a ",
+             "declared channel by name; source lives on the channel definition.",
+             call. = FALSE)
+    }
+    if (length(extra) && (is.null(names(extra)) || any(!nzchar(names(extra))))) {
+        stop("use_channel() extra arguments must be named.", call. = FALSE)
+    }
     .experimental_spec(
         c(list(method = method, reducer = reducer, extractor = extractor,
-               selector = selector, prompt = prompt), list(...)),
+               selector = selector, prompt = prompt), extra),
         "ee_channel_use")
 }
 

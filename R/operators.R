@@ -31,8 +31,9 @@ days_after <- function(from_days = 0L, to_days) {
 # ("event_start" = stay start / DATENT, "event_end", or "point_date" = a point-dated
 # record's own instant, e.g. DATEACTE / DATEXAM). run_variable resolves it
 # in an anchor PASS -- producing (PATID, anchor_date) before windowing, NOT an inter-
-# channel dependency. Single match per subject for now (multiple -> error;
-# candidate_selection(arrange + limit) is the future multi-match path).
+# channel dependency. Single match per subject for now (multiple -> error; the
+# ratified multi-match path is select_event = <plain closure over matched rows>,
+# DESIGN §7 / invariant 35 -- multi-row selection entails one task per event).
 index_event <- function(source, selector, at = "event_start") {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
         stop("index_event() needs one source name.", call. = FALSE)
@@ -52,6 +53,9 @@ index_event <- function(source, selector, at = "event_start") {
 # the variable's channel activation: use_channel(reducer = function(x) max(x, na.rm =
 # TRUE)). No bespoke operator wraps trivial base reductions (max/min/mean/length);
 # the numeric-output assembler applies the function to the channel's candidate values.
+# RATIFIED TARGET (DESIGN §8, 2026-07-04): the reducer moves off the activation onto
+# the output -- num_output(values_from = , reduce = ) over the post-combine rows;
+# use_channel(reducer = ) is the shipped spelling until that wiring lands (§16).
 
 # --- cross-channel combiner ---------------------------------------------------
 # The ONLY cross-channel combine is hit-set algebra (hit_set_expr); a single
@@ -125,8 +129,9 @@ hit_set_difference <- function(include, exclude = character()) {
 # --- text extraction methods --------------------------------------------------
 # No candidate-selection knob: the slice's text source is pre-retrieved, so
 # run_extraction applies no arrange/limit rule. When retrieval runs in-engine, add it
-# as candidates = llm_candidate_selection(arrange, limit) INSIDE the method (see
-# DESIGN.md §16) -- an unread knob is not carried in the meantime.
+# as candidates = <plain closure over the standardized candidate table> INSIDE the
+# method (DESIGN §9/§16 -- no wrapper ctor, invariant 33); an unread knob is not
+# carried in the meantime.
 llm_after_lucene <- function() {
     .experimental_spec(list(kind = "llm_after_lucene"),
                        "ee_extraction_method")

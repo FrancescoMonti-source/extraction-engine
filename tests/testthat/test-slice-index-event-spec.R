@@ -52,8 +52,9 @@ test_that("index_event derives a per-subject anchor from the matched event", {
     expect_equal(value[["P2::t"]], 0L)   # same E11 date, but P2 index DATENT 01-01 -> out of window
 })
 
-# Single-match is a DELIBERATE boundary (multi-match is the future candidate_selection
-# path). Silently picking an arbitrary event would give a wrong anchor -> wrong cohort
+# Single-match is a DELIBERATE boundary (the ratified multi-match path is
+# select_event = <plain closure>, DESIGN §7 / invariant 35, not yet wired).
+# Silently picking an arbitrary event would give a wrong anchor -> wrong cohort
 # membership, invisibly. So multiple index events per subject must ERROR, not resolve.
 test_that("index_event errors on multiple matching events per subject", {
     two_index <- tibble::tibble(
