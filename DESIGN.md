@@ -561,6 +561,12 @@ meaning:
 
 Channels expose linkage affordances; the `variable_spec` decides which grain, anchor, and window to use. The engine checks whether selected channels can be mechanically linked to the requested grain/window.
 
+### The cohort: where the row universe comes from (settled 2026-07-05)
+
+The engine runs **downstream of a human-validated cohort** (the 99% operational path): candidates are screened and reviewed one by one *before* the engine, and that validated list is the row universe every variable answers about. It is laid down **with the data** — `sources$cohort`, a frame (grain-key columns, optionally `anchor_date` and future subject attributes like `sexe`) or simply a bare vector of PATIDs — and `run_variable(spec, sources = ...)` derives the universe from it; `task_id` derives from the grain keys when absent. An explicit `cohort =` argument narrows past it (e.g. an inclusion variable's 1-rows). The validation loop itself (screening, one-by-one review) is cohort *governance* — the layer above, out of engine scope.
+
+The universe is **declared, never inferred from data rows**. The settling case: a validated patient with no rows in any loaded source must appear in the output as `NA` with partial coverage — *"he shouldn't vanish, he should just have NA everywhere."* A data-derived denominator loses him silently, makes `!A` complements and ascertained-negative-vs-silence meaningless, and turns per-frame pre-filtering into a permanent correctness invariant (with a declared cohort, pre-filtering the frames is unnecessary: scoped joins never touch non-members' rows). `cohort_from_sources(sources)` exists as the **explicit** union-of-frames escape for exploration — a visible one-liner, never a silent default.
+
 ``` text
 lab channel:
   native grain = lab result

@@ -961,3 +961,40 @@ task, 0 for the March one.
 
 **Tests.** 190 pass / 0 fail / 0 warn. SS16 semantic residue: subject-context
 lab predicates (sexe/age) and source-kind resolution -- both consumer-gated.
+
+## Cohort intake: the row universe is declared, laid down with the data -- Claude Fable (2026-07-05)
+
+Owner alignment (three-message design dialogue): the engine runs DOWNSTREAM of a
+human-validated cohort -- candidates are screened and validated one by one
+BEFORE the engine (that loop = cohort governance, out of scope), so the
+validated list is the universe and it arrives WITH the data. The old
+researcher-built `tasks` frame demanded boilerplate (invented task_ids) that
+made it smell like an LLM-pipeline leak; the FUNCTION (declared denominator)
+is load-bearing, the CEREMONY was not.
+
+**Wired** (`.resolve_cohort`, run_variable/run_variables signature):
+- `run_variable(spec, sources = ...)`: universe = `sources$cohort` -- a frame
+  (grain keys + optional anchor_date/attributes) or a BARE VECTOR of PATIDs
+  ("a column of an .xlsx" is a valid cohort).
+- `cohort =` argument = the narrowing override (inclusion chaining, stay
+  rosters). Positional compatibility kept: run_variable(spec, tasks, sources)
+  still works (cohort is arg 2).
+- `task_id` derives from the grain keys when absent (PATID / PATID::EVTID);
+  supplied ids are kept.
+- No cohort anywhere = LOUD error; the universe is never inferred from data.
+- `cohort_from_sources(sources)` = the EXPLICIT union-of-frames escape
+  (docs_index included) for exploration -- visible choice, not silent default.
+
+**The settling argument** (owner: "fair, point 1 is enough"): a validated
+patient with no rows in any loaded source must get his NA/partial row, not
+silently vanish -- pre-filtering frames can remove rejected patients but can
+never ADD the trace-less member. Bonus recorded in SS7: with a declared
+cohort, per-frame pre-filtering stops being a correctness invariant at all
+(scoped joins never touch non-members).
+
+**Tests.** 199 pass / 0 fail / 0 warn; new test-slice-cohort-universe-spec.R
+(trace-less member keeps NA/partial; vector cohort; override narrows; loud
+no-cohort error; explicit union helper; stay-grain derived ids). Open naming
+question parked by owner: the `tasks` word survives internally and as the
+task_id output column; renaming the COLUMN is a bigger migration, gated on
+owner picking a name.

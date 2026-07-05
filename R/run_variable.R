@@ -1004,7 +1004,72 @@ suppressWarnings(suppressMessages(library(dplyr)))
         class = c("ee_provenance", "list"))
 }
 
-run_variable <- function(variable, tasks, sources, caller = NULL,
+# The COHORT is the variable's row universe: the validated unit list the engine
+# answers about, one output row per grain-key combination. It is DECLARED, never
+# inferred from whoever happens to have data rows (a subject with no rows keeps
+# an NA/partial row; `!x` complements within it). The 99% path (owner, 2026-07-05):
+# the engine runs DOWNSTREAM of a human-validated cohort -- candidates are
+# screened and validated one by one BEFORE the engine, so the validated list is
+# laid down WITH the data as sources$cohort and every variable derives its
+# universe from it. An explicit frame remains the override (a narrowed
+# sub-cohort, e.g. an inclusion variable's 1-rows; a researcher-supplied stay
+# roster). task_id is derived from the grain keys when absent.
+.resolve_cohort <- function(variable, cohort, sources) {
+    if (is.null(cohort)) cohort <- sources$cohort
+    if (is.null(cohort)) {
+        stop("No cohort: lay the validated cohort down with the data ",
+             "(sources$cohort) or pass a cohort frame explicitly -- the row ",
+             "universe is declared, never inferred from data rows.",
+             call. = FALSE)
+    }
+    # A bare vector of PATIDs (a list of ids, a spreadsheet column) is a
+    # perfectly good patient-grain cohort.
+    if (is.character(cohort)) {
+        cohort <- tibble::tibble(PATID = as.character(cohort))
+    }
+    if (!is.data.frame(cohort) || !nrow(cohort)) {
+        stop("cohort must be a non-empty data frame (one row per output unit) ",
+             "or a character vector of PATIDs.", call. = FALSE)
+    }
+    if (!"task_id" %in% names(cohort)) {
+        keys <- intersect(
+            unique(c("PATID", variable$output_one_row_per %||% "PATID")),
+            names(cohort))
+        if (!length(keys)) {
+            stop("cohort carries neither task_id nor grain key column(s); ",
+                 "cannot identify its rows.", call. = FALSE)
+        }
+        cohort$task_id <- do.call(
+            paste, c(lapply(cohort[keys], as.character), sep = "::"))
+    }
+    cohort
+}
+
+# EXPLICIT union-of-sources universe: "whoever appears in these frames", as a
+# conscious one-liner for exploration -- never a silent default (owner-settled
+# 2026-07-05): a validated patient with no data rows in any loaded source would
+# silently vanish from the denominator, and that patient must be NA everywhere,
+# not absent.
+cohort_from_sources <- function(sources) {
+    ids <- unlist(lapply(sources, function(src) {
+        if (is.data.frame(src) && "PATID" %in% names(src)) {
+            return(as.character(src$PATID))
+        }
+        if (is.list(src) && is.data.frame(src$docs_index) &&
+            "PATID" %in% names(src$docs_index)) {
+            return(as.character(src$docs_index$PATID))
+        }
+        character()
+    }), use.names = FALSE)
+    ids <- sort(unique(ids[!is.na(ids) & nzchar(ids)]))
+    if (!length(ids)) {
+        stop("cohort_from_sources(): no PATID column found in sources.",
+             call. = FALSE)
+    }
+    tibble::tibble(PATID = ids)
+}
+
+run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
                          model_name = "fake") {
     if (!inherits(variable, "ee_variable_spec")) {
         stop("run_variable() requires a variable_spec().", call. = FALSE)
@@ -1012,6 +1077,7 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
     if (!length(variable$channels)) {
         stop("variable_spec has no selected channels.", call. = FALSE)
     }
+    tasks <- .resolve_cohort(variable, cohort, sources)
     # Anchor first: a select_event closure may EMIT tasks (one per selected
     # event), and the grain guard must see the emitted universe, not the
     # pre-anchor one -- select_event = identity with output_one_row_per =
@@ -1111,9 +1177,9 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
            channel_results = channel_results), out)
 }
 
-run_variables <- function(variables, tasks, sources, caller = NULL,
-                          model_name = "fake") {
+run_variables <- function(variables, cohort = NULL, sources = NULL,
+                          caller = NULL, model_name = "fake") {
     .require_named_list(variables, "variables")
-    lapply(variables, run_variable, tasks = tasks, sources = sources,
+    lapply(variables, run_variable, cohort = cohort, sources = sources,
            caller = caller, model_name = model_name)
 }

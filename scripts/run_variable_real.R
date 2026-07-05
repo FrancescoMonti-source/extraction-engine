@@ -93,7 +93,7 @@ CASES$diabetes <- list(
         docs_index <- raw %>% transmute(ELTID, PATID, EVTID, RECDATE, RECTYPE)
 
         list(
-            tasks = tasks,
+            cohort = tasks,
             sources = list(
                 pmsi_diag = diag,
                 documents = list(corpus = make_docs_corpus(raw),
@@ -138,7 +138,7 @@ CASES$smoking <- list(
                           RECTXT = as.character(samp$text_tabac_llm))
 
         list(
-            tasks = tasks,
+            cohort = tasks,
             sources = list(documents = list(corpus = make_docs_corpus(raw),
                                             docs_index = docs_index)),
             spec = variable_spec(
@@ -184,7 +184,7 @@ CASES$anastomoses <- list(
         docs_index <- raw %>% transmute(ELTID, PATID, EVTID, RECDATE, RECTYPE)
 
         list(
-            tasks = tasks,
+            cohort = tasks,
             sources = list(documents = list(corpus = make_docs_corpus(raw),
                                             docs_index = docs_index)),
             spec = variable_spec(
