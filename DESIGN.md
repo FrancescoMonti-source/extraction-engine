@@ -1767,6 +1767,8 @@ These are declared parts of the target contract that are **reserved, not built**
 
 6. **Role-named output columns.** The source layer resolves *inputs* from canonical roles, but emitted frames still use the historical runner column names (the target role vocabulary is exposed through source metadata, not yet on output frames); internal output `$kind` likewise keeps the binary/number/categorical/fields vocabulary. *Consumer:* a downstream reader that needs role-named output columns.
 
+7. **Aggregate membership predicates (the SQL `HAVING` shape; flagged 2026-07-05).** A channel filter today tests each row alone; some protocols define membership by a **group aggregate** — "anemic stay = the stay's *mean* Hb < 10". In pipeline terms this is still a row *filter*, not an output reduction: `group_by(EVTID) |> filter(mean(value) < 10)` keeps the qualifying groups' original source rows, so hits, evidence, and provenance keep pointing at real rows; what the executor lacks is group-aware filtering (a grouping level + a plain predicate closure over the group's values). Reduction-as-*value* stays output-only; this is the one shape where a reduction participates in *membership*. *Consumer:* a variable whose qualifying rule aggregates within a group. *Interim workaround (owner-endorsed):* compute the aggregate upstream as a column by hand and feed the engine the derived frame.
+
 ### Ratified surface pending wiring (2026-07-04 batch)
 
 The pipeline-model surface above (§2, §5–§8, §10) is ratified contract but not yet wired; shipped code still speaks the previous spellings. Unlike the consumer-gated capabilities, the renames are gated only on touching the code; the semantic additions have named consumers:
