@@ -92,17 +92,27 @@ analyte <- function(codes) {
 
 # Thresholded analyte selector (DESIGN §8/§14.6): the same analyte identity as
 # analyte() PLUS a value predicate, so the lab channel's target signal becomes "an
-# in-scope measurement of this analyte above the cutoff" -- the MEMBERSHIP face
-# (bin_output / combine). `gt` is a strict lower cutoff (the DESIGN §14.6 shape). `unit`
-# is carried for provenance/inspectability only: HDW results are unit-normalized upstream
-# (redsan), so the executor does not convert. (A low-tail `lt` bound is deliberately
-# absent until a consumer needs it -- gt is the shape DESIGN specifies.)
-analyte_value <- function(codes, gt, unit = NULL) {
-    if (!is.numeric(gt) || length(gt) != 1L || is.na(gt)) {
-        stop("analyte_value() `gt` must be one number.", call. = FALSE)
+# in-scope measurement of this analyte past the cutoff" -- the MEMBERSHIP face
+# (bin_output / combine). `gt` is a strict lower cutoff (the DESIGN §14.6 shape);
+# `lt` is the symmetric strict upper cutoff (consumer: §14.9's hb_low, an anaemia
+# definition = Hb BELOW threshold). At least one bound is required. `unit` is
+# carried for provenance/inspectability only: HDW results are unit-normalized
+# upstream (redsan), so the executor does not convert.
+analyte_value <- function(codes, gt = NULL, lt = NULL, unit = NULL) {
+    for (bound in c("gt", "lt")) {
+        val <- get(bound)
+        if (!is.null(val) && (!is.numeric(val) || length(val) != 1L || is.na(val))) {
+            stop("analyte_value() `", bound, "` must be one number.", call. = FALSE)
+        }
+    }
+    if (is.null(gt) && is.null(lt)) {
+        stop("analyte_value() needs a value bound (gt and/or lt); for an ",
+             "unthresholded analyte use analyte().", call. = FALSE)
     }
     .experimental_spec(
-        list(kind = "analyte", codes = as.character(codes), gt = as.numeric(gt),
+        list(kind = "analyte", codes = as.character(codes),
+             gt = if (is.null(gt)) NULL else as.numeric(gt),
+             lt = if (is.null(lt)) NULL else as.numeric(lt),
              unit = if (is.null(unit)) NULL else as.character(unit)),
         "ee_selector")
 }

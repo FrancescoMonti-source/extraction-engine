@@ -73,7 +73,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
 #                                history / "ever"), no date filter -- the text mirror of
 #                                the whole-history structured code path.
 # Then the existing retrieve() runs the channel's Lucene query and assembles
-# candidates + coverage.
+# candidates + coverage. Eligibility keeps the document's EVTID when docs_index
+# carries it, so a text hit stays attributable to its stay (combine_at_level, §7).
+.text_eligibility_cols <- function(d) {
+    select(d, any_of(c("task_id", "ELTID", "EVTID", "RECDATE", "RECTYPE",
+                       "anchor_date")))
+}
+
 .retrieve_text_channel <- function(channel_def, variable, tasks, src, selector) {
     linkage <- channel_def$linkage
     if (!is.null(linkage) && "event" %in% linkage) {
@@ -84,7 +90,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         eligibility <- src$docs_index %>%
             inner_join(distinct(tasks, task_id, PATID, EVTID, anchor_date),
                        by = c("PATID", "EVTID"), relationship = "many-to-many") %>%
-            transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
+            .text_eligibility_cols()
         return(retrieve(src$corpus, tasks, eligibility,
                         query = selector$query))
     }
@@ -99,7 +105,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         }
         eligibility <- src$docs_index %>%
             inner_join(keys, by = "PATID", relationship = "many-to-many") %>%
-            transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
+            .text_eligibility_cols()
         return(retrieve(src$corpus, tasks, eligibility,
                         query = selector$query))
     }
@@ -113,7 +119,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
                    by = "PATID", relationship = "many-to-many") %>%
         filter(RECDATE >= anchor_date + w[["from_days"]],
                RECDATE <= anchor_date + w[["to_days"]]) %>%
-        transmute(task_id, ELTID, RECDATE, RECTYPE, anchor_date)
+        .text_eligibility_cols()
     retrieve(src$corpus, tasks, eligibility, query = selector$query)
 }
 
@@ -262,7 +268,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
             measure_analyte_values(
                 sources[[source]], tasks,
                 analytes = .selector_codes(selector, "codes"),
-                gt = selector$gt, grain_keys = grain_keys,
+                gt = selector$gt, lt = selector$lt, grain_keys = grain_keys,
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 field = variable$name, source = source)
         },
@@ -374,18 +380,26 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # --- output payload (DESIGN §8) -------------------------------------------------
 # The values BEHIND a channel's hits, one per surviving row: a lab row's value is
 # its measurement, a code/act row's value is its code. The output's `reduce` (a
-# plain values -> scalar closure) collapses them per task. Wired at the default
-# combine_at_level (= output grain) over the observed hit sets; sub-output-grain
-# evaluation arrives with combine_at_level (§16).
-.payload_values <- function(result, channel_type) {
-    switch(channel_type,
-        lab = result$candidates %>%
-            transmute(task_id = as.character(task_id), value),
+# plain values -> scalar closure) collapses them per task. With a sub-output-grain
+# gate (combine_at_level, §7) `level` names the key the rows must carry, so the
+# payload can be scoped to the qualifying keys.
+.payload_values <- function(result, channel_type, level = NULL) {
+    rows <- switch(channel_type,
+        lab = result$candidates,
         code = ,
-        act = result$evidence %>%
-            transmute(task_id = as.character(task_id), value = code),
+        act = result$evidence %>% mutate(value = code),
         stop("values_from is wired for lab/code/act channels, not '",
              channel_type, "'.", call. = FALSE))
+    if (is.null(level)) {
+        return(rows %>% transmute(task_id = as.character(task_id), value))
+    }
+    if (!level %in% names(rows)) {
+        stop("values_from payload rows do not carry the combine_at_level key '",
+             level, "'; the payload cannot be scoped to the qualifying keys.",
+             call. = FALSE)
+    }
+    rows %>% transmute(task_id = as.character(task_id),
+                       key = as.character(.data[[level]]), value)
 }
 
 # Apply reduce to one task's payload values and validate the result against the
@@ -461,18 +475,32 @@ suppressWarnings(suppressMessages(library(dplyr)))
 }
 
 # Gated payload (combine expression + num/cat payload output): the gate decides
-# the surviving tasks (observed hit-set algebra at the output grain); the payload
-# channel's values for those tasks reduce to the final value. Gate-fail -> NA
-# (cat reserves no "excluded" level; bin encodes exclusion as 0, cat cannot). An
-# empty payload behind a passing gate (task admitted via the other side of an `|`)
-# is NA without calling reduce. The full hit-algebra audit (channel_status,
-# membership, overlap) is untouched: only the value column changes meaning, and
-# n_payload_rows records the post-combine rows actually reduced.
+# the survivors (observed hit-set algebra at combine_at_level); the payload
+# channel's values for those survivors reduce to the final value. At the default
+# level the survivors are tasks; at a sub-output level they are qualifying keys,
+# and the payload rows are scoped to them (§14.9: values_from is key-scoped even
+# when the channel is not in the expression -- there is no raw escape). Gate-fail
+# -> NA (cat reserves no "excluded" level; bin encodes exclusion as 0, cat
+# cannot). An empty payload behind a passing gate (task admitted via the other
+# side of an `|`) is NA without calling reduce. The full hit-algebra audit
+# (channel_status, membership, overlap) is untouched: only the value column
+# changes meaning, and n_payload_rows records the post-combine rows reduced.
 .apply_gated_payload <- function(variable, out, channel_results) {
     output <- variable$output
+    level <- variable$combine_at_level
+    sub_level <- !is.null(level) &&
+        !identical(level, variable$output_one_row_per)
     payload <- .payload_values(
         channel_results[[output$values_from]],
-        .channel_type(output$values_from, variable))
+        .channel_type(output$values_from, variable),
+        level = if (sub_level) level else NULL)
+    if (sub_level) {
+        qk <- out$combine_keys
+        qk <- qk[qk$qualifies, , drop = FALSE]
+        keep <- paste(payload$task_id, payload$key, sep = "\r") %in%
+            paste(qk$task_id, qk[[level]], sep = "\r")
+        payload <- payload[keep, , drop = FALSE]
+    }
     gate <- out$values
     n <- nrow(gate)
     value <- if (identical(output$kind, "number")) rep(NA_real_, n)
@@ -641,6 +669,37 @@ suppressWarnings(suppressMessages(library(dplyr)))
 #   overlap       UpSet-style summary: one row per membership pattern (TRUE/FALSE/NA
 #                 preserved) across the expression channels, with count, value,
 #                 channel_coverage.
+# One channel's observed hit keys at a sub-output level: the DISTINCT level keys
+# on its hit evidence rows (a hit IS a row set; the rows carry the identity spine,
+# so the level placement is read off the evidence, never re-derived). Restricted
+# to tasks whose reduced hit is TRUE -- a grounded-but-negative text answer may
+# cite evidence, and a non-hit must not contribute keys. Fail closed twice: a
+# channel whose evidence lacks the key cannot enter the algebra, and a hit row
+# without a key value cannot be placed at the level.
+.channel_level_keys <- function(res, level, channel_name, hit_task_ids) {
+    ev <- res$evidence
+    if (is.null(ev) || !nrow(ev) || !length(hit_task_ids)) {
+        return(tibble::tibble(task_id = character(), key = character()))
+    }
+    if (!level %in% names(ev)) {
+        stop("combine_at_level = '", level, "': channel '", channel_name,
+             "' evidence does not carry that key; level algebra needs ",
+             "spine-keyed evidence (HDW sources and raw-document retrieval ",
+             "carry it; pre-retrieved text fixtures must include it).",
+             call. = FALSE)
+    }
+    ev <- ev[as.character(ev$task_id) %in% hit_task_ids, , drop = FALSE]
+    keys <- as.character(ev[[level]])
+    if (anyNA(keys) || any(!nzchar(keys))) {
+        stop("combine_at_level = '", level, "': channel '", channel_name,
+             "' has hit evidence without a ", level, " value; a hit that ",
+             "cannot be placed at the level cannot enter the algebra.",
+             call. = FALSE)
+    }
+    dplyr::distinct(tibble::tibble(task_id = as.character(ev$task_id),
+                                   key = keys))
+}
+
 .hit_set_expr_variable <- function(variable, tasks, channel_results) {
     var_name <- variable$name
     combine <- variable$combine
@@ -671,7 +730,38 @@ suppressWarnings(suppressMessages(library(dplyr)))
     vectors  <- setNames(lapply(referenced, hit_vec), referenced)
     observed <- setNames(lapply(vectors, function(v) v %in% TRUE), referenced)
 
-    result <- .eval_hitset_expr(combine$ast, observed)   # always TRUE/FALSE
+    level <- variable$combine_at_level
+    sub_level <- !is.null(level) &&
+        !identical(level, variable$output_one_row_per)
+    combine_keys <- NULL
+    if (sub_level) {
+        # Sub-output-grain evaluation (DESIGN §7): the expression is checked per
+        # observed level key, then exists-lifted -- a task scores 1 iff at least
+        # one of its keys satisfies the expression. The key universe is the union
+        # of keys observed by the referenced channels (the engine has no roster of
+        # unobserved stays, so negation is complement within the observed keys;
+        # the task-level membership/overlap audit above is unchanged).
+        keysets <- setNames(lapply(referenced, function(ch) {
+            .channel_level_keys(channel_results[[ch]], level, ch,
+                                task_ids[vectors[[ch]] %in% TRUE])
+        }), referenced)
+        universe <- dplyr::distinct(bind_rows(keysets))
+        pair_of <- function(d) paste(d$task_id, d$key, sep = "\r")
+        u_pairs <- pair_of(universe)
+        observed_keys <- lapply(keysets, function(ks) u_pairs %in% pair_of(ks))
+        key_result <- if (nrow(universe)) {
+            .eval_hitset_expr(combine$ast, observed_keys)
+        } else {
+            logical(0)
+        }
+        combine_keys <- tibble::tibble(task_id = universe$task_id)
+        combine_keys[[level]] <- universe$key
+        for (ch in referenced) combine_keys[[ch]] <- observed_keys[[ch]]
+        combine_keys$qualifies <- key_result
+        result <- task_ids %in% universe$task_id[key_result]
+    } else {
+        result <- .eval_hitset_expr(combine$ast, observed)   # always TRUE/FALSE
+    }
 
     # channel_coverage: were the selected channels actually evaluable for this task?
     # failed (a channel errored) > partial (a channel unavailable/unusable) > complete.
@@ -718,7 +808,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
     overlap <- hit_set_overlap(wide, referenced, as.integer(result),
                                channel_coverage)
 
-    list(
+    out <- list(
         values = values,
         channel_status = channel_status,
         evidence = if (length(evidence_l)) bind_rows(evidence_l) else
@@ -729,6 +819,11 @@ suppressWarnings(suppressMessages(library(dplyr)))
         membership = channel_status %>%
             transmute(task_id, channel, hit, processing_state, evidence_refs),
         overlap = overlap)
+    # Level audit (sub-output-grain gate only): one row per observed (task, key)
+    # pair with the per-channel key hits and the expression verdict -- the "which
+    # stay qualified (or failed)" view the exists-lifted 0/1 cannot show.
+    if (!is.null(combine_keys)) out$combine_keys <- combine_keys
+    out
 }
 
 # --- produced-dataset provenance (DESIGN §12, invariant 27) --------------------
@@ -803,6 +898,12 @@ suppressWarnings(suppressMessages(library(dplyr)))
             anchor = .provenance_anchor(variable$anchor),
             window = window,
             combine = resolved$combine_rule,
+            # The EXECUTED evaluation level: the declared combine_at_level, or the
+            # output grain it defaults to. NULL when there is no combine algebra.
+            combine_at_level = if (inherits(variable$combine, "ee_combiner") &&
+                                   identical(variable$combine$kind, "hit_set_expr")) {
+                variable$combine_at_level %||% variable$output_one_row_per
+            } else NULL,
             output = output,
             channels = channels,
             model = model_name,

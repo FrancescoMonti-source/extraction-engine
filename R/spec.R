@@ -132,8 +132,10 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # A hit-set expression's referenced channels must be exactly the variable's
 # activated channels: a referenced channel that is not activated is an unknown
 # symbol; an activated channel absent from the expression is dead weight. Both are
-# spec errors, surfaced at build time.
-.check_expr_channels <- function(combine, activated) {
+# spec errors, surfaced at build time. One exemption: the output's payload channel
+# (values_from) may stay out of the expression -- it does not define the qualifying
+# keys, but its rows are still scoped by them (DESIGN §8, §14.9's hb_all).
+.check_expr_channels <- function(combine, activated, payload_channel = NULL) {
     if (!inherits(combine, "ee_combiner") ||
         !identical(combine$kind, "hit_set_expr")) {
         return(invisible(TRUE))
@@ -143,12 +145,43 @@ suppressWarnings(suppressMessages(library(dplyr)))
         stop("combine expression references non-activated channel(s): ",
              paste(missing_ch, collapse = ", "), call. = FALSE)
     }
-    unused <- setdiff(activated, combine$channels)
+    unused <- setdiff(activated, c(combine$channels, payload_channel))
     if (length(unused)) {
         stop("activated channel(s) not used by the combine expression: ",
              paste(unused, collapse = ", "), call. = FALSE)
     }
     invisible(TRUE)
+}
+
+# combine_at_level (DESIGN §7): the key at which the expression is evaluated;
+# qualifying keys exists-lift to the output grain. NULL = the output grain (the
+# default, today's semantics). Declared, it must sit ON the identity spine and at
+# the output grain or finer -- evaluating coarser would leak hits across output
+# rows. It rides the combine: a single-channel variable has no algebra to place.
+.check_combine_at_level <- function(level, combine, output_one_row_per) {
+    if (is.null(level)) return(NULL)
+    if (!is.character(level) || length(level) != 1L || !nzchar(level)) {
+        stop("combine_at_level must be one non-empty column name.", call. = FALSE)
+    }
+    if (!inherits(combine, "ee_combiner") ||
+        !identical(combine$kind, "hit_set_expr")) {
+        stop("combine_at_level needs a combine expression: a single channel's ",
+             "filtered rows are already the surviving set; there is no algebra ",
+             "to evaluate at a level.", call. = FALSE)
+    }
+    spine <- c(PATID = 1L, EVTID = 2L, ELTID = 3L)
+    if (!level %in% names(spine)) {
+        stop("combine_at_level must be an identity-spine key (",
+             paste(names(spine), collapse = "/"), "); got '", level, "'.",
+             call. = FALSE)
+    }
+    if (output_one_row_per %in% names(spine) &&
+        spine[[level]] < spine[[output_one_row_per]]) {
+        stop("combine_at_level ('", level, "') must be the output grain or a ",
+             "finer spine key: evaluating above '", output_one_row_per,
+             "' would leak hits across output rows.", call. = FALSE)
+    }
+    level
 }
 
 # A concept_spec declares the signal channels available for a clinical concept.
@@ -266,8 +299,8 @@ variable_template <- function(name, concept, defaults = list(), build = NULL) {
 # It may be built from a template (template=) or written directly (concept=).
 variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PATID",
                           anchor = NULL, window = NULL, channels = list(),
-                          output = NULL, combine = NULL, template = NULL,
-                          template_name = NULL, ...) {
+                          output = NULL, combine = NULL, combine_at_level = NULL,
+                          template = NULL, template_name = NULL, ...) {
     if (!is.null(template)) {
         if (!inherits(template, "ee_variable_template")) {
             stop("template must be created with variable_template().", call. = FALSE)
@@ -285,6 +318,7 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
         if (!missing(channels)) overrides$channels <- channels
         if (!missing(output)) overrides$output <- output
         if (!missing(combine)) overrides$combine <- combine
+        if (!missing(combine_at_level)) overrides$combine_at_level <- combine_at_level
         params <- utils::modifyList(template$defaults, overrides, keep.null = TRUE)
         params$template_name <- template$name
         return(template$build(params))
@@ -325,14 +359,21 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
 
     combine <- .as_combiner(combine)            # bare string -> hit_set_expr()
     combine <- .resolve_variable_combine(combine, names(channels), output)
-    .check_expr_channels(combine, names(channels))
+    combine_at_level <- .check_combine_at_level(combine_at_level, combine,
+                                                output_one_row_per)
+    # Payload first: values_from is normalized there (defaults to the sole
+    # channel), and the expression check exempts the payload channel from the
+    # dead-weight rule -- a payload-only channel is legitimate (§14.9's hb_all).
     output <- .check_output_payload(output, names(channels))
+    .check_expr_channels(combine, names(channels),
+                         payload_channel = output$values_from)
 
     .experimental_spec(
         list(name = name, concept = concept, output_one_row_per = output_one_row_per,
              anchor = anchor,
              window = window, channels = channels, output = output,
-             combine = combine, template = template_name),
+             combine = combine, combine_at_level = combine_at_level,
+             template = template_name),
         "ee_variable_spec")
 }
 

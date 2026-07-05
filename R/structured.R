@@ -86,11 +86,14 @@ suppressWarnings(suppressMessages(library(dplyr)))
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
 
-# Value predicate for a thresholded analyte selector (DESIGN §8): a strict lower cutoff.
-# A missing value never passes; a NULL cutoff leaves the value unconstrained.
-.passes_threshold <- function(value, gt) {
-    if (is.null(gt)) return(!is.na(value))
-    !is.na(value) & value > gt
+# Value predicate for a thresholded analyte selector (DESIGN §8): strict cutoffs,
+# `gt` above and/or `lt` below. A missing value never passes; NULL bounds leave the
+# value unconstrained on that side.
+.passes_threshold <- function(value, gt, lt = NULL) {
+    ok <- !is.na(value)
+    if (!is.null(gt)) ok <- ok & value > gt
+    if (!is.null(lt)) ok <- ok & value < lt
+    ok
 }
 
 .overlaps_interval <- function(start, end, lo, hi,
@@ -290,7 +293,7 @@ measure_code_presence <- function(source_table, tasks, codes,
 # tasks: task_id + the grain_keys columns (PATID, or PATID+EVTID for stay grain);
 #   anchor_date only when windowed (a NULL window is event-scoped, no anchor needed).
 measure_analyte_values <- function(source_table, tasks, analytes,
-                                   gt = NULL, grain_keys = "PATID",
+                                   gt = NULL, lt = NULL, grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
                                    field = "analyte_value", source = "biology") {
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> event scope
@@ -337,7 +340,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes &
-                .passes_threshold(value, gt),
+                .passes_threshold(value, gt, lt),
             selected_evidence = is_target,     # every candidate is evidence
             scope_reason = if (windowed) "point time inside the task window"
                            else "same grain unit (no window)",
@@ -387,10 +390,13 @@ measure_analyte_values <- function(source_table, tasks, analytes,
 
     # The value vector the output's reduce collapses to one number, ordered so the
     # assembler can carry a stable measurement_time alongside the reduced value.
+    # Candidates keep the identity spine: a sub-output-grain gate (combine_at_level,
+    # DESIGN §7) scopes the payload to qualifying keys by joining on these columns.
     candidates <- observations %>%
         filter(is_target) %>%
         arrange(task_id, desc(value), DATEXAM, source_row_id) %>%
-        transmute(task_id, source_row_id, value, measurement_time = DATEXAM)
+        transmute(task_id, source_row_id, PATID, EVTID, ELTID,
+                  value, measurement_time = DATEXAM)
 
     evidence <- observations %>%
         filter(selected_evidence) %>%
@@ -403,7 +409,9 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                 DATEXAM),
             PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
 
-    threshold_txt <- if (!is.null(gt)) sprintf("value>%g; ", gt) else ""
+    threshold_txt <- paste0(
+        if (!is.null(gt)) sprintf("value>%g; ", gt) else "",
+        if (!is.null(lt)) sprintf("value<%g; ", lt) else "")
     scope_txt <- paste(grain_keys, collapse = "+")
     window_txt <- if (windowed) {
         sprintf("point_window[%d,%+d]; ", as.integer(from_days), as.integer(to_days))

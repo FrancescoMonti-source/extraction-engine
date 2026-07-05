@@ -130,10 +130,12 @@ retrieve <- function(corpus, tasks, eligibility, query,
         group_by(task_id) %>%
         mutate(snippet_id = sprintf("S%03d", row_number())) %>%
         ungroup() %>%
-        select(task_id, snippet_id, hit_ref, hit_text, context_before, context_after,
-               snippet_text, ELTID, sentence, RECDATE, RECTYPE, anchor_date,
-               days_from_anchor, n_duplicate_occurrences, duplicate_hit_refs,
-               duplicate_recdates)
+        select(any_of(c("task_id", "snippet_id", "hit_ref", "hit_text",
+                        "context_before", "context_after", "snippet_text",
+                        "ELTID", "EVTID", "sentence", "RECDATE", "RECTYPE",
+                        "anchor_date", "days_from_anchor",
+                        "n_duplicate_occurrences", "duplicate_hit_refs",
+                        "duplicate_recdates")))
 
     if (nrow(candidates) && anyDuplicated(candidates[c("task_id", "snippet_id")])) {
         stop("Task-local snippet IDs must be unique.", call. = FALSE)

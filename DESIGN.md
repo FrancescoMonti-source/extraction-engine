@@ -657,6 +657,8 @@ output_one_row_per = "PATID"    one row per patient
 
 means: qualify stays where the expression holds, then **exists-lift** to the output grain — the patient scores 1 if at least one of their stays qualifies. This is the difference between same-stay co-occurrence and the weaker cross-encounter conjunction (a text hit in stay 1 plus a lab hit in stay 3 satisfies patient-level `&`, but no stay-level `&`). See §10 for the row-set semantics and §14.8 for the worked example.
 
+Wired 2026-07-05. Three execution facts follow from the observed-set posture (§10): the key universe at a sub-output level is the **union of keys observed by the referenced channels** — the engine has no roster of unobserved stays, so `!A` is complement within the observed keys, and an expression satisfiable only on an unobserved key scores 0. A channel's keys are read off its **hit evidence rows** (a structured hit's matched rows, a text hit's cited documents via `docs_index`) — level placement is never re-derived, and a hit whose evidence cannot be placed at the level fails closed (loud error, not a silent drop). The task-level membership/overlap audit is unchanged; the per-key verdicts are the run's `combine_keys` view (one row per observed task × key pair with per-channel key hits and the expression verdict). A payload output behind a sub-level gate is scoped to the qualifying keys (§8, §14.9), so `values_from` rows from non-qualifying stays never reach `reduce`.
+
 Event/stay-grain eligibility is resolved by grain-aware scoping (`grain_keys`): the text path resolves event-scoped eligibility for event-linked document variables, and the structured code/act and lab executors scope each task to its own stay when `output_one_row_per = "EVTID"`. The extension was additive, as expected, because `EVTID` is invariant across HDW rows — it was executor wiring, not missing identifiers.
 
 ------------------------------------------------------------------------
@@ -1619,7 +1621,7 @@ Reminder from §7: the text channel windows on document date — this measures "
 
 ### 14.8 Act-anchored forward complication with same-stay combine (SSI post spinal surgery)
 
-Validated as a target-surface stress test 2026-07-04. This is the canonical consumer of `combine_at_level` and `select_event`.
+Validated as a target-surface stress test 2026-07-04. This is the canonical consumer of `combine_at_level` (wired 2026-07-05 via this shape's probe — the trap patient with the text hit in one stay and the act in another scores 0) and `select_event` (still §16-pending; the probe used researcher-supplied anchor dates).
 
 ``` r
 ssi <- concept_spec(
@@ -1778,7 +1780,6 @@ combine -> combine_channels; window ctors -> c(from, to);
 channels string/inline forms; source-kind registry resolution;
 required_roles / native_grain / linkage derived from type + registry
                                     gate: next touch of the spec layer
-combine_at_level + exists-lift      consumer: 14.8 (same-stay SSI, patient rows)
 index_event(select_event = ) +
   per-event task emission           consumer: 14.8 (earliest of several surgeries)
 lab value predicates with subject
@@ -1788,6 +1789,6 @@ lab value predicates with subject
                                     is decided at build time
 ```
 
-`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer) **at the default `combine_at_level` (= output grain), over the observed hit sets**; sub-output-grain evaluation arrives with the `combine_at_level` line above.
+`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open).
 
 When a piece lands, note it in `HANDOFF.md` and delete its line here; do not fork the contract text.

@@ -215,8 +215,9 @@ call_with_retry <- function(caller, prompt, type, system_prompt, max_tries = 3L)
         ev <- bind_rows(ev, ev %>% distinct(snippet_id, .keep_all = TRUE) %>%
                                 mutate(field = summary_field))
     }
-    ev %>% transmute(field, snippet_id, hit_ref, ELTID, sentence, hit_text,
-                     snippet_text, RECDATE, RECTYPE)
+    ev %>% select(any_of(c("field", "snippet_id", "hit_ref", "ELTID", "EVTID",
+                           "sentence", "hit_text", "snippet_text", "RECDATE",
+                           "RECTYPE")))
 }
 
 run_extraction <- function(coverage, candidates, definition, caller, model_name,

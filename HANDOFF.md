@@ -787,3 +787,58 @@ empty-payload-behind-`|` -> NA (NOT length 0 -- would conflate no-payload with
 measured zero; count-identity stays a deferred question); single-channel cat
 payload; build-time payload-rule errors; out-of-levels hard error. Three tests
 migrated `use_channel(reducer =)` -> `num_output(reduce =)`.
+
+## combine_at_level wired: the expression is checked per stay, exists-lifted to the output grain -- Claude Fable (2026-07-05)
+
+**Trigger.** Owner greenlit ("we need to do both") wiring the last unwired semantic
+axis of the ratified pipeline model via the SS14.8 SSI probe, before tackling the
+aggregate membership predicate (SS16 item 7, HAVING shape -- still open, next).
+
+**The probe** (`test-slice-stay-combine-spec.R`, disposable, both canonical
+consumers): SS14.8 SSI -- `text_ssi & (cim10_ssi | act_revision)` at `EVTID`, one
+row per `PATID`, raw-document retrieval + fake caller. The TRAP patient (text hit
+in stay S1A, revision act in stay S1B) scores 0 at stay level; a default-level twin
+asserts he scores 1 today, so the axis is a real discriminator and the default
+cannot drift. SS14.9 anemia -- `text_anemia & hb_low` at `EVTID` pooled to `PATID`,
+`num_output(values_from = "hb_all", reduce = mean)`: the mean reads ONLY qualifying
+stays' rows (the non-qualifying stay's Hb 8 is out; the qualifying stay's normal 13
+is in), and swapping `values_from` to `hb_low` changes which values enter the mean.
+Rejection surface before wiring: `variable_spec` unused-arg on `combine_at_level`;
+`analyte_value` unused-arg on `lt`; the dead-weight rule on the payload-only channel.
+
+**Execution semantics** (recorded in SS7 under the grain section): the key universe
+at a sub-output level = the UNION of keys observed by the referenced channels (no
+roster of unobserved stays; `!A` is complement within observed keys). A channel's
+keys are read off its HIT EVIDENCE rows -- structured evidence already carries the
+spine; text hits place via the cited documents' `EVTID` threaded from `docs_index`
+through eligibility -> `retrieve()` -> materialized evidence. Fail closed twice:
+evidence lacking the level key, or a hit row with an empty key, is a loud error.
+Task-level membership/overlap audit unchanged; per-key verdicts exposed as the
+run's `combine_keys` view. Payload behind a sub-level gate is scoped to qualifying
+keys (semi-join on task + key), so SS14.9's invariant holds mechanically.
+
+**Wired** (SS16 line deleted: `combine_at_level` + exists-lift):
+- `spec.R`: `variable_spec(combine_at_level =)` (+ template passthrough);
+  `.check_combine_at_level()` -- needs a combine expression, must be an
+  identity-spine key (PATID/EVTID/ELTID), at the output grain or finer (coarser
+  would leak hits across output rows); `.check_expr_channels()` now exempts ONLY
+  the payload channel (`values_from`) from the dead-weight rule, and payload
+  normalization runs before the expression check.
+- `run_variable.R`: `.channel_level_keys()` + the sub-level branch in
+  `.hit_set_expr_variable` (vectorized eval over observed task x key pairs,
+  exists-lift, `combine_keys` audit frame); `.payload_values(level =)` +
+  `.apply_gated_payload` key-scoping; provenance records the EXECUTED
+  `combine_at_level` (declared or defaulted; NULL without combine algebra);
+  text eligibility keeps `EVTID` in all three linkage branches.
+- `retrieval.R` / `extract.R`: candidates + materialized text evidence carry
+  `EVTID` when the docs index does (`any_of` whitelists).
+- `channels.R` / `structured.R`: `analyte_value(lt =)` (SS14.9's hb_low was the
+  consumer the shipped comment reserved it for; gt and/or lt, at least one);
+  lab `candidates` keep the identity spine (payload key-scoping join).
+
+**Tests.** 161 pass (from 142), 0 fail, 0 warn. Still §16-pending on this family:
+`select_event` + per-event tasks (14.8's anchor half -- the probe used
+researcher-supplied anchors); lab subject-context predicates (14.9's sexe/age
+threshold); the spec-layer renames (combine -> combine_channels, window ctors ->
+c(from, to), channels string/inline forms) -- this slice touched the spec layer,
+so their gate is due at the next natural opportunity.
