@@ -63,7 +63,17 @@ suppressWarnings(suppressMessages(library(dplyr)))
 # point into retrieval instead of always being handed coverage/candidates.
 .resolve_text_inputs <- function(src, channel_def, variable, tasks, selector) {
     if (is.list(src) && all(c("coverage", "candidates") %in% names(src))) {
-        return(list(coverage = src$coverage, candidates = src$candidates))
+        # Pre-retrieved frames are PUBLIC inputs: like the cohort, they may key
+        # rows by grain_id; the engine's internals speak task_id.
+        internal <- function(d) {
+            if (is.data.frame(d) && "grain_id" %in% names(d) &&
+                !"task_id" %in% names(d)) {
+                names(d)[names(d) == "grain_id"] <- "task_id"
+            }
+            d
+        }
+        return(list(coverage = internal(src$coverage),
+                    candidates = internal(src$candidates)))
     }
     if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
         return(.retrieve_text_channel(channel_def, variable, tasks, src, selector))
@@ -1031,18 +1041,36 @@ suppressWarnings(suppressMessages(library(dplyr)))
         stop("cohort must be a non-empty data frame (one row per output unit) ",
              "or a character vector of PATIDs.", call. = FALSE)
     }
+    # The row identifier is grain_id publicly (owner pick 2026-07-05: the id of
+    # one grain unit -- patient, stay, index event); the engine's internals keep
+    # task_id (there it names extraction tasks). Normalize on the way in; the
+    # output envelope renames on the way out (.publish_grain_id).
+    if ("grain_id" %in% names(cohort) && !"task_id" %in% names(cohort)) {
+        names(cohort)[names(cohort) == "grain_id"] <- "task_id"
+    }
     if (!"task_id" %in% names(cohort)) {
         keys <- intersect(
             unique(c("PATID", variable$output_one_row_per %||% "PATID")),
             names(cohort))
         if (!length(keys)) {
-            stop("cohort carries neither task_id nor grain key column(s); ",
+            stop("cohort carries neither grain_id nor grain key column(s); ",
                  "cannot identify its rows.", call. = FALSE)
         }
         cohort$task_id <- do.call(
             paste, c(lapply(cohort[keys], as.character), sep = "::"))
     }
     cohort
+}
+
+# Publish the public row identifier: every output view keys its rows by
+# grain_id; the raw channel_results (engine-internal views) keep task_id.
+.publish_grain_id <- function(run) {
+    lapply(run, function(el) {
+        if (is.data.frame(el) && "task_id" %in% names(el)) {
+            names(el)[names(el) == "task_id"] <- "grain_id"
+        }
+        el
+    })
 }
 
 # EXPLICIT union-of-sources universe: "whoever appears in these frames", as a
@@ -1171,10 +1199,11 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
     # whether written directly or lowered from any_positive(); NA for a single-channel
     # variable, which has no cross-channel combine (its value comes from output()).
     combine_rule <- if (inherits(combine, "ee_combiner")) combine$expr else NA_character_
-    c(list(spec = variable, selected_channels = selected,
-           combine_rule = combine_rule,
-           provenance = .build_provenance(variable, model_name),
-           channel_results = channel_results), out)
+    .publish_grain_id(
+        c(list(spec = variable, selected_channels = selected,
+               combine_rule = combine_rule,
+               provenance = .build_provenance(variable, model_name),
+               channel_results = channel_results), out))
 }
 
 # The protocol run: every variable of a study over ONE declared cohort laid

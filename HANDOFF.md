@@ -998,3 +998,22 @@ no-cohort error; explicit union helper; stay-grain derived ids). Open naming
 question parked by owner: the `tasks` word survives internally and as the
 task_id output column; renaming the COLUMN is a bigger migration, gated on
 owner picking a name.
+
+## grain_id: the public row identifier (owner pick) + run_protocol -- Claude Fable (2026-07-05)
+
+Owner picked both names. `run_variables` -> `run_protocol` (old name rejected
+loudly); the row identifier is now **grain_id** -- the id of one grain unit
+(patient C1, stay C1::V1, index event P1::t::X2), i.e. "one asked-and-answered
+question", named by the axis that creates it (output_one_row_per picks the
+grain, grain_id identifies each unit).
+
+**The boundary:** PUBLIC surfaces speak grain_id -- every published view
+(values, evidence, membership, channel_status, combine_keys) is renamed at the
+envelope (.publish_grain_id), and row-keyed public INPUTS (the cohort frame,
+pre-retrieved text fixtures) may supply grain_id, normalized on intake. The
+engine INTERNALS keep task_id (its original, correct text-pipeline meaning:
+one extraction task); run$channel_results is the raw internal view and keeps
+task_id. Tests + the real-run script migrated wholesale.
+
+Suite 199/0/0. DESIGN SS7 records grain_id + run_protocol next to the cohort
+intake; the SS9 candidate-table sketch keeps task_id deliberately (internal).

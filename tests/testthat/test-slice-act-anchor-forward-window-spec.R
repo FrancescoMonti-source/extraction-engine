@@ -47,7 +47,7 @@ aw_var <- variable_spec(
     combine_channels = "pmsi_complication | redo_act")
 
 aw_tasks <- tibble::tibble(
-    task_id = paste0(c("P1", "P2", "P3", "P4"), "::t"),
+    grain_id = paste0(c("P1", "P2", "P3", "P4"), "::t"),
     PATID = c("P1", "P2", "P3", "P4"))   # NB: no anchor_date -- index_event derives it
 
 # pmsi_actes: every subject's index surgery (HGFA011 @ 05-10); P3 also a redo (HGFA012 @ +5d).
@@ -73,7 +73,7 @@ aw_diag <- tibble::tibble(
 test_that("an act-anchored, post-op forward window combines complication signals across sources", {
     run <- run_variable(aw_var, aw_tasks,
                         list(pmsi_actes = aw_actes, pmsi_diag = aw_diag))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], 1L)   # T81 10d after the act
     expect_equal(value[["P2::t"]], 0L)   # T81 is PRE-op -> forward window excludes it
@@ -85,6 +85,6 @@ test_that("an act-anchored, post-op forward window combines complication signals
     # P3's complication rides the redo (point source) arm; the diagnosis arm is unevaluable
     # for P3 (no eligible rows), so its membership is NA -- absence is not observed-negative.
     m <- run$membership
-    expect_true(is.na(m$hit[m$task_id == "P3::t" & m$channel == "pmsi_complication"]))
-    expect_true(m$hit[m$task_id == "P3::t" & m$channel == "redo_act"])
+    expect_true(is.na(m$hit[m$grain_id == "P3::t" & m$channel == "pmsi_complication"]))
+    expect_true(m$hit[m$grain_id == "P3::t" & m$channel == "redo_act"])
 })

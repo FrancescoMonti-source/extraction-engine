@@ -7,17 +7,17 @@
 # Per-task snippet markers: prompt_smoking() does not echo the task id, so the fake
 # keys on the (distinct) snippet_text it is shown.
 sm_tasks <- tibble::tibble(
-    task_id = paste0("T", 1:6, "::t"),
+    grain_id = paste0("T", 1:6, "::t"),
     PATID = paste0("S", 1:6),
     anchor_date = as.Date("2024-06-01"))
 
 sm_docs <- list(
     coverage = tibble::tibble(
-        task_id = sm_tasks$task_id,
+        grain_id = sm_tasks$grain_id,
         coverage_state = c("candidate", "candidate", "no_candidate",
                            "candidate", "candidate", "candidate")),
     candidates = tibble::tibble(
-        task_id = c("T1::t", "T2::t", "T4::t", "T5::t", "T6::t"),
+        grain_id = c("T1::t", "T2::t", "T4::t", "T5::t", "T6::t"),
         snippet_id = "S001",
         hit_ref = c("D1::3", "D2::3", "D4::3", "D5::3", "D6::3"),
         ELTID = c("D1", "D2", "D4", "D5", "D6"),
@@ -68,9 +68,9 @@ test_that("categorical output returns the status and distinct absence states", {
     run <- run_variable(smoking_periop(), sm_tasks, sm_sources,
                         caller = sm_fake, model_name = "fake")
 
-    value <- setNames(run$values$value, run$values$task_id)
-    cov <- setNames(run$values$channel_coverage, run$values$task_id)
-    nr <- setNames(run$values$needs_review, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    cov <- setNames(run$values$channel_coverage, run$values$grain_id)
+    nr <- setNames(run$values$needs_review, run$values$grain_id)
 
     expect_equal(value[["T1::t"]], "actif")        # documented status transcribed
     expect_equal(value[["T2::t"]], "indetermine")  # abstention is a VALID ascertained value
@@ -89,16 +89,16 @@ test_that("categorical output returns the status and distinct absence states", {
 test_that("D1: invented citation is kept-and-flagged, not fail-closed", {
     run <- run_variable(smoking_periop(), sm_tasks, sm_sources,
                         caller = sm_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
-    cw <- setNames(run$values$citation_warning, run$values$task_id)
-    nr <- setNames(run$values$needs_review, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    cw <- setNames(run$values$citation_warning, run$values$grain_id)
+    nr <- setNames(run$values$needs_review, run$values$grain_id)
 
     # T5: one real id + one invented -> value KEPT, flagged, not flagged for review.
     expect_equal(value[["T5::t"]], "actif")
     expect_true(cw[["T5::t"]])
     expect_false(nr[["T5::t"]])
     # Only the real id materializes as evidence; the invented one never does.
-    t5_ev <- run$evidence[run$evidence$task_id == "T5::t", ]
+    t5_ev <- run$evidence[run$evidence$grain_id == "T5::t", ]
     expect_equal(t5_ev$evidence_ref, "D5::3")
     expect_false("S999" %in% run$evidence$source_row_id)
 
@@ -106,5 +106,5 @@ test_that("D1: invented citation is kept-and-flagged, not fail-closed", {
     expect_true(is.na(value[["T6::t"]]))
     expect_true(cw[["T6::t"]])
     expect_true(nr[["T6::t"]])
-    expect_equal(nrow(run$evidence[run$evidence$task_id == "T6::t", ]), 0L)
+    expect_equal(nrow(run$evidence[run$evidence$grain_id == "T6::t", ]), 0L)
 })

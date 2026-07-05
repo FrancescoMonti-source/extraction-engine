@@ -28,7 +28,7 @@ hx_var <- function(expr = "transplant_act & !dialysis_signal",
 }
 
 hx_tasks <- tibble::tibble(
-    task_id = paste0("HX", 1:4, "::t"),
+    grain_id = paste0("HX", 1:4, "::t"),
     PATID = paste0("Q", 1:4),
     anchor_date = as.Date("2024-06-01"))
 
@@ -51,16 +51,16 @@ test_that("bare string combine returns value, coverage, and raw membership audit
     run <- run_variable(hx_var(), hx_tasks, hx_sources)
 
     expect_equal(
-        setNames(run$values$value, run$values$task_id),
+        setNames(run$values$value, run$values$grain_id),
         c("HX1::t" = 1L, "HX2::t" = 1L, "HX3::t" = 0L, "HX4::t" = 0L))
     expect_equal(
-        setNames(run$values$channel_coverage, run$values$task_id),
+        setNames(run$values$channel_coverage, run$values$grain_id),
         c("HX1::t" = "complete", "HX2::t" = "partial",
           "HX3::t" = "complete", "HX4::t" = "partial"))
     expect_equal(run$combine_rule, "transplant_act & !dialysis_signal")
 
     m <- run$membership
-    expect_true(is.na(m$hit[m$task_id == "HX2::t" &
+    expect_true(is.na(m$hit[m$grain_id == "HX2::t" &
                             m$channel == "dialysis_signal"]))
 })
 

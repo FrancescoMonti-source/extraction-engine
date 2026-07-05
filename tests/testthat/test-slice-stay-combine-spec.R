@@ -24,7 +24,7 @@ sc_make_corpus <- function(eltids, texts) {
 # researcher-supplied anchors are the already-shipped posture).
 
 sc_tasks <- tibble::tibble(
-    task_id = paste0("P", 1:5, "::t"),
+    grain_id = paste0("P", 1:5, "::t"),
     PATID = paste0("P", 1:5),
     anchor_date = as.Date("2024-01-01"))
 
@@ -112,7 +112,7 @@ test_that("stay-level combine: same-stay co-occurrence, exists-lifted to patient
     run <- run_variable(sc_ssi_var(combine_at_level = "EVTID"),
                         sc_tasks, sc_sources,
                         caller = sc_ssi_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], 0L)   # THE TRAP: text in S1A, act in S1B
     expect_equal(value[["P2::t"]], 1L)   # text + act in the SAME stay S2A
@@ -122,9 +122,9 @@ test_that("stay-level combine: same-stay co-occurrence, exists-lifted to patient
 
     # Stay-level audit: P1's two observed stays, neither qualifying.
     ck <- run$combine_keys
-    expect_setequal(ck$EVTID[ck$task_id == "P1::t"], c("S1A", "S1B"))
-    expect_false(any(ck$qualifies[ck$task_id == "P1::t"]))
-    expect_true(ck$qualifies[ck$task_id == "P2::t" & ck$EVTID == "S2A"])
+    expect_setequal(ck$EVTID[ck$grain_id == "P1::t"], c("S1A", "S1B"))
+    expect_false(any(ck$qualifies[ck$grain_id == "P1::t"]))
+    expect_true(ck$qualifies[ck$grain_id == "P2::t" & ck$EVTID == "S2A"])
     # Executed provenance records the evaluation level.
     expect_equal(run$provenance$combine_at_level, "EVTID")
 })
@@ -135,7 +135,7 @@ test_that("stay-level combine: same-stay co-occurrence, exists-lifted to patient
 test_that("default level (= output grain) keeps patient-level semantics", {
     run <- run_variable(sc_ssi_var(), sc_tasks, sc_sources,
                         caller = sc_ssi_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
     expect_equal(value[["P1::t"]], 1L)   # cross-stay & passes at patient level
     expect_equal(value[["P4::t"]], 0L)
 })
@@ -143,7 +143,7 @@ test_that("default level (= output grain) keeps patient-level semantics", {
 # --- Consumer B: mean Hb in anaemic stays (§14.9, gated payload at stay level) --
 
 sc_an_tasks <- tibble::tibble(
-    task_id = c("P1::t", "P2::t"),
+    grain_id = c("P1::t", "P2::t"),
     PATID = c("P1", "P2"),
     anchor_date = as.Date("2024-06-01"))
 
@@ -228,8 +228,8 @@ test_that("gated payload reads only the qualifying stays' rows (values_from key-
     run <- run_variable(sc_anemia_var(values_from = "hb_all"),
                         sc_an_tasks, sc_an_sources,
                         caller = sc_an_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
-    n_rows <- setNames(run$values$n_payload_rows, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    n_rows <- setNames(run$values$n_payload_rows, run$values$grain_id)
 
     # P1: SA qualifies (doc + sub-threshold Hb); SB does NOT (no doc). hb_all is
     # scoped to qualifying stays: mean(9, 10, 13) -- SB's 8 is OUT, SA's normal
@@ -246,7 +246,7 @@ test_that("swapping the payload channel changes which values enter the mean", {
     run <- run_variable(sc_anemia_var(values_from = "hb_low"),
                         sc_an_tasks, sc_an_sources,
                         caller = sc_an_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
     expect_equal(value[["P1::t"]], mean(c(9, 10)))   # only sub-threshold rows
 })
 

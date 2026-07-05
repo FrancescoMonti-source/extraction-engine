@@ -20,14 +20,14 @@ og_spec <- function(grain) variable_spec(
 test_that("output_one_row_per guard rejects a task frame not at the declared grain", {
     # stay grain declared, but tasks carry no EVTID column -> cannot link to the stay
     patient_tasks <- tibble::tibble(
-        task_id = "P1::t", PATID = "P1", anchor_date = as.Date("2024-06-01"))
+        grain_id = "P1::t", PATID = "P1", anchor_date = as.Date("2024-06-01"))
     expect_error(
         run_variable(og_spec("EVTID"), patient_tasks, list(pmsi_diag = og_diag)),
         "EVTID")
 
     # patient grain declared, but the same PATID appears twice -> not 1:1 with the unit
     dup_tasks <- tibble::tibble(
-        task_id = c("P1::a", "P1::b"), PATID = c("P1", "P1"),
+        grain_id = c("P1::a", "P1::b"), PATID = c("P1", "P1"),
         anchor_date = as.Date("2024-06-01"))
     expect_error(
         run_variable(og_spec("PATID"), dup_tasks, list(pmsi_diag = og_diag)),

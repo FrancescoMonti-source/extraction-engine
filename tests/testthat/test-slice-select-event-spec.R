@@ -41,7 +41,7 @@ se_var <- function(select_event, output_one_row_per = "PATID") {
         output = bin_output())
 }
 
-se_tasks <- tibble::tibble(task_id = c("P1::t", "P2::t"),
+se_tasks <- tibble::tibble(grain_id = c("P1::t", "P2::t"),
                            PATID = c("P1", "P2"))
 se_sources <- list(pmsi_actes = se_acts)
 
@@ -49,7 +49,7 @@ test_that("select_event picks the anchoring event (first surgery starts the cloc
     run <- run_variable(
         se_var(select_event = function(d) dplyr::slice_min(d, point_date, n = 1)),
         se_tasks, se_sources)
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], 0L)   # March clock: November revision is out
     expect_equal(value[["P2::t"]], 0L)
@@ -61,7 +61,7 @@ test_that("select_event = identity emits one task per event, each with its own w
     run <- run_variable(se_var(select_event = identity,
                                output_one_row_per = "EVTID"),
                         se_tasks, se_sources)
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     # P1 became two rows: one clock per surgery. Same patient, same November
     # revision -- in for the June surgery, out for the March one.

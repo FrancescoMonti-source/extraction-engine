@@ -9,7 +9,7 @@
 # (E13's 3rd char "3" is in [0-4] but not [0-2], regardless of dot normalization.)
 
 co_tasks <- tibble::tibble(
-    task_id = "T1::t", PATID = "T1", anchor_date = as.Date("2024-06-01"))
+    grain_id = "T1::t", PATID = "T1", anchor_date = as.Date("2024-06-01"))
 
 co_diag <- tibble::tibble(
     source_row_id = "diag:001", PATID = "T1", EVTID = "EV1", ELTID = "D1",
@@ -32,8 +32,8 @@ test_that("activation selector overrides the concept's baseline selector in the 
     override <- run_variable(
         co_spec(use_channel(selector = icd10("^E1[0-2]"))), co_tasks, co_sources)
 
-    base_val <- setNames(baseline$values$value, baseline$values$task_id)
-    over_val <- setNames(override$values$value, override$values$task_id)
+    base_val <- setNames(baseline$values$value, baseline$values$grain_id)
+    over_val <- setNames(override$values$value, override$values$grain_id)
 
     expect_equal(base_val[["T1::t"]], 1L)   # E13 in the concept baseline E1[0-4]
     expect_equal(over_val[["T1::t"]], 0L)   # ...but the LOCAL override E1[0-2] excludes it

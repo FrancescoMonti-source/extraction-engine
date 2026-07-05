@@ -13,7 +13,7 @@
 # combine expression.
 
 lab_tasks <- tibble::tibble(
-    task_id = paste0("Q", 1:3, "::t"),
+    grain_id = paste0("Q", 1:3, "::t"),
     PATID = paste0("Q", 1:3),
     anchor_date = as.Date("2024-06-01"))
 
@@ -48,8 +48,8 @@ test_that("a thresholded analyte selector hits above the cutoff, observed-negati
         output = bin_output())
 
     run <- run_variable(var, lab_tasks, list(biology = lab_biol))
-    value <- setNames(run$values$value, run$values$task_id)
-    cov <- setNames(run$values$channel_coverage, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    cov <- setNames(run$values$channel_coverage, run$values$grain_id)
 
     expect_equal(value[["Q1::t"]], 1L)   # 15 > 11
     expect_equal(value[["Q2::t"]], 0L)   # 8 not > 11: glucose measured, below cutoff
@@ -61,9 +61,9 @@ test_that("a thresholded analyte selector hits above the cutoff, observed-negati
 
     # Evidence is the thresholded row only -- a below-cutoff measurement is not a hit
     # and contributes no evidence.
-    ev1 <- run$evidence[run$evidence$task_id == "Q1::t", ]
+    ev1 <- run$evidence[run$evidence$grain_id == "Q1::t", ]
     expect_equal(ev1$evidence_ref, "g1")
-    expect_equal(nrow(run$evidence[run$evidence$task_id == "Q2::t", ]), 0L)
+    expect_equal(nrow(run$evidence[run$evidence$grain_id == "Q2::t", ]), 0L)
 })
 
 test_that("a thresholded lab hit joins a boolean combine with a code channel", {
@@ -98,7 +98,7 @@ test_that("a thresholded lab hit joins a boolean combine with a code channel", {
         DATENT = as.Date("2024-05-28"), DATSORT = as.Date("2024-05-29"))
 
     run <- run_variable(var, lab_tasks, list(biology = lab_biol, pmsi_diag = diag))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["Q1::t"]], 1L)   # E11 code AND glucose 15 > 11
     expect_equal(value[["Q2::t"]], 0L)   # E11 code but glucose 8: the AND gates on the lab

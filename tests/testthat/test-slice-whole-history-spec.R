@@ -5,7 +5,7 @@
 
 # Tasks carry NO anchor_date -- whole-history variables have no anchor.
 wh_tasks <- tibble::tibble(
-    task_id = paste0("Q", 1:4),
+    grain_id = paste0("Q", 1:4),
     PATID = paste0("Q", 1:4))
 
 # Q1: a diabetes code. Q2: a non-diabetes code (ascertained negative). Q3: NO rows.
@@ -42,12 +42,12 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
 
     run <- run_variable(var, wh_tasks, wh_sources)   # no caller: structured only
 
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["Q4"]], 1L)        # 2005 code still counts (no window)
 
     expect_true(is.na(run$combine_rule))
-    expect_equal(run$evidence$evidence_ref[run$evidence$task_id == "Q4"], "diag:003")
+    expect_equal(run$evidence$evidence_ref[run$evidence$grain_id == "Q4"], "diag:003")
 })
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ test_that("diabetes_ever scopes the whole history with no anchor/window", {
 # are NOT re-asserted here. The variable is a disposable probe (window = NULL over an
 # existing text channel), not shipped machinery.
 
-wht_tasks <- tibble::tibble(task_id = "Q4", PATID = "Q4")   # no anchor_date
+wht_tasks <- tibble::tibble(grain_id = "Q4", PATID = "Q4")   # no anchor_date
 
 # A single OLD note (2005): any window would drop it; whole history keeps it.
 wht_docs_index <- tibble::tibble(
@@ -95,6 +95,6 @@ wht_variable <- function() {
 test_that("no-window subject text retrieves a document any window would exclude", {
     run <- run_variable(wht_variable(), wht_tasks, wht_sources,
                         caller = wht_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
     expect_equal(value[["Q4"]], 1L)
 })

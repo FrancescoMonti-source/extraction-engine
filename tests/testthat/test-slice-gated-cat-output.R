@@ -30,7 +30,7 @@ gc_acts <- tibble::tibble(
     DATEACTE = as.Date("2024-03-02") + 0:5)
 # P3: dialysis diag but NO act rows at all -> act channel silent.
 
-gc_tasks <- tibble::tibble(task_id = paste0("P", 1:5, "::t"),
+gc_tasks <- tibble::tibble(grain_id = paste0("P", 1:5, "::t"),
                            PATID = paste0("P", 1:5))
 gc_sources <- list(pmsi_diag = gc_diag, pmsi_actes = gc_acts)
 
@@ -71,8 +71,8 @@ test_that("a combine expression gates rows and cat_output reads the survivors' c
                             reduce = gc_rule))
 
     run <- run_variable(spec, gc_tasks, gc_sources)
-    value <- setNames(run$values$value, run$values$task_id)
-    coverage <- setNames(run$values$channel_coverage, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    coverage <- setNames(run$values$channel_coverage, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], "hemodialysis")
     expect_equal(value[["P2::t"]], "peritoneal")
@@ -98,8 +98,8 @@ test_that("num_output(values_from =, reduce =) rides the same gate", {
         output = num_output(values_from = "dialysis_act", reduce = length))
 
     run <- run_variable(spec, gc_tasks, gc_sources)
-    value <- setNames(run$values$value, run$values$task_id)
-    n_rows <- setNames(run$values$n_payload_rows, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    n_rows <- setNames(run$values$n_payload_rows, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], 2)              # two surviving act rows
     expect_equal(value[["P2::t"]], 1)
@@ -122,8 +122,8 @@ test_that("an empty payload behind a passing gate yields NA without calling redu
         output = num_output(values_from = "dialysis_act", reduce = length))
 
     run <- run_variable(spec, gc_tasks, gc_sources)
-    value <- setNames(run$values$value, run$values$task_id)
-    n_rows <- setNames(run$values$n_payload_rows, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    n_rows <- setNames(run$values$n_payload_rows, run$values$grain_id)
 
     expect_true(is.na(value[["P3::t"]]))           # in via diag; act payload empty
     expect_equal(n_rows[["P3::t"]], 0L)
@@ -140,7 +140,7 @@ test_that("single-channel cat payload reads the channel's own rows (no combine)"
                             reduce = gc_rule))   # values_from defaults to the channel
 
     run <- run_variable(spec, gc_tasks, gc_sources)
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P4::t"]], "hemodialysis") # no gate: the act alone answers
     expect_true(is.na(value[["P3::t"]]))           # no rows -> NA/partial

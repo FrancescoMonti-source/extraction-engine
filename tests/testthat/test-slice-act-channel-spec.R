@@ -6,7 +6,7 @@
 # so a positive hit also proves that gate is gone. Synthetic data.
 
 act_tasks <- tibble::tibble(
-    task_id = paste0("A", 1:3, "::t"),
+    grain_id = paste0("A", 1:3, "::t"),
     PATID = paste0("P", 1:3),
     anchor_date = as.Date("2024-06-01"))
 
@@ -40,7 +40,7 @@ act_var <- function(codes = "JAFA001", match = "exact") {
 
 test_that("act_channel matches CCAM codes over pmsi$actes with point-window scope", {
     run <- run_variable(act_var(), act_tasks, list(pmsi_actes = act_rows))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["A1::t"]], 1L)   # JAFA001 within 30d of the anchor
     expect_equal(value[["A2::t"]], 0L)   # JAFA001 but ~5 months before -> out of window
@@ -48,6 +48,6 @@ test_that("act_channel matches CCAM codes over pmsi$actes with point-window scop
 
     # The CCAM code materialises as evidence via CODEACTE (an ICD-10 gate would have
     # dropped it as "malformed"); only the in-window row is selected.
-    ev <- run$evidence[run$evidence$task_id == "A1::t", ]
+    ev <- run$evidence[run$evidence$grain_id == "A1::t", ]
     expect_equal(ev$evidence_ref, "acte:001")
 })

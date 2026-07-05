@@ -12,7 +12,7 @@ rw_make_corpus <- function(eltids, texts) {
 }
 
 rw_tasks <- tibble::tibble(
-    task_id = c("P1::s", "P2::s", "P3::s"),
+    grain_id = c("P1::s", "P2::s", "P3::s"),
     PATID = c("P1", "P2", "P3"),
     anchor_date = as.Date("2025-03-10"))
 
@@ -53,14 +53,14 @@ test_that("run_variable executes a text variable from raw documents via retrieva
     run <- run_variable(rw_variable(), rw_tasks, rw_sources,
                         caller = rw_fake, model_name = "fake")
 
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::s"]], "actif")   # retrieved smoking sentence -> extracted
     expect_true(is.na(value[["P2::s"]]))       # in-window doc, no smoking term -> no_candidate
     expect_true(is.na(value[["P3::s"]]))       # smoking doc OUT of window -> not eligible
 
     # P1's value is grounded by a real retrieved sentence reference into the corpus.
-    ev1 <- run$evidence[run$evidence$task_id == "P1::s", ]
+    ev1 <- run$evidence[run$evidence$grain_id == "P1::s", ]
     expect_equal(nrow(ev1), 1L)
     expect_match(ev1$evidence_ref, "^E1::")
 })

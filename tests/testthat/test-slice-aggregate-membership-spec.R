@@ -15,7 +15,7 @@
 # where a reduction participates in MEMBERSHIP.
 
 am_tasks <- tibble::tibble(
-    task_id = paste0("AM", 1:4, "::t"),
+    grain_id = paste0("AM", 1:4, "::t"),
     PATID = paste0("AM", 1:4))
 
 am_biol_row <- function(srid, patid, evtid, value, date) tibble::tibble(
@@ -72,8 +72,8 @@ test_that("membership by group aggregate: qualifying stays' original rows are th
         channels = list(hb_anemic_stay = use_channel()),
         output = bin_output())
     run <- run_variable(spec, am_tasks, am_sources)
-    value <- setNames(run$values$value, run$values$task_id)
-    coverage <- setNames(run$values$channel_coverage, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    coverage <- setNames(run$values$channel_coverage, run$values$grain_id)
 
     expect_equal(value[["AM1::t"]], 1L)   # mean(9, 10) = 9.5 < 10
     expect_equal(value[["AM2::t"]], 0L)   # measurements exist, no qualifying stay
@@ -84,7 +84,7 @@ test_that("membership by group aggregate: qualifying stays' original rows are th
 
     # Provenance intact: the hit's evidence is the qualifying group's ORIGINAL
     # rows -- and ONLY those (AM4's non-qualifying stay SD contributes nothing).
-    ev4 <- run$evidence[run$evidence$task_id == "AM4::t", ]
+    ev4 <- run$evidence[run$evidence$grain_id == "AM4::t", ]
     expect_setequal(ev4$source_row_id, c("b5", "b6"))
 })
 
@@ -98,10 +98,10 @@ test_that("group-filtered rows feed the level algebra (anaemic stay & same-stay 
         combine_channels = "hb_anemic_stay & transfusion",
         combine_at_level = "EVTID",
         output = bin_output())
-    tasks <- tibble::tibble(task_id = c("AM5::t", "AM6::t"),
+    tasks <- tibble::tibble(grain_id = c("AM5::t", "AM6::t"),
                             PATID = c("AM5", "AM6"))
     run <- run_variable(spec, tasks, am_sources)
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["AM5::t"]], 1L)   # transfusion IN the anaemic stay SE
     expect_equal(value[["AM6::t"]], 0L)   # anaemic SF, transfusion in SG
@@ -164,17 +164,17 @@ test_that("a coded frequency rule: at least two acts in the SAME stay", {
         output_one_row_per = "PATID",
         channels = list(acts = use_channel()),
         output = bin_output())
-    tasks <- tibble::tibble(task_id = c("AM7::t", "AM8::t"),
+    tasks <- tibble::tibble(grain_id = c("AM7::t", "AM8::t"),
                             PATID = c("AM7", "AM8"))
     run <- run_variable(spec, tasks, am_sources)
-    value <- setNames(run$values$value, run$values$task_id)
-    coverage <- setNames(run$values$channel_coverage, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    coverage <- setNames(run$values$channel_coverage, run$values$grain_id)
 
     expect_equal(value[["AM7::t"]], 1L)   # two acts in stay SH
     expect_equal(value[["AM8::t"]], 0L)   # two acts, but one per stay
     expect_equal(coverage[["AM8::t"]], "complete")   # ascertained, not silence
     # Evidence = the qualifying stay's original act rows.
-    ev7 <- run$evidence[run$evidence$task_id == "AM7::t", ]
+    ev7 <- run$evidence[run$evidence$grain_id == "AM7::t", ]
     expect_setequal(ev7$source_row_id, c("u1", "u2"))
 })
 

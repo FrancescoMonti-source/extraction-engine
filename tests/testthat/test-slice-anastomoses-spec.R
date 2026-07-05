@@ -5,7 +5,7 @@
 # not clinical truth.
 
 ana_tasks <- tibble::tibble(
-    task_id = paste0("A", 1:3, "::t"),
+    grain_id = paste0("A", 1:3, "::t"),
     PATID = paste0("R", 1:3),
     EVTID = paste0("E", 1:3),
     anchor_date = as.Date("2024-03-10"))
@@ -14,11 +14,11 @@ ana_tasks <- tibble::tibble(
 # so the fake keys on the distinct snippet_text and coverage carries anchor_date.
 ana_docs <- list(
     coverage = tibble::tibble(
-        task_id = ana_tasks$task_id,
+        grain_id = ana_tasks$grain_id,
         coverage_state = c("candidate", "no_candidate", "candidate"),
         anchor_date = as.Date("2024-03-10")),
     candidates = tibble::tibble(
-        task_id = c("A1::t", "A3::t"),
+        grain_id = c("A1::t", "A3::t"),
         snippet_id = "S001",
         hit_ref = c("OP1::2", "OP3::2"),
         ELTID = c("OP1", "OP3"),
@@ -63,7 +63,7 @@ test_that("struct output keeps valid fields and flags the task on an invalid sib
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
                         caller = ana_fake, model_name = "fake")
 
-    a1 <- run$values[run$values$task_id == "A1::t", ]
+    a1 <- run$values[run$values$grain_id == "A1::t", ]
     val <- setNames(a1$value, a1$field)
     validity <- setNames(a1$field_validity, a1$field)
 
@@ -73,12 +73,12 @@ test_that("struct output keeps valid fields and flags the task on an invalid sib
     expect_true(is.na(val[["transplantation_type_anastomose_ureterale"]]))   # invalid not accepted
 
     # Per-task channel status: the call produced fields; one invalid -> needs_review.
-    ss1 <- run$channel_status[run$channel_status$task_id == "A1::t", ]
+    ss1 <- run$channel_status[run$channel_status$grain_id == "A1::t", ]
     expect_equal(ss1$status, "complete")
     expect_true(ss1$needs_review)
 
     # Evidence is per field; the invalid (un-evidenced) field materializes none.
-    ev1 <- run$evidence[run$evidence$task_id == "A1::t", ]
+    ev1 <- run$evidence[run$evidence$grain_id == "A1::t", ]
     art_ev <- ev1[ev1$field == "transplantation_type_anastomose_arterielle", ]
     expect_equal(art_ev$evidence_ref, "OP1::2")
     expect_equal(nrow(ev1[ev1$field == "transplantation_type_anastomose_ureterale", ]), 0L)
@@ -91,11 +91,11 @@ test_that("struct output distinguishes no_candidate and a failed call", {
                         caller = ana_fake, model_name = "fake")
 
     ss <- run$channel_status
-    a2 <- ss[ss$task_id == "A2::t", ]
+    a2 <- ss[ss$grain_id == "A2::t", ]
     expect_equal(a2$status, "unavailable")        # no_candidate
     expect_false(a2$needs_review)
 
-    a3 <- ss[ss$task_id == "A3::t", ]
+    a3 <- ss[ss$grain_id == "A3::t", ]
     expect_equal(a3$status, "error")              # model errored
     expect_true(a3$needs_review)
 })

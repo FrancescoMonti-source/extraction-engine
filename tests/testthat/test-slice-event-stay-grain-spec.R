@@ -24,7 +24,7 @@ es_acts <- tibble::tibble(
     DATEACTE = as.Date("2024-05-25"))          # date irrelevant: event-scoped, window = NULL
 
 es_tasks <- tibble::tibble(                      # STAY grain: one task per (PATID, EVTID)
-    task_id = c("P1::EV1", "P1::EV2"),
+    grain_id = c("P1::EV1", "P1::EV2"),
     PATID = "P1",
     EVTID = c("EV1", "EV2"))
 
@@ -49,7 +49,7 @@ es_spec <- variable_spec(
 
 test_that("structured executor counts acts scoped to the task's own stay (EVTID)", {
     run <- run_variable(es_spec, es_tasks, list(pmsi_actes = es_acts))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::EV1"]], 2)   # 2 JAFA001 in EV1; NOT EV2's act, NOT the decoy
     expect_equal(value[["P1::EV2"]], 1)   # 1 JAFA001 in EV2; NOT EV1's two acts

@@ -3,7 +3,7 @@
 # truth for diabetes.
 
 spec_tasks <- tibble::tibble(
-    task_id = paste0("P", 1:4, "::t"),
+    grain_id = paste0("P", 1:4, "::t"),
     PATID = paste0("P", 1:4),
     anchor_date = as.Date("2024-06-01"))
 
@@ -18,10 +18,10 @@ spec_diag <- tibble::tibble(
 
 spec_docs <- list(
     coverage = tibble::tibble(
-        task_id = spec_tasks$task_id,
+        grain_id = spec_tasks$grain_id,
         coverage_state = c("candidate", "no_candidate", "no_candidate", "no_candidate")),
     candidates = tibble::tibble(
-        task_id = "P1::t",
+        grain_id = "P1::t",
         snippet_id = "S001",
         hit_ref = "DOC1::3",
         ELTID = "DOC1",
@@ -71,12 +71,12 @@ test_that("direct glucose variable_spec reduces the channel with a plain functio
     run <- run_variable(direct, spec_tasks, spec_sources)
     expect_equal(run$selected_channels$channel, "glucose_measurements")
 
-    values <- setNames(run$values$value, run$values$task_id)
+    values <- setNames(run$values$value, run$values$grain_id)
     expect_equal(values[["P1::t"]], 9.4)      # max(6.1, 9.4) via the plain reduce
     expect_true(is.na(values[["P2::t"]]))     # glucose exists, but outside window
 
     # Both in-window glucose rows for P1 are candidates -> both are evidence.
-    ev <- run$evidence[run$evidence$task_id == "P1::t", ]
+    ev <- run$evidence[run$evidence$grain_id == "P1::t", ]
     expect_setequal(ev$evidence_ref, c("biol:001", "biol:002"))
     expect_true(all(ev$channel == "glucose_measurements"))
     expect_true(all(ev$source == "biology"))
@@ -106,7 +106,7 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         output = bin_output())          # single channel -> combine_channels = NULL (membership)
 
     tasks <- tibble::tibble(
-        task_id = c("N1::t", "N2::t"), PATID = c("N1", "N2"),
+        grain_id = c("N1::t", "N2::t"), PATID = c("N1", "N2"),
         anchor_date = as.Date("2024-06-01"))
     diag <- tibble::tibble(
         source_row_id = c("d1", "d2"), PATID = c("N1", "N2"),
@@ -115,7 +115,7 @@ test_that("run_variable's spine is concept-agnostic: the channel selector drives
         DATENT = as.Date("2024-05-20"), DATSORT = as.Date("2024-05-21"))
 
     run <- run_variable(esrd_var, tasks, list(pmsi_diag = diag))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
     expect_equal(value[["N1::t"]], 1L)   # N18 detected via the channel's OWN selector
     expect_equal(value[["N2::t"]], 0L)   # a diabetes code is ABSENT for an ESRD variable
 })

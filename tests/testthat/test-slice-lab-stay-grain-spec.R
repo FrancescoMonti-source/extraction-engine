@@ -23,7 +23,7 @@ sg_biol <- tibble::tibble(
     value = c(15, 9, 7))
 
 sg_tasks <- tibble::tibble(                      # STAY grain: one task per (PATID, EVTID)
-    task_id = c("P1::EV1", "P1::EV2"),
+    grain_id = c("P1::EV1", "P1::EV2"),
     PATID = "P1",
     EVTID = c("EV1", "EV2"))
 
@@ -47,13 +47,13 @@ test_that("the lab executor reduces glucose scoped to the task's own stay (EVTID
         output = num_output(reduce = function(x) max(x, na.rm = TRUE)))
 
     run <- run_variable(spec, sg_tasks, list(biology = sg_biol))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::EV1"]], 15)   # max(15, 9) in EV1; NOT EV2's 7
     expect_equal(value[["P1::EV2"]], 7)    # only EV2's 7; NOT EV1's 15/9
 
     # Evidence stays within the stay: EV1's number was reduced from EV1's rows only.
-    ev1 <- run$evidence[run$evidence$task_id == "P1::EV1", ]
+    ev1 <- run$evidence[run$evidence$grain_id == "P1::EV1", ]
     expect_setequal(ev1$evidence_ref, c("biol:001", "biol:002"))
 })
 
@@ -65,7 +65,7 @@ test_that("a thresholded lab membership hit is scoped to the stay", {
         output = bin_output())
 
     run <- run_variable(spec, sg_tasks, list(biology = sg_biol))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::EV1"]], 1L)   # 15 > 10 in EV1
     expect_equal(value[["P1::EV2"]], 0L)   # EV2 has only 7: measured, below cutoff

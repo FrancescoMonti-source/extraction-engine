@@ -22,7 +22,7 @@ ix_diag <- tibble::tibble(
     DATENT  = as.Date(c("2024-06-01", "2024-01-01", "2024-05-20", "2024-05-20")),
     DATSORT = as.Date(c("2024-06-10", "2024-01-05", "2024-05-21", "2024-05-21")))
 
-ix_tasks <- tibble::tibble(task_id = c("P1::t", "P2::t"), PATID = c("P1", "P2"))
+ix_tasks <- tibble::tibble(grain_id = c("P1::t", "P2::t"), PATID = c("P1", "P2"))
     # NB: NO anchor_date column -- index_event computes it.
 
 ix_concept <- concept_spec(
@@ -46,7 +46,7 @@ test_that("index_event derives a per-subject anchor from the matched event", {
         output = bin_output())
 
     run <- run_variable(ix_spec, ix_tasks, list(pmsi_diag = ix_diag))
-    value <- setNames(run$values$value, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], 1L)   # E11 (05-20) within 30d before P1 index DATENT 06-01
     expect_equal(value[["P2::t"]], 0L)   # same E11 date, but P2 index DATENT 01-01 -> out of window
@@ -70,7 +70,7 @@ test_that("index_event errors on multiple matching events per subject", {
         window = c(-30, 0),
         channels = list(dm_code = use_channel()), output = bin_output())
     expect_error(
-        run_variable(spec, tibble::tibble(task_id = "P1::t", PATID = "P1"),
+        run_variable(spec, tibble::tibble(grain_id = "P1::t", PATID = "P1"),
                      list(pmsi_diag = two_index)),
         "multiple events")
 })

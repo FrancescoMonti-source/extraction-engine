@@ -5,7 +5,7 @@
 # loaded source must get his NA/partial row, not silently vanish from the
 # denominator ("that patient shouldn't vanish, he should just have NA
 # everywhere"). A bare vector of PATIDs (a spreadsheet column) is a valid
-# patient-grain cohort; task_id derives from the grain keys when absent.
+# patient-grain cohort; grain_id derives from the grain keys when absent.
 # cohort_from_sources() is the EXPLICIT union-of-frames escape for exploration.
 
 cu_acts <- tibble::tibble(
@@ -36,11 +36,11 @@ test_that("the universe comes from sources$cohort; the row-less patient keeps hi
     sources <- list(cohort = tibble::tibble(PATID = c("C1", "C2", "C3")),
                     pmsi_actes = cu_acts)
     run <- run_variable(cu_spec, sources = sources)
-    value <- setNames(run$values$value, run$values$task_id)
-    coverage <- setNames(run$values$channel_coverage, run$values$task_id)
+    value <- setNames(run$values$value, run$values$grain_id)
+    coverage <- setNames(run$values$channel_coverage, run$values$grain_id)
 
     expect_equal(nrow(run$values), 3L)      # the denominator is the cohort
-    expect_equal(value[["C1"]], 1L)          # task_id derived from PATID
+    expect_equal(value[["C1"]], 1L)          # grain_id derived from PATID
     expect_equal(value[["C3"]], 0L)          # bin encodes non-membership as 0...
     expect_equal(coverage[["C3"]], "partial") # ...with the silence in coverage
 })
@@ -48,14 +48,14 @@ test_that("the universe comes from sources$cohort; the row-less patient keeps hi
 test_that("a bare vector of PATIDs is a valid patient-grain cohort", {
     sources <- list(cohort = c("C1", "C2"), pmsi_actes = cu_acts)
     run <- run_variable(cu_spec, sources = sources)
-    expect_equal(setNames(run$values$value, run$values$task_id),
+    expect_equal(setNames(run$values$value, run$values$grain_id),
                  c(C1 = 1L, C2 = 0L))
 })
 
 test_that("an explicit cohort narrows past sources$cohort (inclusion chaining)", {
     sources <- list(cohort = c("C1", "C2", "C3"), pmsi_actes = cu_acts)
     run <- run_variable(cu_spec, cohort = c("C1"), sources = sources)
-    expect_equal(run$values$task_id, "C1")
+    expect_equal(run$values$grain_id, "C1")
 })
 
 test_that("no cohort anywhere is a loud error, never a data-derived universe", {
@@ -83,5 +83,5 @@ test_that("stay-grain cohorts derive task ids from the grain keys", {
         output = bin_output())
     run <- run_variable(spec, cohort = stays,
                         sources = list(pmsi_actes = cu_acts))
-    expect_setequal(run$values$task_id, c("C1::V1", "C1::V2"))
+    expect_setequal(run$values$grain_id, c("C1::V1", "C1::V2"))
 })

@@ -72,7 +72,7 @@ CASES$diabetes <- list(
             distinct(PATID, .keep_all = TRUE)
         set.seed(cfg$seed)
         ch <- ch[sample(nrow(ch), min(cfg$n, nrow(ch))), , drop = FALSE]
-        tasks <- ch %>% transmute(task_id = PATID, PATID, anchor_date)
+        tasks <- ch %>% transmute(grain_id = PATID, PATID, anchor_date)
         win <- c(-1825, 7)   # template's window
 
         diag <- load_pmsi_diag(pmsi_p) %>%
@@ -127,7 +127,7 @@ CASES$smoking <- list(
 
         sid    <- sprintf("S%04d", seq_len(n))               # synthetic subject == one note
         anchor <- as.Date(samp$DATEACTE)
-        tasks  <- tibble::tibble(task_id = sid, PATID = sid, anchor_date = anchor)
+        tasks  <- tibble::tibble(grain_id = sid, PATID = sid, anchor_date = anchor)
 
         docs_index <- tibble::tibble(
             ELTID = sprintf("E%04d", seq_len(n)), PATID = sid,
@@ -254,7 +254,7 @@ dist_line <- function(x) {
 }
 val <- run$values; ss <- run$channel_status
 cat("================ REAL-RUN REPORT (aggregates only) ================\n")
-cat(sprintf("tasks processed ......... %d\n", length(unique(val$task_id))))
+cat(sprintf("tasks processed ......... %d\n", length(unique(val$grain_id))))
 if ("value" %in% names(val)) {
     v <- if (!is.null(spec$output) && identical(spec$output$kind, "categorical")) {
         factor(val$value, levels = spec$output$levels)
@@ -274,10 +274,10 @@ if (!is.na(run$combine_rule)) {
     for (chn in unique(ss$channel)) {
         cat(sprintf("  %-24s %s\n", chn, dist_line(ss$contribution[ss$channel == chn])))
     }
-    pos <- val$task_id[val$value %in% 1L]
+    pos <- val$grain_id[val$value %in% 1L]
     if (length(pos)) {
         pattern <- vapply(pos, function(tid) {
-            hits <- sort(ss$channel[ss$task_id == tid & ss$hit %in% TRUE])
+            hits <- sort(ss$channel[ss$grain_id == tid & ss$hit %in% TRUE])
             if (length(hits)) paste(hits, collapse = "+") else "(none)"
         }, character(1))
         cat(sprintf("\npositives attributed:  %s\n", dist_line(pattern)))
@@ -306,7 +306,7 @@ if ("field" %in% names(val)) {
 }
 if (nrow(run$evidence)) {
     cat(sprintf("tasks with evidence ..... %d / %d\n",
-                length(unique(run$evidence$task_id)), length(unique(val$task_id))))
+                length(unique(run$evidence$grain_id)), length(unique(val$grain_id))))
 }
 cat(sprintf("wall time ............... %.1fs\n", secs))
 cat(sprintf("\nPer-row detail (PHI) -> %s (gitignored)\n", out_p))

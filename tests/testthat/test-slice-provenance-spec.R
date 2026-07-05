@@ -14,7 +14,7 @@
 # baseline is detectably different in the recorded codes and in selector_source.
 
 pv_tasks <- tibble::tibble(
-    task_id = "S1::t", PATID = "S1", anchor_date = as.Date("2024-06-01"))
+    grain_id = "S1::t", PATID = "S1", anchor_date = as.Date("2024-06-01"))
 
 pv_diag <- tibble::tibble(
     source_row_id = "d1", PATID = "S1", EVTID = "E1", ELTID = "L1",
