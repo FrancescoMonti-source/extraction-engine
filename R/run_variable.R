@@ -1177,9 +1177,19 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
            channel_results = channel_results), out)
 }
 
-run_variables <- function(variables, cohort = NULL, sources = NULL,
-                          caller = NULL, model_name = "fake") {
+# The protocol run: every variable of a study over ONE declared cohort laid
+# down with the data (sources$cohort), so all outputs share the denominator by
+# construction. Today a thin orchestrator; study-level duties (shared channel
+# caching, one combined output table, study provenance bundle) wait for their
+# consumers. Renamed from run_variables (owner pick, 2026-07-05).
+run_protocol <- function(variables, cohort = NULL, sources = NULL,
+                         caller = NULL, model_name = "fake") {
     .require_named_list(variables, "variables")
     lapply(variables, run_variable, cohort = cohort, sources = sources,
            caller = caller, model_name = model_name)
+}
+
+run_variables <- function(...) {
+    stop("run_variables() was renamed: use run_protocol(variables, cohort = ",
+         "NULL, sources = ...) -- same signature.", call. = FALSE)
 }
