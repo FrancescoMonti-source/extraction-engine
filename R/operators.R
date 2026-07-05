@@ -48,14 +48,13 @@ index_event <- function(source, selector, at = "event_start") {
                        "ee_index_event")
 }
 
-# --- within-channel reducers --------------------------------------------------
-# A within-channel reducer is just a plain function numeric -> scalar, supplied on
-# the variable's channel activation: use_channel(reducer = function(x) max(x, na.rm =
-# TRUE)). No bespoke operator wraps trivial base reductions (max/min/mean/length);
-# the numeric-output assembler applies the function to the channel's candidate values.
-# RATIFIED TARGET (DESIGN §8, 2026-07-04): the reducer moves off the activation onto
-# the output -- num_output(values_from = , reduce = ) over the post-combine rows;
-# use_channel(reducer = ) is the shipped spelling until that wiring lands (§16).
+# --- payload reduction ----------------------------------------------------------
+# Reduction lives on the OUTPUT, not the activation (DESIGN §8, wired 2026-07-05):
+# num_output(values_from =, reduce =) / cat_output(levels, values_from =, reduce =)
+# collapse the surviving payload rows' values with a plain function values -> scalar.
+# No bespoke operator wraps trivial base reductions (max/min/mean/length) and no
+# engine tie-break exists for categorical payloads -- the researcher's closure IS
+# the rule. use_channel(reducer =) is retired (rejected loudly in spec.R).
 
 # --- cross-channel combiner ---------------------------------------------------
 # The ONLY cross-channel combine is hit-set algebra (hit_set_expr); a single
@@ -140,19 +139,58 @@ llm_after_lucene <- function() {
 # --- output (cohort column) types ---------------------------------------------
 # Constructor names are short: bin_output() / num_output() / cat_output() /
 # struct_output(). Each is a thin tagged record; the internal $kind the runner
-# dispatches on (binary/number/categorical/fields) is unchanged.
+# dispatches on (binary/number/categorical/fields) is unchanged. num/cat carry the
+# PAYLOAD spec (DESIGN §8): values_from = the channel whose surviving rows' values
+# feed the reduction (defaults to the sole channel of a single-channel variable;
+# required with a combine expression), reduce = the plain values -> scalar rule.
+.check_payload_args <- function(what, values_from, reduce, reduce_required) {
+    if (!is.null(values_from) &&
+        (!is.character(values_from) || length(values_from) != 1L ||
+         !nzchar(values_from))) {
+        stop(what, " values_from must be one channel name.", call. = FALSE)
+    }
+    if (is.null(reduce)) {
+        if (reduce_required) {
+            stop(what, " requires reduce = <function values -> scalar> ",
+                 "(e.g. function(x) max(x, na.rm = TRUE)).", call. = FALSE)
+        }
+    } else if (!is.function(reduce)) {
+        stop(what, " reduce must be a function.", call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 bin_output <- function() {
     .experimental_spec(list(kind = "binary"), "ee_output_type")
 }
 
-num_output <- function() {
-    .experimental_spec(list(kind = "number"), "ee_output_type")
+num_output <- function(values_from = NULL, reduce = NULL) {
+    .check_payload_args("num_output()", values_from, reduce,
+                        reduce_required = TRUE)
+    .experimental_spec(
+        list(kind = "number", values_from = values_from, reduce = reduce),
+        "ee_output_type")
 }
 
-# A categorical cohort column over a fixed level set (e.g. smoking statuses).
-cat_output <- function(levels) {
-    .experimental_spec(list(kind = "categorical", levels = as.character(levels)),
-                       "ee_output_type")
+# A categorical cohort column over a fixed level set. Two flavors, one ctor:
+# with reduce = (payload flavor) the level is computed from the surviving payload
+# rows' values and MUST be one of `levels`; without it (extraction flavor, e.g.
+# smoking statuses) the level is a text channel's accepted documented status.
+cat_output <- function(levels, values_from = NULL, reduce = NULL) {
+    levels <- as.character(levels)
+    if (!length(levels) || anyNA(levels) || any(!nzchar(levels))) {
+        stop("cat_output() needs >=1 non-empty level.", call. = FALSE)
+    }
+    .check_payload_args("cat_output()", values_from, reduce,
+                        reduce_required = FALSE)
+    if (!is.null(values_from) && is.null(reduce)) {
+        stop("cat_output() values_from without reduce has no meaning: the payload ",
+             "flavor needs both.", call. = FALSE)
+    }
+    .experimental_spec(
+        list(kind = "categorical", levels = levels,
+             values_from = values_from, reduce = reduce),
+        "ee_output_type")
 }
 
 # A SET of cohort columns produced by one extraction task (e.g. the several

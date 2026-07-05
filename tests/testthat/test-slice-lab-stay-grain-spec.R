@@ -43,8 +43,8 @@ test_that("the lab executor reduces glucose scoped to the task's own stay (EVTID
         name = "max_glucose_in_stay", concept = sg_concept(),
         output_one_row_per = "EVTID",            # stay grain: one output row per (PATID, EVTID)
         anchor = NULL, window = NULL,            # event-scoped: same EVTID, no date window
-        channels = list(glucose = use_channel(reducer = function(x) max(x, na.rm = TRUE))),
-        output = num_output())
+        channels = list(glucose = use_channel()),
+        output = num_output(reduce = function(x) max(x, na.rm = TRUE)))
 
     run <- run_variable(spec, sg_tasks, list(biology = sg_biol))
     value <- setNames(run$values$value, run$values$task_id)

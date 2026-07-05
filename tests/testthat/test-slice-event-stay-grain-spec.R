@@ -2,8 +2,8 @@
 # Two axes at once, both generic: (1) stay-grain scoping -- a structured executor must
 # scope evidence to the TASK's own stay (EVTID), not just the subject (PATID); DESIGN §7
 # names this the current executor-wiring gap ("EVTID is invariant across HDW rows"). (2)
-# a numeric COUNT over a structured membership channel = the executor returning CANDIDATE
-# rows + a plain-function reducer `function(x) length(x)` (no bespoke count operator).
+# a numeric COUNT over a structured membership channel = the matched rows' codes as
+# payload + a plain-function `reduce = length` on the output (no bespoke count operator).
 #
 # Grain comes from the TASK UNIVERSE (DESIGN §7: "one output row per unit in the supplied
 # task universe"): one task per stay, carrying its EVTID. The variable is event-scoped
@@ -44,8 +44,8 @@ es_spec <- variable_spec(
     output_one_row_per = "EVTID",                # stay grain: one output row per (PATID, EVTID)
     anchor = NULL,
     window = NULL,                               # event-scoped: same EVTID, no date window
-    channels = list(stay_acts = use_channel(reducer = function(x) length(x))),
-    output = num_output())
+    channels = list(stay_acts = use_channel()),
+    output = num_output(reduce = function(x) length(x)))
 
 test_that("structured executor counts acts scoped to the task's own stay (EVTID)", {
     run <- run_variable(es_spec, es_tasks, list(pmsi_actes = es_acts))

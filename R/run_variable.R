@@ -12,13 +12,16 @@
 # adapters (they are generic over their parameters); they are not the public
 # architecture.
 #
-# VALUE assembly dispatches on combine vs output (design note §8):
+# VALUE assembly dispatches on combine vs output (design note §8): the combine
+# gates ROWS, the output decides what those rows become.
 #   - combine present (a hit-set expression; any_positive() lowered to one) ->
-#     cross-channel hit-set algebra over >=2 channels -> a 0/1 membership value;
+#     set algebra over >=2 channels' observed hit sets; then bin_output() lifts
+#     membership (0/1), while num/cat_output(values_from =, reduce =) reduce the
+#     surviving tasks' payload values into the final value (gate-fail -> NA);
 #   - combine = NULL -> a SINGLE channel, assembled by output() shape:
 #       binary  -> the channel's observed membership (0/1),
-#       number  -> the channel's reduced numeric value,
-#       categorical -> the channel's documented status,
+#       number / categorical with reduce -> the channel's own payload rows reduced,
+#       categorical without reduce -> a text channel's documented status,
 #       fields  -> the task's several extracted fields.
 # =============================================================================
 
@@ -368,36 +371,80 @@ suppressWarnings(suppressMessages(library(dplyr)))
                            source_row_id = character(), evidence_ref = character()))
 }
 
-# A single numeric channel (e.g. max glucose): the executor returns per-task CANDIDATE
-# values in the window; the value is the channel's REDUCER function applied to them
-# (use_channel(reducer = function(x) max(x, na.rm = TRUE))) -- a plain numeric -> scalar
-# closure, not a bespoke operator. A task with no candidate rows is NA/partial. Status
-# and evidence are shaped like the OR envelope; evidence is every candidate row.
-.single_numeric_variable <- function(variable, tasks, channel_name, result) {
+# --- output payload (DESIGN §8) -------------------------------------------------
+# The values BEHIND a channel's hits, one per surviving row: a lab row's value is
+# its measurement, a code/act row's value is its code. The output's `reduce` (a
+# plain values -> scalar closure) collapses them per task. Wired at the default
+# combine_at_level (= output grain) over the observed hit sets; sub-output-grain
+# evaluation arrives with combine_at_level (§16).
+.payload_values <- function(result, channel_type) {
+    switch(channel_type,
+        lab = result$candidates %>%
+            transmute(task_id = as.character(task_id), value),
+        code = ,
+        act = result$evidence %>%
+            transmute(task_id = as.character(task_id), value = code),
+        stop("values_from is wired for lab/code/act channels, not '",
+             channel_type, "'.", call. = FALSE))
+}
+
+# Apply reduce to one task's payload values and validate the result against the
+# output's declared contract. A closure breaking its own contract (non-numeric for
+# num, outside `levels` for cat, not exactly one value) is a HARD error, not a
+# review state: unlike an ungrounded LLM answer, a deterministic rule violating
+# its declaration is a bug (DESIGN §8). A deliberate NA return is allowed for num
+# (the closure's own missing rule), never for cat (NA is not a level).
+.reduce_payload <- function(vals, output, variable_name) {
+    res <- output$reduce(vals)
+    if (length(res) != 1L) {
+        stop("reduce for '", variable_name, "' must return exactly one value; ",
+             "got ", length(res), ".", call. = FALSE)
+    }
+    if (identical(output$kind, "number")) {
+        was_na <- is.na(res)
+        res <- suppressWarnings(as.numeric(res))
+        if (is.na(res) && !was_na) {
+            stop("reduce for '", variable_name, "' returned a non-numeric value.",
+                 call. = FALSE)
+        }
+        return(res)
+    }
+    res <- as.character(res)
+    if (is.na(res) || !res %in% output$levels) {
+        stop("reduce for '", variable_name, "' returned '", res,
+             "', not one of levels: ", paste(output$levels, collapse = ", "),
+             ".", call. = FALSE)
+    }
+    res
+}
+
+# A single payload channel (combine = NULL, num/cat output with reduce): the
+# channel's own filtered rows ARE the survivors; the output's reduce collapses
+# each task's payload values (e.g. max glucose, count of acts, modality from a
+# code family). A task with no payload rows is NA/partial. Status and evidence
+# keep the OR-envelope shape; evidence is every row the reduction saw.
+.single_payload_variable <- function(variable, tasks, channel_name, result) {
     var_name <- variable$name
     source_name <- .source_name_for_channel(channel_name, variable)
-    reducer <- variable$channels[[channel_name]]$reducer
-    if (!is.function(reducer)) {
-        stop("Numeric output over channel '", channel_name, "' requires a reducer ",
-             "function, e.g. reducer = function(x) max(x, na.rm = TRUE).",
-             call. = FALSE)
-    }
-    cand <- result$candidates
+    output <- variable$output
+    payload <- .payload_values(result, .channel_type(channel_name, variable))
     task_ids <- as.character(tasks$task_id)
     state_of <- function(tid) {
         s <- result$coverage$processing_state[
             as.character(result$coverage$task_id) == tid]
         if (length(s)) as.character(s[[1]]) else NA_character_
     }
+    na_value <- if (identical(output$kind, "number")) NA_real_ else NA_character_
 
     values_l <- list(); status_l <- list()
     for (tid in task_ids) {
-        vals <- cand$value[as.character(cand$task_id) == tid]
+        vals <- payload$value[payload$task_id == tid]
         measured <- length(vals) > 0L
-        value <- if (measured) suppressWarnings(as.numeric(reducer(vals))) else NA_real_
+        value <- if (measured) .reduce_payload(vals, output, var_name) else na_value
         values_l[[length(values_l) + 1L]] <- tibble::tibble(
             task_id = tid, variable = var_name, value = value,
-            channel_coverage = if (measured) "complete" else "partial")
+            channel_coverage = if (measured) "complete" else "partial",
+            n_payload_rows = length(vals))
         status_l[[length(status_l) + 1L]] <- tibble::tibble(
             task_id = tid, variable = var_name, channel = channel_name,
             source = source_name,
@@ -411,6 +458,37 @@ suppressWarnings(suppressMessages(library(dplyr)))
                   source, source_row_id, evidence_ref)
     list(values = bind_rows(values_l), channel_status = bind_rows(status_l),
          evidence = evidence)
+}
+
+# Gated payload (combine expression + num/cat payload output): the gate decides
+# the surviving tasks (observed hit-set algebra at the output grain); the payload
+# channel's values for those tasks reduce to the final value. Gate-fail -> NA
+# (cat reserves no "excluded" level; bin encodes exclusion as 0, cat cannot). An
+# empty payload behind a passing gate (task admitted via the other side of an `|`)
+# is NA without calling reduce. The full hit-algebra audit (channel_status,
+# membership, overlap) is untouched: only the value column changes meaning, and
+# n_payload_rows records the post-combine rows actually reduced.
+.apply_gated_payload <- function(variable, out, channel_results) {
+    output <- variable$output
+    payload <- .payload_values(
+        channel_results[[output$values_from]],
+        .channel_type(output$values_from, variable))
+    gate <- out$values
+    n <- nrow(gate)
+    value <- if (identical(output$kind, "number")) rep(NA_real_, n)
+             else rep(NA_character_, n)
+    n_payload <- integer(n)
+    for (i in seq_len(n)) {
+        if (!identical(gate$value[[i]], 1L)) next
+        vals <- payload$value[payload$task_id == as.character(gate$task_id[[i]])]
+        n_payload[[i]] <- length(vals)
+        if (!length(vals)) next
+        value[[i]] <- .reduce_payload(vals, output, variable$name)
+    }
+    gate$value <- value
+    gate$n_payload_rows <- n_payload
+    out$values <- gate
+    out
 }
 
 # categorical output (combine = NULL): a single text channel whose accepted
@@ -695,7 +773,6 @@ suppressWarnings(suppressMessages(library(dplyr)))
             selector = .provenance_selector(ch$selector),
             selector_source = ch$selector_source,
             method_source = ch$method_source,
-            reducer_source = ch$reducer_source,
             extractor_source = ch$extractor_source)
     })
     window <- if (inherits(variable$window, "ee_window")) {
@@ -707,6 +784,14 @@ suppressWarnings(suppressMessages(library(dplyr)))
         out <- list(kind = variable$output$kind)
         if (!is.null(variable$output$levels)) out$levels <- variable$output$levels
         if (!is.null(variable$output$fields)) out$fields <- variable$output$fields
+        # Payload spec (DESIGN §8): values_from as resolved at build; reduce as
+        # deparsed source -- the executed rule, serializable.
+        if (!is.null(variable$output$values_from)) {
+            out$values_from <- variable$output$values_from
+        }
+        if (is.function(variable$output$reduce)) {
+            out$reduce <- paste(deparse(variable$output$reduce), collapse = " ")
+        }
         out
     }
     structure(
@@ -762,7 +847,15 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         identical(combine$kind, "hit_set_expr")) {
         # Multi-channel hit-set algebra (any_positive() lowered to an expression at
         # build, or a written expression). The constructor guarantees >=2 channels.
+        # The expression gates rows; with a payload output (num/cat + values_from/
+        # reduce, spec-validated) the surviving tasks' payload values become the
+        # final value instead of the 0/1 membership lift.
         out <- .hit_set_expr_variable(variable, tasks, channel_results)
+        if (!is.null(variable$output) &&
+            variable$output$kind %in% c("number", "categorical") &&
+            is.function(variable$output$reduce)) {
+            out <- .apply_gated_payload(variable, out, channel_results)
+        }
     } else if (is.null(combine)) {
         # Single channel (constructor-guaranteed): assemble on the output() shape.
         ch <- names(channel_results)[[1]]
@@ -771,14 +864,24 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         out <- switch(output_kind,
             binary = .single_membership_variable(
                 variable, tasks, ch, channel_results[[1]]),
-            number = .single_numeric_variable(
+            number = .single_payload_variable(
                 variable, tasks, ch, channel_results[[1]]),
             categorical = {
-                if (!identical(ch_type, "text")) {
-                    stop("categorical output currently requires a text channel.",
-                         call. = FALSE)
+                if (is.function(variable$output$reduce)) {
+                    # Payload flavor: the level is computed from the channel's own
+                    # rows' values (e.g. a code-family rule).
+                    .single_payload_variable(variable, tasks, ch,
+                                             channel_results[[1]])
+                } else {
+                    if (!identical(ch_type, "text")) {
+                        stop("categorical output without a payload spec requires ",
+                             "a text channel (documented status); over a ",
+                             "structured channel declare cat_output(levels, ",
+                             "values_from =, reduce =).", call. = FALSE)
+                    }
+                    .documented_status_variable(variable, tasks, ch,
+                                                channel_results[[1]])
                 }
-                .documented_status_variable(variable, tasks, ch, channel_results[[1]])
             },
             fields = {
                 if (!identical(ch_type, "text")) {

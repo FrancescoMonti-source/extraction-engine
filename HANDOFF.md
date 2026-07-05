@@ -738,3 +738,52 @@ spellings and lab_anemia-as-second-channel were each rejected and the surface
 re-derived. Code still speaks the previous spellings -- wiring is gated per SS16.
 
 **Files.** `DESIGN.md` only (375 insertions, 114 deletions). Suite untouched.
+
+## Payload outputs wired: gated cat/num read the survivors' values -- Claude Fable (2026-07-05)
+
+**Trigger.** Stress-testing the ratified matrix with a gated-categorical consumer
+(dialysis modality: gate = `dialysis_diag & dialysis_act`, level read from the
+surviving act rows' CCAM family, JVJF*/JVJB*). The probe hit the spec guard
+("A hit-set expression only produces a 0/1 membership value") and the owner ruled
+it a remnant of the pre-pipeline model: hits are binary, but the values BEHIND
+them are free -- the combine gates rows, it never produces the value.
+
+**Ratified (DESIGN SS8).** The per-type permission rows collapse into one payload
+rule: `bin_output()` lifts membership; any other output must declare its payload
+(`values_from =` + `reduce =`). `cat_output(levels, values_from =, reduce =)`
+joins `num_output(...)` (cat payload ratified 2026-07-05, this consumer);
+str/struct behind a gate stay "revisit with a consumer". Edge rules ratified with
+it: a reduce return breaking its own contract (non-numeric / outside `levels` /
+not exactly one value) is a HARD error, not a review state; an empty surviving
+payload behind a passing gate is NA without calling reduce; `n_payload_rows` on
+the values frame records the post-combine rows actually reduced (pre-combine
+counts already ride coverage).
+
+**Wired** (SS16 lines deleted: `num_output(values_from =, reduce =)` + payload
+constraint; provenance pre/post counts). At the DEFAULT `combine_at_level`
+(= output grain) over the observed hit sets -- sub-output-grain evaluation still
+arrives with the `combine_at_level` line (consumer 14.8), noted inline in SS16.
+- `operators.R`: `num_output(values_from =, reduce =)` (reduce now required),
+  `cat_output(levels, values_from =, reduce =)` (payload flavor; without reduce it
+  stays the text documented-status flavor).
+- `spec.R`: the old guard reworded to the payload rule; `.check_output_payload()`
+  normalizes `values_from` (defaults to the sole channel; required + validated
+  against activations otherwise); `use_channel(reducer =)` REMOVED and rejected
+  loudly (reduction is the variable's question -> lives on the output); reducer
+  dropped from activation resolution + provenance channel snapshot.
+- `run_variable.R`: `.payload_values()` (a lab row's value = its measurement, a
+  code/act row's value = its code, read off evidence), `.reduce_payload()`
+  (contract validation), `.single_payload_variable()` (replaces
+  `.single_numeric_variable`, also serves single-channel cat-over-codes),
+  `.apply_gated_payload()` (gate audit untouched; only the value column changes
+  meaning). Provenance output snapshot gains `values_from` + deparsed `reduce`.
+- `structured.R`: the code/act `candidates` frame (value = 1L count hack) deleted
+  -- its only consumer now reads codes from evidence; count = `reduce = length`.
+
+**Tests.** 142 pass (from 119). New `test-slice-gated-cat-output.R` (the probe,
+graduated): gated cat incl. researcher-closure tie-break + gate-fail NA with
+silence vs ascertained-negative coverage kept distinct; gated num + n_payload_rows;
+empty-payload-behind-`|` -> NA (NOT length 0 -- would conflate no-payload with
+measured zero; count-identity stays a deferred question); single-channel cat
+payload; build-time payload-rule errors; out-of-levels hard error. Three tests
+migrated `use_channel(reducer =)` -> `num_output(reduce =)`.

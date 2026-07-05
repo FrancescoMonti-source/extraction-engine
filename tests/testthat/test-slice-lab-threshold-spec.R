@@ -3,7 +3,7 @@
 # represented by replacing the selector with a thresholded one -- analyte_value(gt) --
 # whose meaning is "has at least one in-scope measurement of this analyte above the
 # cutoff". That is the lab channel's MEMBERSHIP face (bin_output + combine), distinct
-# from its value face (num_output + a reducer, already shipped).
+# from its value face (num_output(reduce =), already shipped).
 #
 # Invariant locked (DESIGN §1185 explicitly wants one THRESHOLDED lab channel in the
 # validity matrix): the thresholded hit is three-valued like every other channel --

@@ -256,19 +256,13 @@ measure_code_presence <- function(source_table, tasks, codes,
             status = processing_state,
             error = NA_character_)
 
-    # Candidate rows for a NUMERIC output over a coded/act channel (e.g. COUNT of acts
-    # in a stay): one per matching source row, value = 1L, collapsed by the channel's
-    # plain-function reducer in assembly (length/sum -> count). Additive: the membership
-    # face (values: present/absent) is unchanged -- both faces ride the same result.
-    candidates <- observations %>%
-        filter(is_target) %>%
-        transmute(task_id, source_row_id, value = 1L, measurement_time = t_start)
-
+    # No candidates frame: a coded/act row's payload value IS its code, which already
+    # rides `evidence` (one row per matching source row) -- the payload path
+    # (.payload_values) reads it there, and a count is reduce = length over the codes.
     .assert_evidence_resolves(evidence, observations, rows)
     list(
         coverage = coverage,
         values = values,
-        candidates = candidates,
         evidence = evidence,
         observations = observations,
         derivation = derivation)
@@ -282,10 +276,10 @@ measure_code_presence <- function(source_table, tasks, codes,
 # threshold. It returns those targets two ways: as CANDIDATES (source_row_id + numeric
 # value) for the VALUE face, and as a present/absent `values` frame for the MEMBERSHIP
 # face (bin_output / combine) -- it does NOT reduce the value face itself.
-# The within-channel reduction is a plain function on the value vector supplied by the
-# variable_spec's channel activation (use_channel(reducer = function(x) max(x, na.rm =
-# TRUE))), applied downstream in assembly; a bespoke "max" executor / max_value()
-# operator would be ad-hoc for a one-line base reduction. No usability/validity check:
+# The reduction is a plain function on the value vector, supplied on the variable's
+# OUTPUT (num_output(values_from =, reduce = function(x) max(x, na.rm = TRUE)),
+# DESIGN §8) and applied downstream in assembly; a bespoke "max" executor /
+# max_value() operator would be ad-hoc for a one-line base reduction. No usability/validity check:
 # HDW numeric results live in a numeric field (NUMRES; qualitative results are STRRES,
 # which BIOL_SOURCE does not read), so a target row always has a value. Evidence =
 # every candidate row (the inputs to the reduction), so provenance shows the whole
@@ -391,7 +385,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             n_scope_rows,
             n_candidate_rows)
 
-    # The value vector the channel's reducer collapses to one number, ordered so the
+    # The value vector the output's reduce collapses to one number, ordered so the
     # assembler can carry a stable measurement_time alongside the reduced value.
     candidates <- observations %>%
         filter(is_target) %>%
@@ -419,7 +413,7 @@ measure_analyte_values <- function(source_table, tasks, analytes,
     rule <- sprintf(
         paste0(
             "grain=%s; %sanalyte=%s; %s",
-            "candidates reduced by the channel's reducer; unit ignored"),
+            "candidates reduced by the output's reduce function; unit ignored"),
         scope_txt, window_txt, paste(analytes, collapse = ","), threshold_txt)
     derivation <- coverage %>%
         transmute(

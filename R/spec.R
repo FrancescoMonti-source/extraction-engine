@@ -64,10 +64,26 @@ suppressWarnings(suppressMessages(library(dplyr)))
             stop("A combine expression needs >=2 channels; a single channel must ",
                  "use combine = NULL.", call. = FALSE)
         }
+        # A combine expression gates ROWS; it never produces the value itself
+        # (DESIGN §8). bin_output() lifts membership directly; num/cat read the
+        # survivors' values and must declare the payload (values_from + reduce,
+        # checked with the channel list in .check_output_payload); str/struct
+        # behind a gate stay unshaped until a consumer arrives.
         if (!is.null(output) && !identical(output$kind, "binary")) {
-            stop("A hit-set expression only produces a 0/1 membership value; output ",
-                 "must be bin_output() (or omitted), not '", output$kind, "'.",
-                 call. = FALSE)
+            if (output$kind %in% c("number", "categorical")) {
+                if (!is.function(output$reduce)) {
+                    stop("combine gates rows, it does not produce the value; a '",
+                         output$kind, "' output behind a combine expression must ",
+                         "declare its payload: values_from = <channel> + reduce = ",
+                         "<function> (only bin_output() lifts membership directly).",
+                         call. = FALSE)
+                }
+            } else {
+                stop("Output '", output$kind, "' behind a combine expression is ",
+                     "not shaped yet (DESIGN §8): bin (membership) and num/cat ",
+                     "(values_from/reduce payload) are; revisit with a consumer.",
+                     call. = FALSE)
+            }
         }
         return(combine)
     }
@@ -87,6 +103,30 @@ suppressWarnings(suppressMessages(library(dplyr)))
              "(binary/number/categorical/fields) to shape its value.", call. = FALSE)
     }
     combine
+}
+
+# Payload resolution for num/cat outputs (DESIGN §8): values_from must name an
+# activated channel; omitted, it can only default to the sole channel of a
+# single-channel variable -- with several channels the pick is real, non-derivable
+# information. Returns the output with values_from normalized, so the runner and
+# provenance always see the executed payload channel.
+.check_output_payload <- function(output, channel_names) {
+    if (is.null(output) || !output$kind %in% c("number", "categorical")) {
+        return(output)
+    }
+    if (!is.function(output$reduce)) return(output)   # extraction-flavor cat
+    if (is.null(output$values_from)) {
+        if (length(channel_names) != 1L) {
+            stop("A payload output over several channels must declare values_from ",
+                 "= <channel>: the payload pick is not derivable.", call. = FALSE)
+        }
+        output$values_from <- channel_names[[1]]
+    } else if (!output$values_from %in% channel_names) {
+        stop("values_from must name an activated channel: got '",
+             output$values_from, "'; activated: ",
+             paste(channel_names, collapse = ", "), ".", call. = FALSE)
+    }
+    output
 }
 
 # A hit-set expression's referenced channels must be exactly the variable's
@@ -128,10 +168,8 @@ concept_spec <- function(name, channels) {
 
 # use_channel() is the per-channel activation record placed inside a variable_spec.
 #   method    -> variable-owned extraction strategy (e.g. llm_after_lucene())
-#   reducer   -> variable-owned within-channel reduction: a plain function
-#                numeric -> scalar, e.g. function(x) max(x, na.rm = TRUE)
 #   extractor -> optional override of the concept-owned answer definition
-use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
+use_channel <- function(method = NULL, extractor = NULL,
                         selector = NULL, prompt = NULL, ...) {
     extra <- list(...)
     # An activation NEVER carries source: the name binding IS the reference to the
@@ -142,11 +180,19 @@ use_channel <- function(method = NULL, reducer = NULL, extractor = NULL,
              "declared channel by name; source lives on the channel definition.",
              call. = FALSE)
     }
+    # Reduction is the variable's question, not a channel property: it lives on the
+    # output (num_output/cat_output(values_from =, reduce =), DESIGN §8, wired
+    # 2026-07-05). The old activation spelling is rejected, not silently carried.
+    if ("reducer" %in% names(extra)) {
+        stop("use_channel() no longer takes reducer: reduction lives on the ",
+             "output -- num_output(values_from =, reduce =) / ",
+             "cat_output(levels, values_from =, reduce =).", call. = FALSE)
+    }
     if (length(extra) && (is.null(names(extra)) || any(!nzchar(names(extra))))) {
         stop("use_channel() extra arguments must be named.", call. = FALSE)
     }
     .experimental_spec(
-        c(list(method = method, reducer = reducer, extractor = extractor,
+        c(list(method = method, extractor = extractor,
                selector = selector, prompt = prompt), extra),
         "ee_channel_use")
 }
@@ -280,6 +326,7 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
     combine <- .as_combiner(combine)            # bare string -> hit_set_expr()
     combine <- .resolve_variable_combine(combine, names(channels), output)
     .check_expr_channels(combine, names(channels))
+    output <- .check_output_payload(output, names(channels))
 
     .experimental_spec(
         list(name = name, concept = concept, output_one_row_per = output_one_row_per,
@@ -353,7 +400,6 @@ inspect.default <- function(x, ...) {
     method <- .inherit_from_activation(channel_def, channel_use, "method",
                                        "default_method")
     extractor <- .inherit_from_activation(channel_def, channel_use, "extractor")
-    reducer <- .inherit_from_activation(channel_def, channel_use, "reducer")
     # The selector inherits like every other activation field (DESIGN §14.3): a
     # use_channel(selector = ...) override IS the executed definition, so the
     # resolved view -- and the provenance built from it -- must record it, not the
@@ -372,8 +418,6 @@ inspect.default <- function(x, ...) {
             linkage = channel_def$linkage,
             method = method$value,
             method_source = method$source,
-            reducer = reducer$value,
-            reducer_source = reducer$source,
             extractor = extractor$value,
             extractor_source = extractor$source,
             activation = channel_use,

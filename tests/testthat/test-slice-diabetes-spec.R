@@ -49,10 +49,11 @@ spec_sources <- list(
     biology = spec_biol)
 
 # Why: variable_spec may be written directly when no concept-specific template is
-# justified. The within-channel reduction is a PLAIN FUNCTION on the candidate values
-# (no bespoke max_value() operator) -- the executor scopes the window and the reducer
-# collapses it, so max is just base max(). Evidence = every in-window candidate row
-# (the inputs the reducer saw), not only the argmax.
+# justified. The reduction is a PLAIN FUNCTION on the payload values, declared on
+# the OUTPUT (num_output(reduce =), DESIGN §8; values_from defaults to the sole
+# channel) -- the executor scopes the window and reduce collapses it, so max is
+# just base max(). Evidence = every in-window candidate row (the inputs reduce
+# saw), not only the argmax.
 test_that("direct glucose variable_spec reduces the channel with a plain function", {
     concept <- diabetes_concept_spec()
     direct <- variable_spec(
@@ -61,10 +62,8 @@ test_that("direct glucose variable_spec reduces the channel with a plain functio
         output_one_row_per = "PATID",
         anchor = "anchor_date",
         window = days_after(0L, 2L),
-        channels = list(
-            glucose_measurements = use_channel(
-                reducer = function(x) max(x, na.rm = TRUE))),
-        output = num_output())
+        channels = list(glucose_measurements = use_channel()),
+        output = num_output(reduce = function(x) max(x, na.rm = TRUE)))
 
     expect_null(direct$template)
     expect_setequal(names(direct$channels), "glucose_measurements")
@@ -73,7 +72,7 @@ test_that("direct glucose variable_spec reduces the channel with a plain functio
     expect_equal(run$selected_channels$channel, "glucose_measurements")
 
     values <- setNames(run$values$value, run$values$task_id)
-    expect_equal(values[["P1::t"]], 9.4)      # max(6.1, 9.4) via the plain reducer
+    expect_equal(values[["P1::t"]], 9.4)      # max(6.1, 9.4) via the plain reduce
     expect_true(is.na(values[["P2::t"]]))     # glucose exists, but outside window
 
     # Both in-window glucose rows for P1 are candidates -> both are evidence.

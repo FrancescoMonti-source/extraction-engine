@@ -705,7 +705,7 @@ This means:
 has at least one in-scope glucose measurement above 11 mmol/L
 ```
 
-A lab channel is **one filtered row set, consumed two ways** (refined 2026-07-04; supersedes the older "two faces" wording): its rows are simultaneously the membership hits (spine keys, usable in `bin_output()` and `combine_channels` expressions) and the value carriers (payload columns, usable by `num_output(values_from =, reduce =)`). Which values enter a reduction is therefore controlled by how the channel is *defined* — an unthresholded channel carries every in-scope measurement, a predicate-filtered channel carries only the rows meeting its rule — not by a separate value face.
+A lab channel is **one filtered row set, consumed two ways** (refined 2026-07-04; supersedes the older "two faces" wording): its rows are simultaneously the membership hits (spine keys, usable in `bin_output()` and `combine_channels` expressions) and the value carriers (payload columns, usable by `num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)`). Which values enter a reduction is therefore controlled by how the channel is *defined* — an unthresholded channel carries every in-scope measurement, a predicate-filtered channel carries only the rows meeting its rule — not by a separate value face.
 
 ### Output shapes and inference
 
@@ -719,12 +719,16 @@ bin_output() produces observed membership:
 num_output(values_from =, reduce =)
                  numeric value: the named payload channel's rows, grouped at
                  output_one_row_per, summarised by the plain function `reduce`
+cat_output(levels, values_from =, reduce =)
+                 categorical value over a fixed level set: the same payload read
+                 as num_output; the reduced result must be one of `levels`.
+                 Without a payload spec, the level comes from a text channel's
+                 accepted extraction instead (documented status)
 str_output()     unconstrained string
-cat_output()     categorical value
 struct_output()  fixed-schema multi-field record; one task -> one record
 ```
 
-The reducer is a plain R function `numeric -> scalar` (e.g. `\(x) max(x, na.rm = TRUE)`), not a tagged operator, and it lives on the output — not on the activation — because it is the variable's question, not a channel property. `values_from` names the payload channel; with several channels in play the pick is real, non-derivable information (it is dplyr's choice of primary table, SQL's `SELECT avg(hb) FROM lab SEMI JOIN docs`).
+The reducer is a plain R function `values -> scalar` (numeric for `num_output`, e.g. `\(x) max(x, na.rm = TRUE)`; one of `levels` for `cat_output`, e.g. a code-family priority rule), not a tagged operator, and it lives on the output — not on the activation — because it is the variable's question, not a channel property. `values_from` names the payload channel; with several channels in play the pick is real, non-derivable information (it is dplyr's choice of primary table, SQL's `SELECT avg(hb) FROM lab SEMI JOIN docs`).
 
 **The payload invariant (ratified 2026-07-04): the output payload is always drawn from the post-combine row set. "Raw" has no spelling.** Three cases:
 
@@ -752,20 +756,27 @@ Explicit `output =` is mainly an override, especially `bin_output()` when the re
 
 ### Dispatch and validity
 
-`combine_channels` is set algebra over channel row sets at `combine_at_level` (§10). `bin_output()` surfaces the result as membership `0/1`; `num_output(values_from =, reduce =)` uses it as the constraint on the payload. Single-channel non-boolean shaping is output assembly with `combine_channels = NULL`, dispatched by output shape.
+`combine_channels` is set algebra over channel row sets at `combine_at_level` (§10): it produces the **surviving row set, never a value**. What becomes the value is the output's decision — `bin_output()` lifts membership (`0/1`); every other output type reads the survivors' values and must therefore declare its payload: `values_from =` (whose rows) + `reduce =` (the rule collapsing them). Hits are binary; the values behind them are free. A single-channel variable has no combine: its survivors are the channel's own filtered rows, `values_from` defaults to that channel, and a text channel keeps its extraction assembly (documented status / task fields) in place of a payload spec.
 
-Validity matrix:
+Two payload edge rules: a `reduce` return that breaks its own contract (non-numeric for `num`, outside `levels` for `cat`, not exactly one value) is a **hard error**, not a review state — a deterministic closure violating its declared rule is a bug, unlike an ungrounded LLM answer. An **empty surviving payload** (e.g. a task gated in through the other side of an `|` expression) yields `NA` without calling `reduce`. The values frame records `n_payload_rows` (post-combine rows actually reduced); pre-combine matched counts already ride channel coverage.
+
+Validity matrix (num payload ratified 2026-07-04; cat payload ratified 2026-07-05, dialysis-modality consumer):
 
 ``` text
-channels  combine_channels  output                               valid?
->=1       expression        bin_output()                          yes  membership of surviving rows -> 0/1
-1         NULL              bin_output()                          yes  value = that channel's hit
-1         NULL              num/str/cat/struct_output()           yes  single-channel output assembly
->=2       expression        num_output(values_from =, reduce =)   yes  gate + payload (ratified 2026-07-04)
->=2       NULL              any                                   no   no reconcile rule
-1         expression        any                                   no   use NULL
-any       expression        str/cat/struct_output()               no   not yet ratified; revisit with a consumer
-any       any               missing and not inferable             no   cannot validate shape
+channels  combine_channels  output                                   valid?
+>=1       expression        bin_output()                              yes  membership of surviving rows -> 0/1
+>=2       expression        num/cat_output(values_from =, reduce =)   yes  gate + payload over surviving rows
+1         NULL              bin_output()                              yes  value = that channel's hit
+1         NULL              num/cat_output(reduce =)                  yes  payload over the channel's own rows
+                                                                           (values_from defaults to the channel)
+1         NULL              cat/struct_output() over a text channel   yes  extraction assembly (documented
+                                                                           status / task fields)
+>=2       NULL              any                                       no   no reconcile rule
+1         expression        any                                       no   use NULL
+any       expression        non-bin output without a payload spec     no   a gate yields rows, not a value
+any       expression        str/struct_output()                       no   payload rule holds, but unshaped;
+                                                                           revisit with a consumer
+any       any               missing and not inferable                 no   cannot validate shape
 ```
 
 ------------------------------------------------------------------------
@@ -1766,8 +1777,6 @@ channels string/inline forms; source-kind registry resolution;
 required_roles / native_grain / linkage derived from type + registry
                                     gate: next touch of the spec layer
 combine_at_level + exists-lift      consumer: 14.8 (same-stay SSI, patient rows)
-num_output(values_from =, reduce =)
-  + the payload constraint          consumer: 14.9 (mean Hb in anaemic stays)
 index_event(select_event = ) +
   per-event task emission           consumer: 14.8 (earliest of several surgeries)
 lab value predicates with subject
@@ -1775,8 +1784,8 @@ lab value predicates with subject
                                     is a plain closure — how subject attributes
                                     reach it (task columns vs demographics join)
                                     is decided at build time
-provenance: candidate counts
-  pre/post combine constraint       rides with the values_from wiring
 ```
+
+`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer) **at the default `combine_at_level` (= output grain), over the observed hit sets**; sub-output-grain evaluation arrives with the `combine_at_level` line above.
 
 When a piece lands, note it in `HANDOFF.md` and delete its line here; do not fork the contract text.
