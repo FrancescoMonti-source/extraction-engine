@@ -40,13 +40,14 @@ am_biol <- dplyr::bind_rows(
     am_biol_row("b11", "AM6", "SF", 8, "2024-01-10"))   # SF qualifies
 
 am_acts <- tibble::tibble(
-    source_row_id = c("t1", "t2"),
-    PATID    = c("AM5", "AM6"),
-    EVTID    = c("SE", "SG"),
-    #             AM5: transfusion IN the anaemic stay; AM6: in ANOTHER stay
-    ELTID    = c("K1", "K2"),
+    source_row_id = c("t1", "t2", "u1", "u2", "u3", "u4"),
+    PATID    = c("AM5", "AM6", "AM7", "AM7", "AM8", "AM8"),
+    EVTID    = c("SE",  "SG",  "SH",  "SH",  "SI",  "SJ"),
+    #             AM5: transfusion IN the anaemic stay; AM6: in ANOTHER stay.
+    #             AM7: TWO acts in ONE stay; AM8: two acts in DIFFERENT stays.
+    ELTID    = paste0("K", 1:6),
     CODEACTE = "FELF011",
-    DATEACTE = as.Date(c("2024-01-11", "2024-01-12")))
+    DATEACTE = as.Date("2024-01-11") + 0:5)
 
 am_sources <- list(biology = am_biol, pmsi_actes = am_acts)
 
@@ -147,22 +148,61 @@ test_that("the group predicate pair is validated at declaration time", {
         "function")
 })
 
-test_that("a non-lab channel with a group predicate is rejected loudly at run time", {
-    # The capability is wired where its consumer lives (lab); a coded-source
-    # group predicate (e.g. ">=2 acts in one stay") waits for its own consumer.
+# Owner ruling 2026-07-05: the group predicate rides every structured channel
+# ("it will be needed 100%"). For code/act the closure sees the group's CODES,
+# so frequency criteria are plain length() rules.
+test_that("a coded frequency rule: at least two acts in the SAME stay", {
     grouped_acts <- concept_spec(
         name = "grouped_acts",
         channels = list(acts = act_channel(
             source = "pmsi_actes",
             selector = ccam("FELF011", match = "exact"),
             group_at_level = "EVTID",
-            keep_group_when = function(v) length(v) >= 2)))
+            keep_group_when = function(codes) length(codes) >= 2)))
     spec <- variable_spec(
-        name = "grouped_acts_probe", concept = grouped_acts,
+        name = "repeated_act_same_stay", concept = grouped_acts,
         output_one_row_per = "PATID",
         channels = list(acts = use_channel()),
         output = bin_output())
+    tasks <- tibble::tibble(task_id = c("AM7::t", "AM8::t"),
+                            PATID = c("AM7", "AM8"))
+    run <- run_variable(spec, tasks, am_sources)
+    value <- setNames(run$values$value, run$values$task_id)
+    coverage <- setNames(run$values$channel_coverage, run$values$task_id)
+
+    expect_equal(value[["AM7::t"]], 1L)   # two acts in stay SH
+    expect_equal(value[["AM8::t"]], 0L)   # two acts, but one per stay
+    expect_equal(coverage[["AM8::t"]], "complete")   # ascertained, not silence
+    # Evidence = the qualifying stay's original act rows.
+    ev7 <- run$evidence[run$evidence$task_id == "AM7::t", ]
+    expect_setequal(ev7$source_row_id, c("u1", "u2"))
+})
+
+test_that("a text channel with a group predicate is rejected loudly at run time", {
+    # A text hit is an LLM answer grounded on cited rows; a group rule that
+    # empties the citations would have to overturn the answer -- that fork
+    # (absent? unevaluable?) is undecided, so the engine refuses rather than
+    # silently ignoring the rule.
+    grouped_text <- concept_spec(
+        name = "grouped_text",
+        channels = list(mentions = text_channel(
+            source = "documents",
+            selector = lucene_query("anemie"),
+            extractor = binary_presence_text_definition(
+                name = "t", status_key = "s", field = "f",
+                system_prompt = "p"),
+            linkage = "subject",
+            group_at_level = "EVTID",
+            keep_group_when = function(v) length(v) >= 2)))
+    spec <- variable_spec(
+        name = "grouped_text_probe", concept = grouped_text,
+        output_one_row_per = "PATID",
+        channels = list(mentions = use_channel()),
+        output = bin_output())
     expect_error(
-        run_variable(spec, am_tasks, am_sources),
-        "lab")
+        run_variable(spec, am_tasks,
+                     list(documents = list(coverage = tibble::tibble(),
+                                           candidates = tibble::tibble())),
+                     caller = function(...) NULL, model_name = "fake"),
+        "text")
 })

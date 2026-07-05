@@ -96,6 +96,40 @@ suppressWarnings(suppressMessages(library(dplyr)))
     ok
 }
 
+# Aggregate membership predicate (the HAVING shape, DESIGN §8): group a task's
+# TARGET rows at `group_at_level`, apply the plain closure to each group's values,
+# and demote the rows of failing groups -- a grouped row FILTER, so qualifying
+# groups keep their ORIGINAL rows and downstream (hits, evidence, level algebra,
+# payload) is untouched. `values_col` is what the closure sees: measurements (lab)
+# or codes (code/act -- frequency rules are e.g. \(codes) length(codes) >= 2).
+# A closure breaking its contract (not exactly one TRUE/FALSE) is a hard error,
+# same rule as a payload reduce. Demoted rows stay in the observations audit.
+.apply_group_predicate <- function(observations, group_at_level, keep_group_when,
+                                   values_col, field) {
+    observations$group_demoted <- FALSE
+    if (is.null(keep_group_when)) return(observations)
+    grp_key <- paste(observations$task_id,
+                     observations[[group_at_level]], sep = "\r")
+    tgt <- observations$is_target
+    kept <- character()
+    if (any(tgt)) {
+        groups <- split(observations[[values_col]][tgt], grp_key[tgt])
+        keep <- vapply(groups, function(v) {
+            res <- keep_group_when(v)
+            if (!is.logical(res) || length(res) != 1L || is.na(res)) {
+                stop("keep_group_when for '", field, "' must return exactly ",
+                     "one TRUE/FALSE; a group predicate breaking its contract ",
+                     "is a bug.", call. = FALSE)
+            }
+            res
+        }, logical(1))
+        kept <- names(keep)[keep]
+    }
+    observations$group_demoted <- tgt & !(grp_key %in% kept)
+    observations$is_target <- tgt & (grp_key %in% kept)
+    observations
+}
+
 .overlaps_interval <- function(start, end, lo, hi,
                                missing_datsort = c("use_start", "exclude")) {
     missing_datsort <- match.arg(missing_datsort)
@@ -147,6 +181,7 @@ measure_code_presence <- function(source_table, tasks, codes,
                                   match = c("regex", "exact"),
                                   grain_keys = "PATID",
                                   from_days = NULL, to_days = NULL,
+                                  group_at_level = NULL, keep_group_when = NULL,
                                   code_col = "diag", start_col = "DATENT",
                                   end_col = "DATSORT",
                                   missing_end = c("use_start", "exclude"),
@@ -195,13 +230,22 @@ measure_code_presence <- function(source_table, tasks, codes,
             field = field,
             source = source,
             in_scope = TRUE,
-            is_target = .code_matches(code, codes, match),
+            is_target = .code_matches(code, codes, match))
+
+    # Group predicate over the CODES (e.g. a frequency rule: >=2 acts in one
+    # stay); qualifying groups keep their original rows.
+    observations <- .apply_group_predicate(
+        observations, group_at_level, keep_group_when, "code", field)
+
+    observations <- observations %>%
+        mutate(
             selected_evidence = is_target,
             scope_reason = if (windowed) "in scope for the task window"
                            else "whole history (no window)",
-            observation_reason = if_else(is_target,
-                "code matches the declared family",
-                "code outside the declared family"))
+            observation_reason = case_when(
+                is_target ~ "code matches the declared family",
+                group_demoted ~ "group aggregate predicate not satisfied",
+                TRUE ~ "code outside the declared family"))
 
     counts <- observations %>%
         group_by(task_id) %>%
@@ -247,6 +291,10 @@ measure_code_presence <- function(source_table, tasks, codes,
                 paste(codes, collapse = ","))
     } else {
         sprintf("whole_history; %s match {%s}", match, paste(codes, collapse = ","))
+    }
+    if (!is.null(keep_group_when)) {
+        rule <- sprintf("%s; group(%s) kept when predicate holds",
+                        rule, group_at_level)
     }
     derivation <- coverage %>%
         transmute(
@@ -341,36 +389,10 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             in_scope = TRUE,
             is_target = !is.na(analyte) &
                 toupper(trimws(analyte)) %in% target_analytes &
-                .passes_threshold(value, gt, lt),
-            group_demoted = FALSE)
+                .passes_threshold(value, gt, lt))
 
-    # Aggregate membership predicate (the HAVING shape, DESIGN §16.7): group the
-    # task's target rows at `group_at_level`, apply the plain closure to each
-    # group's values, and keep only qualifying groups' ORIGINAL rows -- a grouped
-    # row filter, never a synthetic aggregate row. Demoted rows stay in the
-    # observations audit with their reason. A closure breaking its contract (not
-    # exactly one TRUE/FALSE) is a hard error, same rule as a payload reduce.
-    if (!is.null(keep_group_when)) {
-        grp_key <- paste(observations$task_id,
-                         observations[[group_at_level]], sep = "\r")
-        tgt <- observations$is_target
-        kept <- character()
-        if (any(tgt)) {
-            groups <- split(observations$value[tgt], grp_key[tgt])
-            keep <- vapply(groups, function(v) {
-                res <- keep_group_when(v)
-                if (!is.logical(res) || length(res) != 1L || is.na(res)) {
-                    stop("keep_group_when for '", field, "' must return exactly ",
-                         "one TRUE/FALSE; a group predicate breaking its ",
-                         "contract is a bug.", call. = FALSE)
-                }
-                res
-            }, logical(1))
-            kept <- names(keep)[keep]
-        }
-        observations$group_demoted <- tgt & !(grp_key %in% kept)
-        observations$is_target <- tgt & (grp_key %in% kept)
-    }
+    observations <- .apply_group_predicate(
+        observations, group_at_level, keep_group_when, "value", field)
 
     observations <- observations %>%
         mutate(

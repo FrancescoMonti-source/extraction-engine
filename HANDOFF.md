@@ -887,3 +887,16 @@ silent-wrong-member failure this slice closes.
 workaround no longer needed. Open on this family: subject-context predicates
 (sexe/age thresholds, SS16); coded-source group predicates (loud error reserves
 the seam); activation-level override of the group pair (inherit-only for now).
+
+## Group predicate extended to every structured channel -- Claude Fable (2026-07-05)
+
+Owner ruling ("should be wired for every channel, at some point it will be needed
+100%"): `group_at_level`/`keep_group_when` now ride code/act too, via the shared
+`.apply_group_predicate()` helper (structured.R). The closure sees the group's
+CODES there, so frequency criteria are plain length() rules -- probe: ">=2 acts
+in the SAME stay" (AM7 two acts in one stay = 1; AM8 one act in each of two
+stays = 0, ascertained/complete; evidence = the qualifying stay's rows). TEXT
+still refuses loudly, with the reason in the error: a text hit is an LLM answer
+grounded on cited rows, so a group rule that empties the citations must overturn
+the answer (ascertained absent? unevaluable?) -- fork deliberately left to a real
+consumer, recorded in SS8. Suite 180/0/0.

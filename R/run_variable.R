@@ -243,15 +243,18 @@ suppressWarnings(suppressMessages(library(dplyr)))
     # text eligibility (date-window OR event membership) is resolved upstream, so a
     # text-only variable (e.g. event-scoped anastomoses) need not declare a window.
     #
-    # Aggregate membership predicates (keep_group_when, DESIGN §16.7) are wired
-    # where their consumer lives: the lab executor. A coded-source group predicate
-    # (e.g. ">=2 acts in one stay") waits for its own consumer -- rejected loudly,
-    # not silently ignored.
+    # Aggregate membership predicates (keep_group_when, DESIGN §8) ride every
+    # STRUCTURED channel (owner ruling 2026-07-05: "it will be needed 100%") --
+    # lab groups over measurements, code/act over codes. Text is rejected loudly
+    # until its post-acceptance semantics are decided: a text hit is an LLM answer
+    # grounded on cited rows, so a group rule that empties the citations would
+    # have to overturn the answer (absent? unevaluable?) -- an open fork, not a
+    # silent ignore.
     if (!is.null(channel_def$keep_group_when) &&
-        !identical(channel_def$type, "lab")) {
-        stop("keep_group_when on channel '", channel_name, "' (type '",
-             channel_def$type, "'): aggregate membership predicates are wired ",
-             "for lab channels only; revisit with a consumer.", call. = FALSE)
+        identical(channel_def$type, "text")) {
+        stop("keep_group_when on text channel '", channel_name, "': the ",
+             "post-acceptance semantics are undecided (structured channels ",
+             "carry the group predicate today).", call. = FALSE)
     }
     switch(channel_def$type,
         code = ,
@@ -266,6 +269,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 sources[[source]], tasks, codes = sel$codes, match = sel$match,
                 grain_keys = grain_keys,
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
+                group_at_level = channel_def$group_at_level,
+                keep_group_when = channel_def$keep_group_when,
                 code_col = bind$code_col, start_col = bind$start_col,
                 end_col = bind$end_col, field = variable$name, source = source)
         },
