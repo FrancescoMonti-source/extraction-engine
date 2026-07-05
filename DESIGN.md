@@ -661,6 +661,8 @@ Wired 2026-07-05. Three execution facts follow from the observed-set posture (§
 
 Event/stay-grain eligibility is resolved by grain-aware scoping (`grain_keys`): the text path resolves event-scoped eligibility for event-linked document variables, and the structured code/act and lab executors scope each task to its own stay when `output_one_row_per = "EVTID"`. The extension was additive, as expected, because `EVTID` is invariant across HDW rows — it was executor wiring, not missing identifiers.
 
+**Scoping rule** (settled with `select_event`, 2026-07-05): a declared **window is the scope** — rows gather per subject inside each task's anchored window, and a per-event task's `EVTID` is the task's *identity*, never a row filter (a forward complication lives in a *later* stay than its index surgery). With **no window, the grain unit is the scope** (the windowless stay-grain "during this stay" consumers). Every pre-existing consumer already sat on one side of this line — windowed variables were all subject-scoped, grain-unit variables all windowless — so the rule changed nothing shipped.
+
 ------------------------------------------------------------------------
 
 ## 8. Channel hits, outputs, and lab semantics
@@ -1634,7 +1636,7 @@ Reminder from §7: the text channel windows on document date — this measures "
 
 ### 14.8 Act-anchored forward complication with same-stay combine (SSI post spinal surgery)
 
-Validated as a target-surface stress test 2026-07-04. This is the canonical consumer of `combine_at_level` (wired 2026-07-05 via this shape's probe — the trap patient with the text hit in one stay and the act in another scores 0) and `select_event` (still §16-pending; the probe used researcher-supplied anchor dates).
+Validated as a target-surface stress test 2026-07-04. This is the canonical consumer of `combine_at_level` (wired 2026-07-05 via this shape's probe — the trap patient with the text hit in one stay and the act in another scores 0) and `select_event` (wired later the same day via its own probe — first-surgery clock vs one-clock-per-surgery, §7).
 
 ``` r
 ssi <- concept_spec(
@@ -1791,8 +1793,6 @@ source-kind registry resolution     a channel omitting source= resolves it from 
   (channel without source=)         registry kind (e.g. the one documents source);
                                     needs a content-kind facet on source_spec --
                                     gate: a consumer that cannot name its source
-index_event(select_event = ) +
-  per-event task emission           consumer: 14.8 (earliest of several surgeries)
 lab value predicates with subject
   context (sex/age thresholds)      consumer: 14.9's hb_low channel; the predicate
                                     is a plain closure — how subject attributes
@@ -1800,6 +1800,6 @@ lab value predicates with subject
                                     is decided at build time
 ```
 
-`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open). The aggregate membership predicate (former item 7, the HAVING shape) landed the same day — §8 records the `group_at_level` + `keep_group_when` spelling and its fail-closed rules. The spec-layer renames landed the same day: `combine_channels` (old name rejected loudly), `window = c(from, to)` (ctors deleted; `c(-Inf, 0)` = unbounded lookback), and the three channel entry forms of §5 including variable-local inline definitions (collisions with concept names rejected; `required_roles` / `native_grain` were already optional declaration metadata, and a channel without `linkage` takes the subject path).
+`num_output(values_from =, reduce =)` / `cat_output(levels, values_from =, reduce =)` and the pre/post payload counts landed 2026-07-05 (dialysis-modality consumer). `combine_at_level` + exists-lift + key-scoped payload landed later the same day (consumers 14.8/14.9 as probes; §7 records the execution semantics), together with `analyte_value(lt =)` (14.9's fixed-threshold hb_low; the subject-context predicate above remains open). The aggregate membership predicate (former item 7, the HAVING shape) landed the same day — §8 records the `group_at_level` + `keep_group_when` spelling and its fail-closed rules. The spec-layer renames landed the same day: `combine_channels` (old name rejected loudly), `window = c(from, to)` (ctors deleted; `c(-Inf, 0)` = unbounded lookback), and the three channel entry forms of §5 including variable-local inline definitions (collisions with concept names rejected; `required_roles` / `native_grain` were already optional declaration metadata, and a channel without `linkage` takes the subject path). `index_event(select_event =)` + per-event task emission landed the same day (§7 records the emission and scoping rules; the anchor pass runs before the grain guard so `identity` under patient-grain output fails loudly).
 
 When a piece lands, note it in `HANDOFF.md` and delete its line here; do not fork the contract text.

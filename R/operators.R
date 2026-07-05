@@ -24,10 +24,17 @@
 # ("event_start" = stay start / DATENT, "event_end", or "point_date" = a point-dated
 # record's own instant, e.g. DATEACTE / DATEXAM). run_variable resolves it
 # in an anchor PASS -- producing (PATID, anchor_date) before windowing, NOT an inter-
-# channel dependency. Single match per subject for now (multiple -> error; the
-# ratified multi-match path is select_event = <plain closure over matched rows>,
-# DESIGN §7 / invariant 35 -- multi-row selection entails one task per event).
-index_event <- function(source, selector, at = "event_start") {
+# channel dependency.
+#
+# `select_event` is the researcher's rule for a subject with SEVERAL matching
+# events (DESIGN §7 / invariant 35): a plain closure over the subject's matched
+# rows (columns PATID, EVTID, and the `at` date role, e.g. point_date), returning
+# the row(s) that anchor the clock -- e.g. \(d) dplyr::slice_min(d, point_date,
+# n = 1) for "the first surgery", or identity for "every surgery starts its own
+# clock" (one task per selected event; output_one_row_per must then be the event
+# key). Without it, multiple matches stay a loud error: the engine never picks.
+index_event <- function(source, selector, at = "event_start",
+                        select_event = NULL) {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
         stop("index_event() needs one source name.", call. = FALSE)
     }
@@ -37,7 +44,13 @@ index_event <- function(source, selector, at = "event_start") {
     if (!is.character(at) || length(at) != 1L || !nzchar(at)) {
         stop("index_event() `at` must be one date-role name.", call. = FALSE)
     }
-    .experimental_spec(list(source = source, selector = selector, at = at),
+    if (!is.null(select_event) && !is.function(select_event)) {
+        stop("index_event() select_event must be a plain function over the ",
+             "subject's matched event rows (or NULL: single match required).",
+             call. = FALSE)
+    }
+    .experimental_spec(list(source = source, selector = selector, at = at,
+                            select_event = select_event),
                        "ee_index_event")
 }
 

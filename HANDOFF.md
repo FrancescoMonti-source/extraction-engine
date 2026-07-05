@@ -927,3 +927,37 @@ Suite 180/0/0 on the first post-migration run. Next: select_event (owner
 greenlit) -- scoping rule settled by inspection: every windowed consumer is
 subject-scoped, every grain-unit consumer is windowless, so per-event tasks
 (windowed, EVTID identity) scope by PATID + window.
+
+## select_event wired: the researcher's rule for which event starts the clock -- Claude Fable (2026-07-05)
+
+Owner: "i remember that necessity and understand what select_event is doing.
+Yes we should do it." The last SS16 semantic line with a 14.8 consumer.
+
+**Surface** (as ratified, invariant 35): `index_event(source, selector, at,
+select_event = <plain closure>)`. The closure sees the subject's matched event
+rows (PATID, EVTID, and the date under its ROLE name, e.g. point_date) and
+returns the row(s) that anchor the clock. NULL keeps today's posture: multiple
+matches = loud error, the engine never picks (message now points at
+select_event).
+
+**Emission** (probe `test-slice-select-event-spec.R`): one selected event ->
+anchor as before, task ids unchanged. Several selected events (e.g. identity)
+-> ONE TASK PER EVENT, task_id suffixed ::EVTID, each with its own anchor and
+window; output_one_row_per must name the event key -- identity under
+patient-grain output fails loudly ("one task per patient"). The anchor pass now
+runs BEFORE the grain guard so the guard sees the emitted universe. A closure
+dropping EVTID/date columns is rejected; a closure selecting nothing = the
+no-match loud error. Executed select_event rides provenance deparsed (like
+reduce / keep_group_when).
+
+**Scoping rule settled and recorded in SS7:** a declared WINDOW is the scope
+(rows gather per subject inside each task's anchored window; a per-event task's
+EVTID is task IDENTITY, never a row filter -- forward complications live in
+LATER stays); with no window the grain unit is the scope. Verified: every
+pre-existing consumer already sat on one side (windowed = subject-scoped,
+grain-unit = windowless), so nothing shipped changed meaning. Probe
+discriminator: same patient, same November revision -- 1 for the June surgery's
+task, 0 for the March one.
+
+**Tests.** 190 pass / 0 fail / 0 warn. SS16 semantic residue: subject-context
+lab predicates (sexe/age) and source-kind resolution -- both consumer-gated.

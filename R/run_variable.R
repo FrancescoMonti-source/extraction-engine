@@ -208,25 +208,82 @@ suppressWarnings(suppressMessages(library(dplyr)))
     sel <- anchor$selector
     matched <- src %>%
         transmute(PATID = as.character(PATID),
+                  EVTID = as.character(EVTID),
                   code_val = as.character(.data[[code_col[[1]]]]),
                   anchor_date = .clinical_date(.data[[date_col[[1]]]])) %>%
         filter(.code_matches(code_val, sel$codes, sel$match))
 
+    # Multi-match: the researcher's select_event closure picks which event(s)
+    # anchor the clock (DESIGN §7, invariant 35); without it the engine never
+    # picks -- loud error. The closure sees the subject's matched rows with the
+    # date under its ROLE name (`at`, e.g. point_date), exactly as written in
+    # the spec: select_event = \(d) dplyr::slice_min(d, point_date, n = 1).
+    select_event <- anchor$select_event
     dup <- matched %>% count(PATID) %>% filter(n > 1L)
-    if (nrow(dup)) {
+    if (nrow(dup) && is.null(select_event)) {
         stop("index_event matched multiple events for subject(s): ",
              paste(dup$PATID, collapse = ", "),
-             " -- single-match only for now.", call. = FALSE)
+             " -- supply select_event = <closure over the matched rows> ",
+             "(the engine never picks).", call. = FALSE)
     }
-    anchors <- matched %>% distinct(PATID, anchor_date)
+    if (!is.null(select_event) && nrow(matched)) {
+        view <- matched %>% select(PATID, EVTID, anchor_date)
+        names(view)[names(view) == "anchor_date"] <- anchor$at
+        selected <- view %>%
+            group_by(PATID) %>%
+            group_modify(function(d, key) {
+                out <- select_event(dplyr::bind_cols(key, d))
+                if (!is.data.frame(out) ||
+                    !all(c("EVTID", anchor$at) %in% names(out))) {
+                    stop("select_event must return matched event row(s) ",
+                         "keeping the EVTID and ", anchor$at, " columns.",
+                         call. = FALSE)
+                }
+                out[setdiff(names(out), "PATID")]
+            }) %>%
+            ungroup()
+        if (!nrow(selected) ||
+            length(missing_sel <- setdiff(unique(matched$PATID),
+                                          unique(selected$PATID)))) {
+            stop("select_event selected no event for subject(s): ",
+                 paste(if (nrow(selected)) missing_sel
+                       else unique(matched$PATID), collapse = ", "),
+                 " -- every unit needs its index event.", call. = FALSE)
+        }
+        matched <- selected %>%
+            transmute(PATID = as.character(PATID),
+                      EVTID = as.character(EVTID),
+                      anchor_date = .clinical_date(.data[[anchor$at]]))
+    }
+    anchors <- matched %>% distinct(PATID, EVTID, anchor_date)
 
+    # Per-event task emission (invariant 35): one task per SELECTED event, each
+    # with its own anchor date and the index event's identity (EVTID). With one
+    # event per subject and patient-grain output, task ids pass through
+    # unchanged (today's behavior); several events per subject require the
+    # output grain to name the event key, and task ids gain the event suffix.
+    per_event <- !identical(variable$output_one_row_per, "PATID")
+    multi <- anchors %>% count(PATID) %>% filter(n > 1L)
+    if (nrow(multi) && !per_event) {
+        stop("select_event kept several events for subject(s): ",
+             paste(multi$PATID, collapse = ", "),
+             " -- output_one_row_per = 'PATID' allows one task per patient; ",
+             "select one event or declare the event-grain output (one row ",
+             "per index event).", call. = FALSE)
+    }
     tasks$anchor_date <- NULL
-    tasks <- tasks %>% left_join(anchors, by = "PATID")
+    tasks$EVTID <- NULL
+    tasks <- tasks %>%
+        left_join(anchors, by = "PATID",
+                  relationship = if (per_event) "many-to-many" else "many-to-one")
     unresolved <- unique(tasks$PATID[is.na(tasks$anchor_date)])
     if (length(unresolved)) {
         stop("index_event found no matching event for subject(s): ",
              paste(unresolved, collapse = ", "),
              " -- every unit needs its index event.", call. = FALSE)
+    }
+    if (per_event) {
+        tasks$task_id <- paste(tasks$task_id, tasks$EVTID, sep = "::")
     }
     tasks
 }
@@ -877,7 +934,11 @@ suppressWarnings(suppressMessages(library(dplyr)))
     if (inherits(anchor, "ee_index_event")) {
         return(list(kind = "index_event", source = anchor$source,
                     selector = .provenance_selector(anchor$selector),
-                    at = anchor$at))
+                    at = anchor$at,
+                    # The executed multi-match rule, serializable (like reduce).
+                    select_event = if (is.function(anchor$select_event)) {
+                        paste(deparse(anchor$select_event), collapse = " ")
+                    } else NULL))
     }
     list(kind = "task_column", column = as.character(anchor))
 }
@@ -951,8 +1012,18 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
     if (!length(variable$channels)) {
         stop("variable_spec has no selected channels.", call. = FALSE)
     }
-    grain_keys <- .check_output_grain(variable, tasks)
+    # Anchor first: a select_event closure may EMIT tasks (one per selected
+    # event), and the grain guard must see the emitted universe, not the
+    # pre-anchor one -- select_event = identity with output_one_row_per =
+    # "PATID" must fail loudly (DESIGN §7).
     tasks <- .resolve_anchor(variable, tasks, sources)
+    grain_keys <- .check_output_grain(variable, tasks)
+    # Scoping rule (DESIGN §7): a declared WINDOW is the scope -- rows gather
+    # per subject inside each task's anchored window (a per-event task's EVTID
+    # is the task's IDENTITY, not a row filter: forward complications live in
+    # later stays). With no window, the grain unit itself is the scope (the
+    # windowless stay-grain "during this stay" consumers).
+    scope_keys <- if (is.null(variable$window)) grain_keys else "PATID"
     channel_results <- lapply(
         names(variable$channels),
         .run_selected_channel,
@@ -961,7 +1032,7 @@ run_variable <- function(variable, tasks, sources, caller = NULL,
         sources = sources,
         caller = caller,
         model_name = model_name,
-        grain_keys = grain_keys)
+        grain_keys = scope_keys)
     names(channel_results) <- names(variable$channels)
 
     channel_names <- names(variable$channels)
