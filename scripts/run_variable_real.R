@@ -73,7 +73,7 @@ CASES$diabetes <- list(
         set.seed(cfg$seed)
         ch <- ch[sample(nrow(ch), min(cfg$n, nrow(ch))), , drop = FALSE]
         tasks <- ch %>% transmute(grain_id = PATID, PATID, anchor_date)
-        win <- c(-1825, 7)   # template's window
+        win <- c(from_days = -1825, to_days = 7)   # template's window (c(from, to))
 
         diag <- load_pmsi_diag(pmsi_p) %>%
             filter(as.character(PATID) %in% tasks$PATID)
@@ -83,8 +83,8 @@ CASES$diabetes <- list(
                       native_eltid = as.character(ELTID), RECDATE = as.Date(RECDATE),
                       RECTYPE = as.character(RECTYPE), RECTXT = as.character(RECTXT)) %>%
             inner_join(tasks[, c("PATID", "anchor_date")], by = "PATID") %>%
-            filter(RECDATE >= anchor_date + win$from_days,
-                   RECDATE <= anchor_date + win$to_days,
+            filter(RECDATE >= anchor_date + win[["from_days"]],
+                   RECDATE <= anchor_date + win[["to_days"]],
                    grepl("diabet|insulin", RECTXT, ignore.case = TRUE)) %>%
             mutate(prox = abs(as.numeric(RECDATE - anchor_date))) %>%
             arrange(PATID, prox) %>%
@@ -227,8 +227,8 @@ spec  <- built$spec
 caller <- make_ollama_caller(model = MODEL, seed = cfg$seed,
                              max_tokens = case$defaults$max_tokens)
 
-cat(sprintf("Real run | case=%s | model=%s | tasks=%d | seed=%d\n",
-            case_name, MODEL, nrow(built$tasks), cfg$seed))
+cat(sprintf("Real run | case=%s | model=%s | cohort=%d | seed=%d\n",
+            case_name, MODEL, nrow(built$cohort), cfg$seed))
 cat(sprintf("variable=%s channels=%s output=%s window=%s\n\n",
             spec$name, paste(names(spec$channels), collapse = "+"),
             if (is.null(spec$output)) "(combine)" else spec$output$kind,
@@ -236,7 +236,7 @@ cat(sprintf("variable=%s channels=%s output=%s window=%s\n\n",
             else sprintf("[%d,%+d]d", spec$window$from_days, spec$window$to_days)))
 
 t0  <- Sys.time()
-run <- run_variable(spec, built$tasks, built$sources, caller = caller,
+run <- run_variable(spec, built$cohort, built$sources, caller = caller,
                     model_name = MODEL)
 secs <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
