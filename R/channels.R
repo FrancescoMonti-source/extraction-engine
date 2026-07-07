@@ -161,24 +161,53 @@ analyte <- function(codes) {
 # in-scope measurement of this analyte past the cutoff" -- the MEMBERSHIP face
 # (bin_output / combine). `gt` is a strict lower cutoff (the DESIGN §14.6 shape);
 # `lt` is the symmetric strict upper cutoff (consumer: §14.9's hb_low, an anaemia
-# definition = Hb BELOW threshold). At least one bound is required. `unit` is
-# carried for provenance/inspectability only: HDW results are unit-normalized
-# upstream (redsan), so the executor does not convert.
-analyte_value <- function(codes, gt = NULL, lt = NULL, unit = NULL) {
+# definition = Hb BELOW threshold). `unit` is carried for provenance/inspectability
+# only: HDW results are unit-normalized upstream (redsan), so the executor does not
+# convert.
+#
+# `keep_when` is the SUBJECT-CONTEXT escape (DESIGN §8; consumer: sex/age-dependent
+# reference ranges, e.g. anaemia = Hb < 12 in women, < 13 in men). It is a plain
+# vectorised predicate whose FORMALS NAME RAW COLUMNS on the analyte's rows -- the
+# measured `value` plus any subject attribute the source carries (PATSEX, PATAGE) --
+# and returns one logical per row (the reducers-are-plain-functions rule: the
+# researcher's closure IS the membership rule, not a sex-keyed threshold table the
+# engine would have to interpret). Only columns DECLARED on the source_spec survive
+# normalization, so a formal naming an undeclared column is a hard error. `gt`/`lt`
+# are the fixed-cutoff sugar for the common single-column case; `keep_when` and the
+# bounds are mutually exclusive (fold any fixed part into the closure). At least one
+# of {gt, lt, keep_when} is required.
+analyte_value <- function(codes, gt = NULL, lt = NULL, unit = NULL, keep_when = NULL) {
     for (bound in c("gt", "lt")) {
         val <- get(bound)
         if (!is.null(val) && (!is.numeric(val) || length(val) != 1L || is.na(val))) {
             stop("analyte_value() `", bound, "` must be one number.", call. = FALSE)
         }
     }
-    if (is.null(gt) && is.null(lt)) {
-        stop("analyte_value() needs a value bound (gt and/or lt); for an ",
-             "unthresholded analyte use analyte().", call. = FALSE)
+    if (!is.null(keep_when)) {
+        if (!is.function(keep_when)) {
+            stop("analyte_value() `keep_when` must be a function of the analyte's ",
+                 "row columns (e.g. \\(value, PATSEX) value < ifelse(PATSEX == ",
+                 "\"F\", 12, 13)).", call. = FALSE)
+        }
+        if (!is.null(gt) || !is.null(lt)) {
+            stop("analyte_value() takes EITHER fixed bounds (gt/lt) OR a keep_when ",
+                 "predicate, not both; fold any fixed cutoff into the closure.",
+                 call. = FALSE)
+        }
+        if (!length(formals(keep_when))) {
+            stop("analyte_value() `keep_when` must name at least one row column ",
+                 "(e.g. `value`); a nullary predicate cannot see the measurement.",
+                 call. = FALSE)
+        }
+    } else if (is.null(gt) && is.null(lt)) {
+        stop("analyte_value() needs a value bound (gt and/or lt) or a keep_when ",
+             "predicate; for an unthresholded analyte use analyte().", call. = FALSE)
     }
     .experimental_spec(
         list(kind = "analyte", codes = as.character(codes),
              gt = if (is.null(gt)) NULL else as.numeric(gt),
              lt = if (is.null(lt)) NULL else as.numeric(lt),
-             unit = if (is.null(unit)) NULL else as.character(unit)),
+             unit = if (is.null(unit)) NULL else as.character(unit),
+             keep_when = keep_when),
         "ee_selector")
 }

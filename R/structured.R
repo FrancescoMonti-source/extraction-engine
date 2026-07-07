@@ -96,6 +96,35 @@ suppressWarnings(suppressMessages(library(dplyr)))
     ok
 }
 
+# Subject-context row predicate (DESIGN §8): the generalisation of a fixed gt/lt
+# cutoff to one that depends on attributes carried ON the row (sex/age reference
+# ranges). The closure's FORMALS name raw columns of `rows` -- same explicit-column
+# convention as index_event(at =) -- and it returns one logical per row. Applied
+# only to the analyte-matched rows, so `value` is always THIS analyte's value. An
+# NA result (e.g. a missing measurement) is not a hit, exactly like .passes_threshold.
+# A formal naming a column the source did not carry, or a result of the wrong
+# shape/type, is a hard error (a predicate breaking its contract is a bug -- the
+# same discipline as keep_group_when and a payload reduce).
+.eval_row_predicate <- function(rows, keep_when, field) {
+    args <- names(formals(keep_when))
+    missing <- setdiff(args, names(rows))
+    if (length(missing)) {
+        stop("analyte_value() keep_when for '", field, "' names column(s) ",
+             paste(missing, collapse = ", "), " that the source does not carry; ",
+             "only columns declared on the source_spec survive normalization, so ",
+             "declare them (role-less is fine) to make them visible to the predicate.",
+             call. = FALSE)
+    }
+    res <- do.call(keep_when, as.list(rows[args]))
+    if (!is.logical(res) || length(res) != nrow(rows)) {
+        stop("analyte_value() keep_when for '", field, "' must return one logical ",
+             "per row (got ", class(res)[1L], " of length ", length(res), " for ",
+             nrow(rows), " rows); a row predicate breaking its contract is a bug.",
+             call. = FALSE)
+    }
+    res & !is.na(res)
+}
+
 # Aggregate membership predicate (the HAVING shape, DESIGN §8): group a task's
 # TARGET rows at `group_at_level`, apply the plain closure to each group's values,
 # and demote the rows of failing groups -- a grouped row FILTER, so qualifying
@@ -492,7 +521,8 @@ measure_doc_presence <- function(docs_index, tasks, filters,
 # tasks: task_id + the grain_keys columns (PATID, or PATID+EVTID for stay grain);
 #   anchor_date only when windowed (a NULL window is event-scoped, no anchor needed).
 measure_analyte_values <- function(source_table, tasks, analytes,
-                                   gt = NULL, lt = NULL, grain_keys = "PATID",
+                                   gt = NULL, lt = NULL, keep_when = NULL,
+                                   grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
                                    group_at_level = NULL, keep_group_when = NULL,
                                    field = "analyte_value", source = "biology") {
@@ -513,6 +543,20 @@ measure_analyte_values <- function(source_table, tasks, analytes,
         analyte = as.character(analyte),
         value = suppressWarnings(as.numeric(value)),
         value_raw = as.character(value_raw))
+    # A subject-context predicate (keep_when) names raw columns beyond this fixed
+    # set (e.g. PATSEX/PATAGE); carry them through untouched so they reach the
+    # observation rows. transmute preserves row order, so source_table aligns 1:1.
+    if (!is.null(keep_when)) {
+        extra <- setdiff(names(formals(keep_when)), names(biol))
+        miss <- setdiff(extra, names(source_table))
+        if (length(miss)) {
+            stop("analyte_value() keep_when for '", field, "' names column(s) ",
+                 paste(miss, collapse = ", "), " that the biology source does not ",
+                 "carry; declare them on the source_spec so normalization keeps them.",
+                 call. = FALSE)
+        }
+        for (cc in extra) biol[[cc]] <- source_table[[cc]]
+    }
     # Grain is DECLARED by the variable (output_one_row_per) and passed as grain_keys:
     # "PATID" scopes by subject; c("PATID","EVTID") scopes each task to its OWN stay
     # (stay grain), the DESIGN §7 executor gap ("EVTID is invariant across HDW rows").
@@ -537,10 +581,22 @@ measure_analyte_values <- function(source_table, tasks, analytes,
         mutate(
             field = field,
             source = source,
-            in_scope = TRUE,
-            is_target = !is.na(analyte) &
-                toupper(trimws(analyte)) %in% target_analytes &
-                .passes_threshold(value, gt, lt))
+            in_scope = TRUE)
+    analyte_match <- !is.na(observations$analyte) &
+        toupper(trimws(observations$analyte)) %in% target_analytes
+    # The value predicate: a subject-context closure (keep_when) if given, else the
+    # fixed gt/lt bounds. Evaluated only on the analyte's own rows, so `value` in the
+    # closure is always this analyte's measurement.
+    predicate_ok <- rep(FALSE, nrow(observations))
+    if (!is.null(keep_when)) {
+        if (any(analyte_match)) {
+            predicate_ok[analyte_match] <- .eval_row_predicate(
+                observations[analyte_match, , drop = FALSE], keep_when, field)
+        }
+    } else {
+        predicate_ok <- .passes_threshold(observations$value, gt, lt)
+    }
+    observations$is_target <- analyte_match & predicate_ok
 
     observations <- .apply_group_predicate(
         observations, group_at_level, keep_group_when, "value", field)
@@ -619,6 +675,10 @@ measure_analyte_values <- function(source_table, tasks, analytes,
     threshold_txt <- paste0(
         if (!is.null(gt)) sprintf("value>%g; ", gt) else "",
         if (!is.null(lt)) sprintf("value<%g; ", lt) else "",
+        if (!is.null(keep_when)) {
+            sprintf("row kept when %s; ",
+                    paste(deparse(keep_when), collapse = " "))
+        } else "",
         if (!is.null(keep_group_when)) {
             sprintf("group(%s) kept when predicate holds; ", group_at_level)
         } else "")

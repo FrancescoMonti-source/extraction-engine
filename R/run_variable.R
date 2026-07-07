@@ -373,7 +373,8 @@ suppressWarnings(suppressMessages(library(dplyr)))
             measure_analyte_values(
                 sources[[source]], tasks,
                 analytes = .selector_codes(selector, "codes"),
-                gt = selector$gt, lt = selector$lt, grain_keys = grain_keys,
+                gt = selector$gt, lt = selector$lt,
+                keep_when = selector$keep_when, grain_keys = grain_keys,
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 group_at_level = channel_def$group_at_level,
                 keep_group_when = channel_def$keep_group_when,
@@ -1031,7 +1032,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
     if (is.null(selector)) return(NULL)
     snap <- unclass(selector)
     attributes(snap) <- list(names = names(snap))
-    snap[!vapply(snap, is.null, logical(1))]
+    snap <- snap[!vapply(snap, is.null, logical(1))]
+    # A closure member (e.g. analyte_value(keep_when =)) is deparsed, like the
+    # anchor's select_event and the channel's keep_group_when -- the audit trail
+    # carries the rule as serializable text, not a live function object.
+    fns <- vapply(snap, is.function, logical(1))
+    snap[fns] <- lapply(snap[fns], function(f) paste(deparse(f), collapse = " "))
+    snap
 }
 
 .provenance_anchor <- function(anchor) {

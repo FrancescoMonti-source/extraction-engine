@@ -18,7 +18,8 @@ test_that("structured loaders preserve local dates and native provenance", {
         PATID = c("P1", "P1"), EVTID = c("E1", "E1"),
         ELTID = c("L1", "L2"), biol_ID = c("B1", "B2"),
         DATEXAM = local_time, TYPEANA = c("K.K", "NA.NA"),
-        NUMRES = c("5.4", "140")), bio_path)
+        NUMRES = c("5.4", "140"),
+        PATSEX = c("M", "M"), PATAGE = c(50, 50)), bio_path)
 
     diag <- load_pmsi_diag(pmsi_path)
     biol <- load_biol_results(bio_path)

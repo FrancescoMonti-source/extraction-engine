@@ -254,7 +254,13 @@ BIOL_SOURCE <- source_spec("biol results",
         DATEXAM   = col("DATEXAM",               "date", roles = "point_date"),
         analyte   = col("TYPEANA",               "chr",  roles = "analyte"),
         value_raw = col("NUMRES",                "chr",  roles = "value_str"),
-        value     = col("NUMRES",                "num",  roles = "value_num")),
+        value     = col("NUMRES",                "num",  roles = "value_num"),
+        # Subject attributes carried on every biology row (owner 2026-07-07: PATSEX
+        # and PATAGE are always present in the raw HDW table). Role-less: the engine
+        # never interprets them -- a subject-context analyte_value(keep_when =) names
+        # them directly (sex/age reference ranges). Same pattern as docs SEJUM/SEJUF.
+        PATSEX    = col("PATSEX",                 "chr"),
+        PATAGE    = col("PATAGE",                 "num")),
     source_row_id = "biol",
     module = "biol",
     table = "results",

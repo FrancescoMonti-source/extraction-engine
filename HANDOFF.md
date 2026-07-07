@@ -1058,3 +1058,57 @@ CHANNEL: no way to say "the document's existence is the hit" without an LLM.
   3 test files migrated; provenance records the RESOLVED column. DESIGN SS7.
 
 Suite 191/0/0 (184 + the probe's 7 assertions).
+
+## Subject-context lab predicate: sex/age reference ranges -- Claude Fable (2026-07-07)
+
+**Consumer (owner, 2026-07-07):** anaemia is not a fixed Hb cutoff -- it is
+Hb < 12 g/dL in women, < 13 g/dL in men, and reference ranges also vary with age
+("una cosa tipica della biologia... valori uomo donna diversi e che variano con
+l'età, specialmente in età pediatrica"). The owner ruled this a REAL, present-day
+consumer ("l'anemia è GIÀ oggi un consumatore reale, è così che avremmo dovuto
+costruirla") -- so DESIGN §16's deferred "lab value predicates with subject
+context" is now built. The open sub-question there (how the subject attribute
+reaches the predicate: task columns vs a demographics join) was closed by the
+owner: **`PATSEX`/`PATAGE` are always carried on the raw HDW rows themselves** --
+verified from the D0840 artifacts (schema-only, no PHI): `PATSEX`/`PATAGE`/`PATBD`
+sit on `bio`, `pmsi$main`, `pmsi$actes`, and `docs` (only `pmsi$diag` lacks them,
+which is a redsan data-prep concern, not the engine's -- the columns live on
+`pmsi$main` and redsan would join them onto the diag view if ever needed there).
+
+**Landed (probe test test-slice-lab-subject-threshold-spec.R, 3 blocks; suite 203/0/0):**
+
+- `analyte_value(codes, keep_when = <closure>)` -- the general row predicate that
+  subsumes fixed `gt`/`lt`. The closure's **formals name raw columns** on the
+  analyte's rows (the measured `value` plus subject attributes the source carries,
+  `PATSEX`/`PATAGE`) and returns one logical per row: the
+  reducers-are-plain-functions rule extended to *membership* (the researcher's
+  closure IS the rule; no sex-keyed threshold table for the engine to interpret --
+  the wrapper razor). Same explicit-column convention ratified for `index_event(at =)`.
+  `gt`/`lt` stay as the fixed-cutoff sugar and are **mutually exclusive** with
+  `keep_when`. DESIGN §8.
+- Executor: `measure_analyte_values(keep_when =)` carries the closure's extra
+  column formals through the fixed transmute (row order preserved, so
+  `source_table` aligns 1:1), then `.eval_row_predicate` binds formals→columns,
+  evaluates over the analyte-matched rows only (so `value` is always that
+  analyte's measurement), and treats an NA result as "not a hit" (same as a fixed
+  bound). Contract-breaking closures are hard errors: a formal naming a column the
+  source did not carry, or a result of the wrong shape/type -- the same discipline
+  as `keep_group_when` and a payload `reduce`. Membership stays three-valued
+  (below the sex cutoff = hit, in-range = observed FALSE, no measurement = NA).
+- `BIOL_SOURCE` now declares `PATSEX` (chr) + `PATAGE` (num), **role-less** (the
+  engine never interprets them; the predicate names them directly) -- the docs
+  `SEJUM`/`SEJUF` pattern. NB, same caveat as that change: `normalize_source`
+  PROJECTS to declared cols, so `load_biol_results()` now hard-requires
+  `PATSEX`+`PATAGE` in the raw biology RDS (always present per the owner /
+  verified; the one test fixture that predated them was updated).
+- Provenance: `.provenance_selector` deparses any closure member (so a `keep_when`
+  selector serializes as text, like the anchor's `select_event` and the channel's
+  `keep_group_when`); the executor's derivation rule string records the deparsed
+  predicate.
+
+**Probe discriminator:** one Hb value, 12.5 g/dL, measured in a woman (NOT anaemic,
+12.5 ≮ 12) and a man (anaemic, 12.5 < 13). A single-number cutoff cannot separate
+them; only a predicate that reads `PATSEX` can -- that is the invariant the test locks.
+
+**Open (unchanged, still deferred §16):** source-kind registry resolution (a channel
+omitting `source=`) -- owner agrees it "può probabilmente continuare a marcire dov'è".
