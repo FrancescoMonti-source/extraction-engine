@@ -319,6 +319,157 @@ measure_code_presence <- function(source_table, tasks, codes,
         derivation = derivation)
 }
 
+# --- generic document presence: metadata-selected docs_index rows ---------------
+# Neutral executor behind the run_variable() doc branch: a document's EXISTENCE is
+# the hit, selected on docs_index METADATA (exact any-of filters per column) -- no
+# content, no Lucene, no LLM. Same present/absent membership contract as the code
+# executor, so a doc hit means the same thing inside a hit-set expression. The
+# CANDIDATES frame carries value = the document's clock (RECDATE), so date_output
+# reduces "when" the same way num_output reduces a measurement (DESIGN §8).
+#
+# docs_index: ELTID (unique), PATID, EVTID, <date_col>, plus the filter columns.
+# tasks: task_id, PATID (+ grain keys); anchor_date only when windowed.
+measure_doc_presence <- function(docs_index, tasks, filters,
+                                 grain_keys = "PATID",
+                                 from_days = NULL, to_days = NULL,
+                                 group_at_level = NULL, keep_group_when = NULL,
+                                 date_col = "RECDATE",
+                                 field = "doc_presence", source = "documents") {
+    windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> whole history
+    .require_columns(docs_index,
+                     unique(c("ELTID", "PATID", "EVTID", date_col, names(filters))),
+                     "docs index")
+
+    rows <- docs_index %>% mutate(
+        source_row_id = as.character(ELTID),
+        PATID = as.character(PATID),
+        EVTID = as.character(EVTID),
+        ELTID = as.character(ELTID),
+        doc_date = .clinical_date(.data[[date_col]]))
+    .validate_structured_inputs(
+        tasks, rows, c("source_row_id", "PATID", "EVTID", "ELTID", "doc_date"),
+        "docs index", require_anchor = windowed)
+
+    tkeys <- tasks %>%
+        transmute(task_id = as.character(task_id), PATID = as.character(PATID))
+    for (k in setdiff(grain_keys, "PATID")) tkeys[[k]] <- as.character(tasks[[k]])
+    if (windowed) tkeys$anchor_date <- .clinical_date(tasks$anchor_date)
+
+    source_counts <- rows %>%
+        filter(!is.na(PATID)) %>%
+        group_by(across(all_of(grain_keys))) %>%
+        summarise(n_source_rows = n(), .groups = "drop")
+
+    scoped <- rows %>%
+        inner_join(tkeys, by = grain_keys, relationship = "many-to-many")
+    if (windowed) {
+        scoped <- scoped %>% filter(.within_point(
+            doc_date, anchor_date + from_days, anchor_date + to_days))
+    }
+    matches <- rep(TRUE, nrow(scoped))
+    for (cl in names(filters)) {
+        matches <- matches & (as.character(scoped[[cl]]) %in% filters[[cl]])
+    }
+    observations <- scoped %>%
+        mutate(
+            field = field,
+            source = source,
+            in_scope = TRUE,
+            is_target = matches & !is.na(matches))
+
+    # Group predicate over the doc ids (frequency rules, e.g. >=2 consults in one
+    # stay); qualifying groups keep their original rows.
+    observations <- .apply_group_predicate(
+        observations, group_at_level, keep_group_when, "source_row_id", field)
+
+    observations <- observations %>%
+        mutate(
+            selected_evidence = is_target,
+            scope_reason = if (windowed) "in scope for the task window"
+                           else "whole history (no window)",
+            observation_reason = case_when(
+                is_target ~ "document metadata matches the declared filters",
+                group_demoted ~ "group aggregate predicate not satisfied",
+                TRUE ~ "document metadata outside the declared filters"))
+
+    counts <- observations %>%
+        group_by(task_id) %>%
+        summarise(
+            n_scope_rows = n(),
+            n_matching_rows = sum(is_target),
+            .groups = "drop")
+    coverage <- tkeys %>%
+        left_join(source_counts, by = grain_keys) %>%
+        left_join(counts, by = "task_id") %>%
+        mutate(
+            across(c(n_source_rows, n_scope_rows, n_matching_rows),
+                   ~ coalesce(as.integer(.x), 0L)),
+            processing_state = case_when(
+                n_source_rows == 0L ~ "no_eligible_source",
+                windowed & n_scope_rows == 0L ~ "no_candidate",
+                TRUE ~ "measured"))
+
+    values <- coverage %>%
+        filter(processing_state == "measured") %>%
+        mutate(normalized_value = if_else(n_matching_rows > 0L, "present", "absent")) %>%
+        transmute(
+            task_id,
+            field = field,
+            normalized_value,
+            accepted_value = normalized_value,
+            n_scope_rows,
+            n_matching_rows)
+
+    filter_txt <- paste(vapply(names(filters), function(cl) {
+        sprintf("%s in {%s}", cl, paste(filters[[cl]], collapse = ","))
+    }, character(1)), collapse = "; ")
+
+    # The document's clock is its payload value (date_output): one candidate row
+    # per matching document, spine kept for sub-output-grain scoping (§7).
+    candidates <- observations %>%
+        filter(is_target) %>%
+        arrange(task_id, doc_date, source_row_id) %>%
+        transmute(task_id, source_row_id, PATID, EVTID, ELTID, value = doc_date)
+
+    evidence <- observations %>%
+        filter(selected_evidence) %>%
+        transmute(
+            task_id, field, source, source_row_id,
+            evidence_ref = source_row_id,
+            evidence_summary = sprintf("%s (%s)", filter_txt, doc_date),
+            PATID, EVTID, ELTID, doc_date)
+
+    rule <- if (windowed) {
+        sprintf("same_subject; point_window[%g,%+g]; %s", from_days, to_days,
+                filter_txt)
+    } else {
+        sprintf("whole_history; %s", filter_txt)
+    }
+    if (!is.null(keep_group_when)) {
+        rule <- sprintf("%s; group(%s) kept when predicate holds",
+                        rule, group_at_level)
+    }
+    derivation <- coverage %>%
+        transmute(
+            task_id,
+            field = field,
+            rule = rule,
+            n_source_rows,
+            n_scope_rows,
+            n_matching_rows,
+            status = processing_state,
+            error = NA_character_)
+
+    .assert_evidence_resolves(evidence, observations, rows)
+    list(
+        coverage = coverage,
+        values = values,
+        candidates = candidates,
+        evidence = evidence,
+        observations = observations,
+        derivation = derivation)
+}
+
 # --- generic analyte candidates: valued rows of an analyte in a point-window -----
 # Neutral lab/analyte executor behind the run_variable() lab branch, serving BOTH lab
 # faces (DESIGN §8). Per task it SCOPES the declared analyte's rows to a point-window

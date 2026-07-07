@@ -210,24 +210,38 @@ suppressWarnings(suppressMessages(library(dplyr)))
             else NULL
     roles <- if (is.null(spec)) list() else source_roles(spec)
     code_col <- roles$code %||% NULL
-    date_col <- roles[[anchor$at]] %||% NULL
-    if (is.null(code_col) || is.null(date_col)) {
-        stop("index_event: source '", anchor$source, "' lacks a 'code' role or a '",
-             anchor$at, "' date role.", call. = FALSE)
+    if (is.null(code_col)) {
+        stop("index_event: source '", anchor$source, "' lacks a 'code' role.",
+             call. = FALSE)
+    }
+    # `at` names the source's own date COLUMN (owner ruling 2026-07-07: raw names,
+    # not role vocabulary); omitted, it defaults to the source's windowing clock.
+    date_col <- anchor$at %||% (if (is.null(spec)) NULL else spec$source_time_start)
+    if (is.null(date_col)) {
+        stop("index_event: source '", anchor$source, "' is not registered; ",
+             "name the anchor date column explicitly (at = \"<column>\").",
+             call. = FALSE)
+    }
+    if (!date_col %in% names(src)) {
+        hint <- if (date_col %in% c("point_date", "event_start", "event_end")) {
+            " (date ROLES were retired from `at`: name the source's own column, e.g. DATEACTE/DATENT/DATSORT)"
+        } else ""
+        stop("index_event: '", date_col, "' is not a column of source '",
+             anchor$source, "'", hint, ".", call. = FALSE)
     }
     sel <- anchor$selector
     matched <- src %>%
         transmute(PATID = as.character(PATID),
                   EVTID = as.character(EVTID),
                   code_val = as.character(.data[[code_col[[1]]]]),
-                  anchor_date = .clinical_date(.data[[date_col[[1]]]])) %>%
+                  anchor_date = .clinical_date(.data[[date_col]])) %>%
         filter(.code_matches(code_val, sel$codes, sel$match))
 
     # Multi-match: the researcher's select_event closure picks which event(s)
     # anchor the clock (DESIGN §7, invariant 35); without it the engine never
     # picks -- loud error. The closure sees the subject's matched rows with the
-    # date under its ROLE name (`at`, e.g. point_date), exactly as written in
-    # the spec: select_event = \(d) dplyr::slice_min(d, point_date, n = 1).
+    # date under the source's own COLUMN name (the resolved `at`), exactly as
+    # written in the spec: select_event = \(d) dplyr::slice_min(d, DATEACTE, n = 1).
     select_event <- anchor$select_event
     dup <- matched %>% count(PATID) %>% filter(n > 1L)
     if (nrow(dup) && is.null(select_event)) {
@@ -238,15 +252,15 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }
     if (!is.null(select_event) && nrow(matched)) {
         view <- matched %>% select(PATID, EVTID, anchor_date)
-        names(view)[names(view) == "anchor_date"] <- anchor$at
+        names(view)[names(view) == "anchor_date"] <- date_col
         selected <- view %>%
             group_by(PATID) %>%
             group_modify(function(d, key) {
                 out <- select_event(dplyr::bind_cols(key, d))
                 if (!is.data.frame(out) ||
-                    !all(c("EVTID", anchor$at) %in% names(out))) {
+                    !all(c("EVTID", date_col) %in% names(out))) {
                     stop("select_event must return matched event row(s) ",
-                         "keeping the EVTID and ", anchor$at, " columns.",
+                         "keeping the EVTID and ", date_col, " columns.",
                          call. = FALSE)
                 }
                 out[setdiff(names(out), "PATID")]
@@ -263,7 +277,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         matched <- selected %>%
             transmute(PATID = as.character(PATID),
                       EVTID = as.character(EVTID),
-                      anchor_date = .clinical_date(.data[[anchor$at]]))
+                      anchor_date = .clinical_date(.data[[date_col]]))
     }
     anchors <- matched %>% distinct(PATID, EVTID, anchor_date)
 
@@ -363,6 +377,34 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 group_at_level = channel_def$group_at_level,
                 keep_group_when = channel_def$keep_group_when,
+                field = variable$name, source = source)
+        },
+        doc = {
+            # Metadata-selected document existence (no content, no LLM): the doc
+            # branch reads the docs_index only -- a raw {corpus, docs_index}
+            # source contributes its index; a bare frame IS an index.
+            if (!identical(selector$kind, "doc_meta")) {
+                stop("Doc channel '", channel_name, "' needs a doc_meta() ",
+                     "selector.", call. = FALSE)
+            }
+            src <- sources[[source]]
+            docs_index <- if (is.data.frame(src)) src
+                          else if (is.list(src) && is.data.frame(src$docs_index)) src$docs_index
+                          else stop("Doc channel '", channel_name, "' needs a ",
+                                    "docs_index frame (bare, or inside a raw ",
+                                    "{corpus, docs_index} source).", call. = FALSE)
+            spec <- if (source %in% names(EE_SOURCES)) EE_SOURCES[[source]]
+                    else NULL
+            w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
+                 else .window_days(variable)
+            measure_doc_presence(
+                docs_index, tasks, filters = selector$filters,
+                grain_keys = grain_keys,
+                from_days = w[["from_days"]], to_days = w[["to_days"]],
+                group_at_level = channel_def$group_at_level,
+                keep_group_when = channel_def$keep_group_when,
+                date_col = (if (is.null(spec)) NULL else spec$source_time_start) %||%
+                    "RECDATE",
                 field = variable$name, source = source)
         },
         text = {
@@ -495,6 +537,42 @@ suppressWarnings(suppressMessages(library(dplyr)))
                        key = as.character(.data[[level]]), value)
 }
 
+# Date payload (date_output, DESIGN §8): the value of a hit row is its CLOCK --
+# the same date the engine windowed the row on (doc RECDATE, lab DATEXAM, a
+# code/act row's own start date). Text channels are design-ALLOWED as a date
+# payload (owner ruling 2026-07-07: a document date is the researcher's call,
+# guarded by provenance not prohibition) but wait for their consumer.
+.payload_date_values <- function(result, channel_type, level = NULL) {
+    rows <- switch(channel_type,
+        doc = result$candidates,                       # value = the doc's clock
+        lab = result$candidates %>% mutate(value = measurement_time),
+        code = ,
+        act = result$evidence %>% mutate(value = t_start),
+        stop("date_output values_from is wired for doc/lab/code/act channels, ",
+             "not '", channel_type, "' (a text channel's document date is ",
+             "design-allowed but waits for its consumer).", call. = FALSE))
+    if (is.null(level)) {
+        return(rows %>% transmute(task_id = as.character(task_id), value))
+    }
+    if (!level %in% names(rows)) {
+        stop("values_from payload rows do not carry the combine_at_level key '",
+             level, "'; the payload cannot be scoped to the qualifying keys.",
+             call. = FALSE)
+    }
+    rows %>% transmute(task_id = as.character(task_id),
+                       key = as.character(.data[[level]]), value)
+}
+
+# The kind-appropriate payload rows for an output: dates read the rows' clock,
+# num/cat read the rows' values (lab measurement / code).
+.output_payload <- function(result, channel_type, output, level = NULL) {
+    if (identical(output$kind, "date")) {
+        .payload_date_values(result, channel_type, level = level)
+    } else {
+        .payload_values(result, channel_type, level = level)
+    }
+}
+
 # Apply reduce to one task's payload values and validate the result against the
 # output's declared contract. A closure breaking its own contract (non-numeric for
 # num, outside `levels` for cat, not exactly one value) is a HARD error, not a
@@ -516,6 +594,16 @@ suppressWarnings(suppressMessages(library(dplyr)))
         }
         return(res)
     }
+    if (identical(output$kind, "date")) {
+        # A deliberate NA is the closure's own missing rule (like num); anything
+        # else must BE a Date -- a silent coercion here would be exactly the
+        # min()-over-strings failure date_output exists to prevent.
+        if (!inherits(res, "Date") && !is.na(res)) {
+            stop("reduce for '", variable_name, "' must return a Date (or NA); ",
+                 "got class '", class(res)[[1]], "'.", call. = FALSE)
+        }
+        return(as.Date(res))
+    }
     res <- as.character(res)
     if (is.na(res) || !res %in% output$levels) {
         stop("reduce for '", variable_name, "' returned '", res,
@@ -534,14 +622,18 @@ suppressWarnings(suppressMessages(library(dplyr)))
     var_name <- variable$name
     source_name <- .source_name_for_channel(channel_name, variable)
     output <- variable$output
-    payload <- .payload_values(result, .channel_type(channel_name, variable))
+    payload <- .output_payload(result, .channel_type(channel_name, variable),
+                               output)
     task_ids <- as.character(tasks$task_id)
     state_of <- function(tid) {
         s <- result$coverage$processing_state[
             as.character(result$coverage$task_id) == tid]
         if (length(s)) as.character(s[[1]]) else NA_character_
     }
-    na_value <- if (identical(output$kind, "number")) NA_real_ else NA_character_
+    na_value <- switch(output$kind,
+                       number = NA_real_,
+                       date = as.Date(NA),
+                       NA_character_)
 
     values_l <- list(); status_l <- list()
     for (tid in task_ids) {
@@ -583,9 +675,10 @@ suppressWarnings(suppressMessages(library(dplyr)))
     level <- variable$combine_at_level
     sub_level <- !is.null(level) &&
         !identical(level, variable$output_one_row_per)
-    payload <- .payload_values(
+    payload <- .output_payload(
         channel_results[[output$values_from]],
         .channel_type(output$values_from, variable),
+        output,
         level = if (sub_level) level else NULL)
     if (sub_level) {
         qk <- out$combine_keys
@@ -596,8 +689,10 @@ suppressWarnings(suppressMessages(library(dplyr)))
     }
     gate <- out$values
     n <- nrow(gate)
-    value <- if (identical(output$kind, "number")) rep(NA_real_, n)
-             else rep(NA_character_, n)
+    value <- switch(output$kind,
+                    number = rep(NA_real_, n),
+                    date = rep(as.Date(NA), n),
+                    rep(NA_character_, n))
     n_payload <- integer(n)
     for (i in seq_len(n)) {
         if (!identical(gate$value[[i]], 1L)) next
@@ -942,9 +1037,14 @@ suppressWarnings(suppressMessages(library(dplyr)))
 .provenance_anchor <- function(anchor) {
     if (is.null(anchor)) return(NULL)
     if (inherits(anchor, "ee_index_event")) {
+        # The EXECUTED anchor column: the declared `at`, or the source's
+        # windowing clock it defaults to.
         return(list(kind = "index_event", source = anchor$source,
                     selector = .provenance_selector(anchor$selector),
-                    at = anchor$at,
+                    at = anchor$at %||%
+                        (if (anchor$source %in% names(EE_SOURCES)) {
+                            EE_SOURCES[[anchor$source]]$source_time_start
+                        } else NULL),
                     # The executed multi-match rule, serializable (like reduce).
                     select_event = if (is.function(anchor$select_event)) {
                         paste(deparse(anchor$select_event), collapse = " ")
@@ -1151,7 +1251,7 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
         # final value instead of the 0/1 membership lift.
         out <- .hit_set_expr_variable(variable, tasks, channel_results)
         if (!is.null(variable$output) &&
-            variable$output$kind %in% c("number", "categorical") &&
+            variable$output$kind %in% c("number", "categorical", "date") &&
             is.function(variable$output$reduce)) {
             out <- .apply_gated_payload(variable, out, channel_results)
         }
@@ -1164,6 +1264,8 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
             binary = .single_membership_variable(
                 variable, tasks, ch, channel_results[[1]]),
             number = .single_payload_variable(
+                variable, tasks, ch, channel_results[[1]]),
+            date = .single_payload_variable(
                 variable, tasks, ch, channel_results[[1]]),
             categorical = {
                 if (is.function(variable$output$reduce)) {
@@ -1190,7 +1292,8 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
                 .multi_field_variable(variable, tasks, ch, channel_results[[1]])
             },
             stop("Unsupported single-channel output: ", output_kind,
-                 " (expected binary/number/categorical/fields).", call. = FALSE))
+                 " (expected binary/number/categorical/date/fields).",
+                 call. = FALSE))
     } else {
         stop("Unsupported combine; expected a hit-set expression (>=2 channels) ",
              "or NULL (single channel).", call. = FALSE)

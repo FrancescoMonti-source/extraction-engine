@@ -150,7 +150,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
         # checked with the channel list in .check_output_payload); str/struct
         # behind a gate stay unshaped until a consumer arrives.
         if (!is.null(output) && !identical(output$kind, "binary")) {
-            if (output$kind %in% c("number", "categorical")) {
+            if (output$kind %in% c("number", "categorical", "date")) {
                 if (!is.function(output$reduce)) {
                     stop("combine gates rows, it does not produce the value; a '",
                          output$kind, "' output behind a combine expression must ",
@@ -160,7 +160,7 @@ suppressWarnings(suppressMessages(library(dplyr)))
                 }
             } else {
                 stop("Output '", output$kind, "' behind a combine expression is ",
-                     "not shaped yet (DESIGN §8): bin (membership) and num/cat ",
+                     "not shaped yet (DESIGN §8): bin (membership) and num/cat/date ",
                      "(values_from/reduce payload) are; revisit with a consumer.",
                      call. = FALSE)
             }
@@ -184,13 +184,13 @@ suppressWarnings(suppressMessages(library(dplyr)))
     combine
 }
 
-# Payload resolution for num/cat outputs (DESIGN §8): values_from must name an
-# activated channel; omitted, it can only default to the sole channel of a
+# Payload resolution for num/cat/date outputs (DESIGN §8): values_from must name
+# an activated channel; omitted, it can only default to the sole channel of a
 # single-channel variable -- with several channels the pick is real, non-derivable
 # information. Returns the output with values_from normalized, so the runner and
 # provenance always see the executed payload channel.
 .check_output_payload <- function(output, channel_names) {
-    if (is.null(output) || !output$kind %in% c("number", "categorical")) {
+    if (is.null(output) || !output$kind %in% c("number", "categorical", "date")) {
         return(output)
     }
     if (!is.function(output$reduce)) return(output)   # extraction-flavor cat

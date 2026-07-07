@@ -2,10 +2,9 @@
 # the CCAM act itself and scoped to the 30 days FOLLOWING it, seen through >=1 source.
 #
 # This is the first spec to compose three shipped-but-never-co-exercised axes:
-#   1. an ACT-anchored derived anchor -- index_event(pmsi_actes, ccam(...), at="point_date")
-#      resolves each subject's own surgery date (DATEACTE) as the anchor. "point_date" is
-#      the point-event role a CCAM act carries (contrast the stay's event_start/event_end);
-#      the default at="event_start" would (correctly) error on a point source.
+#   1. an ACT-anchored derived anchor -- index_event(pmsi_actes, ccam(...)) resolves each
+#      subject's own surgery date (DATEACTE, the point source's windowing clock and thus
+#      the `at` default) as the anchor; at = "DATEACTE" spells it explicitly.
 #   2. a FORWARD window -- days_after(1, 30): the post-op direction, vs the before_anchor
 #      windows every prior slice used.
 #   3. a cross-source combine -- "pmsi_complication | redo_act": the complication is a hit
@@ -40,7 +39,7 @@ aw_var <- variable_spec(
     concept = aw_concept,
     output_one_row_per = "PATID",
     anchor = index_event(source = "pmsi_actes", selector = ccam("HGFA011"),
-                         at = "point_date"),
+                         at = "DATEACTE"),
     window = c(1, 30),
     channels = list(pmsi_complication = use_channel(), redo_act = use_channel()),
     output = bin_output(),

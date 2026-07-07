@@ -197,7 +197,13 @@ DOCS_SOURCE <- source_spec("docs index",
         PATID   = col("PATID",   "chr",  roles = "subject_id"),
         EVTID   = col("EVTID",   "chr",  roles = "event_id"),
         RECDATE = col("RECDATE", "date", roles = "point_date"),
-        RECTYPE = col("RECTYPE", "chr",  roles = "document_type")),
+        RECTYPE = col("RECTYPE", "chr",  roles = "document_type"),
+        # Attribution of the document, always present in the raw docs table
+        # (owner, 2026-07-07): SEJUM = unité médicale, SEJUF = unité
+        # fonctionnelle. No role: the engine never interprets them --
+        # doc_meta(SEJUM = "ANES") names the column directly.
+        SEJUM   = col("SEJUM",   "chr"),
+        SEJUF   = col("SEJUF",   "chr")),
     unique_cols = "ELTID",
     module = "doceds",
     table = "documents",

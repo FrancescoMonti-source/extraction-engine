@@ -2,16 +2,17 @@
 # from a matched event, so windowing keys off that derived date? DESIGN §7/§14: an anchor
 # may be DERIVED from an event (transplant_date()/surgery_date()); index_event is the
 # generic form -- per subject, find the event matching a code selector and anchor at its
-# date-role. It runs as an anchor-resolution PASS (produce (subject, anchor_date)) BEFORE
-# normal windowing, NOT an inter-channel dependency.
+# date COLUMN (`at` names the source's own spelling, e.g. "DATENT"; omitted it
+# defaults to the source's windowing clock). It runs as an anchor-resolution PASS
+# (produce (subject, anchor_date)) BEFORE normal windowing, NOT an inter-channel
+# dependency.
 #
 # Discriminator: two patients, SAME measured-code date but DIFFERENT index-event dates.
 # P1's index stay (Z94 transplant-status code) starts 2024-06-01; P2's starts 2024-01-01.
 # Both carry an E11 diabetes code dated 2024-05-20. With anchor = index_event(... at
-# event_start) + a 30-day before-anchor window: P1's window [2024-05-02, 2024-06-01]
+# "DATENT") + a 30-day before-anchor window: P1's window [2024-05-02, 2024-06-01]
 # CONTAINS 2024-05-20 (present); P2's window [2023-12-02, 2024-01-01] does NOT (absent).
 # Same E11 date, opposite outcome -> the anchor was derived per-subject from its event.
-# (pmsi_diag already maps DATENT -> event_start, so no source-spec change is needed.)
 
 ix_diag <- tibble::tibble(
     source_row_id = c("z1", "z2", "e1", "e2"),
@@ -40,7 +41,7 @@ test_that("index_event derives a per-subject anchor from the matched event", {
         concept = ix_concept,
         output_one_row_per = "PATID",
         anchor = index_event(source = "pmsi_diag", selector = icd10("^Z94"),
-                             at = "event_start"),
+                             at = "DATENT"),
         window = c(-30, 0),
         channels = list(dm_code = use_channel()),
         output = bin_output())
@@ -66,7 +67,7 @@ test_that("index_event errors on multiple matching events per subject", {
     spec <- variable_spec(
         name = "dm_before_index_stay", concept = ix_concept,
         output_one_row_per = "PATID",
-        anchor = index_event("pmsi_diag", icd10("^Z94"), at = "event_start"),
+        anchor = index_event("pmsi_diag", icd10("^Z94"), at = "DATENT"),
         window = c(-30, 0),
         channels = list(dm_code = use_channel()), output = bin_output())
     expect_error(

@@ -16,7 +16,8 @@
     code = "code_hit",
     act  = "act_hit",
     lab  = "numeric_measurement",
-    text = "text_candidate")
+    text = "text_candidate",
+    doc  = "doc_hit")
 
 channel <- function(source, selector, type = "generic",
                     native_grain = NA_character_, required_roles = character(),
@@ -93,6 +94,16 @@ act_channel <- function(source, selector, ...) {
     channel(source, selector, type = "act", ...)
 }
 
+# Doc channel: the simplest channel kind -- a document's EXISTENCE is the hit,
+# selected on docs_index METADATA (doc_meta), no content read, no Lucene, no LLM
+# (consumer 2026-07-07: date of the pre-op anesthesia consult = a document of
+# type X from unite medicale ANES). The hit rows are docs_index rows: they carry
+# the identity spine (PATID/EVTID/ELTID) and their own clock (RECDATE), so a doc
+# hit joins level algebra and feeds a date payload like any structured row set.
+doc_channel <- function(source, selector, ...) {
+    channel(source, selector, type = "doc", ...)
+}
+
 # --- selectors ----------------------------------------------------------------
 # A selector is the concept-level identity rule for one source. A code selector
 # (icd10 for CIM-10 diagnoses, ccam for CCAM acts) declares codes + a match mode:
@@ -115,6 +126,29 @@ ccam <- function(codes, match = c("exact", "regex")) {
 lucene_query <- function(query) {
     .experimental_spec(list(kind = "lucene_query", query = as.character(query)),
                        "ee_selector")
+}
+
+# Document-metadata selector for a doc_channel: named any-of filters over
+# docs_index columns, e.g. doc_meta(RECTYPE = "CR-ANES") or
+# doc_meta(RECTYPE = c("CR-ANES", "CS-ANES"), SEJUM = "ANES"). Matching is exact
+# string equality (HDW metadata is standardized; no normalization pass). A filter
+# column the docs index does not carry is a loud run-time error, never a silent
+# empty set.
+doc_meta <- function(...) {
+    filters <- list(...)
+    if (!length(filters) || is.null(names(filters)) ||
+        any(!nzchar(names(filters))) || anyDuplicated(names(filters))) {
+        stop("doc_meta() needs uniquely named metadata filters, e.g. ",
+             "doc_meta(RECTYPE = \"CR-ANES\").", call. = FALSE)
+    }
+    filters <- lapply(filters, as.character)
+    bad <- vapply(filters, function(v) !length(v) || anyNA(v) || any(!nzchar(v)),
+                  logical(1))
+    if (any(bad)) {
+        stop("doc_meta() filter value(s) must be non-empty strings: ",
+             paste(names(filters)[bad], collapse = ", "), call. = FALSE)
+    }
+    .experimental_spec(list(kind = "doc_meta", filters = filters), "ee_selector")
 }
 
 analyte <- function(codes) {

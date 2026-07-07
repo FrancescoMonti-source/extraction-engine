@@ -20,20 +20,23 @@
 # An anchor may be a task COLUMN (anchor = "inclusion_date", one date supplied per task)
 # or DERIVED from an event. index_event() is the GENERIC derived anchor -- DESIGN §14's
 # transplant_date()/surgery_date() are domain-specific forms of it: per subject, find the
-# event in `source` whose `code` matches `selector`, and anchor at its `at` date-role
-# ("event_start" = stay start / DATENT, "event_end", or "point_date" = a point-dated
-# record's own instant, e.g. DATEACTE / DATEXAM). run_variable resolves it
-# in an anchor PASS -- producing (PATID, anchor_date) before windowing, NOT an inter-
-# channel dependency.
+# event in `source` whose `code` matches `selector`, and anchor at its `at` date
+# COLUMN. `at` names the source's own column (e.g. "DATEACTE", "DATENT", "DATSORT")
+# -- owner ruling 2026-07-07: role vocabulary is indirection the engine never
+# interprets here, and raw names are self-documenting; the registry's roles stay
+# internal where the engine does interpret them. Omitted, `at` defaults to the
+# source's windowing clock (its registered source_time_start). run_variable
+# resolves it in an anchor PASS -- producing (PATID, anchor_date) before
+# windowing, NOT an inter-channel dependency.
 #
 # `select_event` is the researcher's rule for a subject with SEVERAL matching
 # events (DESIGN §7 / invariant 35): a plain closure over the subject's matched
-# rows (columns PATID, EVTID, and the `at` date role, e.g. point_date), returning
-# the row(s) that anchor the clock -- e.g. \(d) dplyr::slice_min(d, point_date,
+# rows (columns PATID, EVTID, and the `at` date column, e.g. DATEACTE), returning
+# the row(s) that anchor the clock -- e.g. \(d) dplyr::slice_min(d, DATEACTE,
 # n = 1) for "the first surgery", or identity for "every surgery starts its own
 # clock" (one task per selected event; output_one_row_per must then be the event
 # key). Without it, multiple matches stay a loud error: the engine never picks.
-index_event <- function(source, selector, at = "event_start",
+index_event <- function(source, selector, at = NULL,
                         select_event = NULL) {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
         stop("index_event() needs one source name.", call. = FALSE)
@@ -41,8 +44,11 @@ index_event <- function(source, selector, at = "event_start",
     if (!inherits(selector, "ee_selector")) {
         stop("index_event() needs a selector (e.g. icd10()/ccam()).", call. = FALSE)
     }
-    if (!is.character(at) || length(at) != 1L || !nzchar(at)) {
-        stop("index_event() `at` must be one date-role name.", call. = FALSE)
+    if (!is.null(at) &&
+        (!is.character(at) || length(at) != 1L || !nzchar(at))) {
+        stop("index_event() `at` must be one date column name of the source ",
+             "(e.g. \"DATEACTE\", \"DATENT\") or NULL (the source's windowing ",
+             "clock).", call. = FALSE)
     }
     if (!is.null(select_event) && !is.function(select_event)) {
         stop("index_event() select_event must be a plain function over the ",
@@ -196,6 +202,20 @@ cat_output <- function(levels, values_from = NULL, reduce = NULL) {
     .experimental_spec(
         list(kind = "categorical", levels = levels,
              values_from = values_from, reduce = reduce),
+        "ee_output_type")
+}
+
+# A DATE cohort column: the value of a hit row is its CLOCK (the same date column
+# the engine windows the channel on -- RECDATE for a doc, DATEACTE for an act,
+# DATEXAM for a lab result), and reduce picks which one survives (min = first
+# occurrence, max = last). Consumer 2026-07-07: date of the pre-op anesthesia
+# consult (a doc_channel's RECDATE, reduce = max). An `at =` override naming a
+# non-default clock column (e.g. DATSORT) is designed but waits for its consumer.
+date_output <- function(values_from = NULL, reduce = NULL) {
+    .check_payload_args("date_output()", values_from, reduce,
+                        reduce_required = TRUE)
+    .experimental_spec(
+        list(kind = "date", values_from = values_from, reduce = reduce),
         "ee_output_type")
 }
 

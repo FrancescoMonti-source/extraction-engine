@@ -1017,3 +1017,44 @@ task_id. Tests + the real-run script migrated wholesale.
 
 Suite 199/0/0. DESIGN SS7 records grain_id + run_protocol next to the cohort
 intake; the SS9 candidate-table sketch keeps task_id deliberately (internal).
+
+## doc_channel + date_output + index_event(at = <column>) -- Claude Fable (2026-07-07)
+
+**Consumer named by the owner:** date of the pre-op anesthesia consult = a
+document of type X from unite medicale ANES. Writing that spec (the disposable
+variable_spec method) revealed the bigger gap was not the date output but the
+CHANNEL: no way to say "the document's existence is the hit" without an LLM.
+
+**Landed (probe test test-slice-doc-date-output-spec.R, 2 blocks):**
+
+- `doc_channel(source, doc_meta(RECTYPE = ...))` -- the simplest channel kind:
+  metadata-selected docs_index rows, no content/Lucene/LLM. Executor
+  `measure_doc_presence` mirrors the code executor (same present/absent
+  membership contract, coverage census, group predicate over doc ids);
+  CANDIDATES carry value = the document's clock, spine kept. DESIGN SS5 table +
+  paragraph. Document attribution columns (owner-named, same session): SEJUM =
+  unite medicale, SEJUF = unite fonctionnelle -- both always present in the raw
+  docs table, both declared in DOCS_SOURCE (role-less -- the engine never
+  interprets them; doc_meta names them directly). The probe runs the consumer's
+  FULL pick, doc_meta(RECTYPE = "CR-ANES", SEJUM = "ANES"), with a wrong-unit
+  CR-ANES discriminator proving filters conjoin. NB: normalize_source PROJECTS
+  to declared cols, so load_docs_index now requires SEJUM+SEJUF in the raw docs
+  RDS -- re-extract if a cached index predates them.
+- `date_output(values_from =, reduce =)` -- a hit row's payload value is its
+  CLOCK (doc RECDATE, lab DATEXAM, code/act own start date); reduce must return
+  a Date or NA (hard error otherwise: the min()-over-code-strings silent-wrong
+  is exactly what this shape prevents). Rides both payload paths (single-channel
+  and gated/combine, incl. combine_at_level key-scoping). DESIGN SS8 output list.
+  Deliberately deferred, designed-not-wired: `at =` non-default clock override
+  (waits for a DATSORT-style consumer); text channels as date payload
+  (owner-ALLOWED 2026-07-07 -- researcher's vigilance, provenance not
+  prohibition -- but no consumer).
+- `index_event(at =)` migrated from date-role names to the source's own COLUMN
+  names (owner ruling 2026-07-07: `at` is uninterpreted indirection, raw names
+  are self-documenting; roles stay internal where the engine interprets them,
+  e.g. windowing). `at` omitted = the source's windowing clock
+  (source_time_start). select_event closures now see the native column
+  (slice_min(d, DATEACTE)). Old role spellings get a pointed migration error.
+  3 test files migrated; provenance records the RESOLVED column. DESIGN SS7.
+
+Suite 191/0/0 (184 + the probe's 7 assertions).

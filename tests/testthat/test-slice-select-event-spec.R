@@ -34,7 +34,7 @@ se_var <- function(select_event, output_one_row_per = "PATID") {
         concept = se_concept,
         output_one_row_per = output_one_row_per,
         anchor = index_event("pmsi_actes", ccam("SURG01", match = "exact"),
-                             at = "point_date",
+                             at = "DATEACTE",
                              select_event = select_event),
         window = c(0, 180),
         channels = c("act_revision"),
@@ -47,7 +47,7 @@ se_sources <- list(pmsi_actes = se_acts)
 
 test_that("select_event picks the anchoring event (first surgery starts the clock)", {
     run <- run_variable(
-        se_var(select_event = function(d) dplyr::slice_min(d, point_date, n = 1)),
+        se_var(select_event = function(d) dplyr::slice_min(d, DATEACTE, n = 1)),
         se_tasks, se_sources)
     value <- setNames(run$values$value, run$values$grain_id)
 

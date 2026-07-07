@@ -283,8 +283,11 @@ A concept channel declares a reusable source route and its defaults. Typical cha
 | `act_channel()` | act row / act hit | CCAM acts | membership hit, optional matched act rows |
 | `lab_channel()` | measurement | biology | membership hit, numeric/string value, reducers |
 | `text_channel()` | text candidate | documents | Lucene hit, regex extraction, LLM extraction |
+| `doc_channel()` | document existence | documents (docs index) | membership hit, document date (`date_output`) |
 
 The channel constructor implies the emitted signal shape. Users do not normally declare `emits` or `produces`.
+
+`doc_channel()` (landed 2026-07-07) is the simplest channel kind: the document's **existence** is the hit, selected on docs-index **metadata** via `doc_meta(RECTYPE = "CR-ANES", SEJUM = "ANES")` — exact any-of filters per column, conjoined across columns, no content read, no Lucene, no LLM. Its hit rows are docs-index rows, so they carry the identity spine and their own clock (RECDATE) like any structured row set. Consumer: date of the pre-op anesthesia consult (a document of a given type attributed to unité médicale ANES; `SEJUM` is the unité-médicale column, owner-named 2026-07-07 and declared in `DOCS_SOURCE` — role-less, since the engine never interprets it).
 
 Typed constructors stay because their signatures are the honest home for type-specific parameters (a text channel's extraction definition, a lab channel's value predicate); most nonsense combinations are unwritable at authoring time. They are definers: they may appear in a `concept_spec` or inline in a variable's channel list (§6), and wherever they appear they bind location. Activations never do.
 
@@ -617,18 +620,18 @@ Two epistemology flags researchers must set knowingly (they are rules, not defec
 An anchor is either a task column (`anchor = "T0"`, one date supplied per task row) or derived from the data:
 
 ``` r
-anchor = index_event("pmsi_actes", ccam(SPINAL_SURGERY_ACTS), at = "point_date")
+anchor = index_event("pmsi_actes", ccam(SPINAL_SURGERY_ACTS), at = "DATEACTE")
 ```
 
-Per subject, find the rows in `source` matching `selector`, and anchor at the `at` date role (`event_start` / `event_end` for interval sources, `point_date` for point sources — an act is a point event). Resolution is a **pass** that runs before windowing and injects per-subject anchor dates into the task frame; it is not an inter-channel dependency graph.
+Per subject, find the rows in `source` matching `selector`, and anchor at the `at` date **column** — the source's own spelling (`"DATEACTE"`, `"DATENT"`, `"DATSORT"`); omitted, it defaults to the source's windowing clock. (Owner ruling 2026-07-07: `at` is not interpreted by the engine, so role vocabulary there was pure indirection — raw column names are self-documenting, and the registry's roles stay internal where the engine does interpret them, e.g. windowing. Portability of specs across HDWs is not a goal: redsan already absorbs HDW changes.) Resolution is a **pass** that runs before windowing and injects per-subject anchor dates into the task frame; it is not an inter-channel dependency graph.
 
-Match-multiplicity control is a plain closure over the matched rows (the wrapper razor — no `candidate_selection()`-style wrapper):
+Match-multiplicity control is a plain closure over the matched rows (the wrapper razor — no `candidate_selection()`-style wrapper); the closure sees the date under the same column name:
 
 ``` r
-select_event = \(d) dplyr::slice_min(d, point_date, n = 1)   # earliest
-select_event = \(d) dplyr::slice_max(d, point_date, n = 1)   # latest
-select_event = \(d) dplyr::arrange(d, point_date)[2, ]       # exactly the 2nd
-select_event = identity                                      # all events
+select_event = \(d) dplyr::slice_min(d, DATEACTE, n = 1)   # earliest
+select_event = \(d) dplyr::slice_max(d, DATEACTE, n = 1)   # latest
+select_event = \(d) dplyr::arrange(d, DATEACTE)[2, ]       # exactly the 2nd
+select_event = identity                                    # all events
 # omitted -> single match or build-time ERROR (fail-closed default)
 ```
 
@@ -749,6 +752,19 @@ cat_output(levels, values_from =, reduce =)
                  as num_output; the reduced result must be one of `levels`.
                  Without a payload spec, the level comes from a text channel's
                  accepted extraction instead (documented status)
+date_output(values_from =, reduce =)
+                 date value: a hit row's payload value is its CLOCK -- the same
+                 date column the engine windowed the row on (doc RECDATE, lab
+                 DATEXAM, a code/act row's own start date) -- and `reduce` picks
+                 which survives (min = first occurrence, max = last). The reduce
+                 must return a Date (or NA): a silent coercion would be exactly
+                 the min()-over-code-strings failure this shape exists to prevent.
+                 (Landed 2026-07-07; consumer: date of the pre-op anesthesia
+                 consult. An `at =` override naming a non-default clock column,
+                 e.g. DATSORT, is designed but waits for its consumer. Text
+                 channels as date payload are owner-allowed -- a document date is
+                 the researcher's call, guarded by provenance not prohibition --
+                 and also wait for their consumer.)
 str_output()     unconstrained string
 struct_output()  fixed-schema multi-field record; one task -> one record
 ```
@@ -1678,8 +1694,8 @@ ssi_6mo_post_spinal <- variable_spec(
   channels = c("text_ssi", "cim10_ssi", "act_revision"),
 
   anchor = index_event("pmsi_actes", ccam(SPINAL_SURGERY_ACTS),  # placeholder set
-                       at = "point_date",
-                       select_event = \(d) dplyr::slice_min(d, point_date, n = 1)),
+                       at = "DATEACTE",
+                       select_event = \(d) dplyr::slice_min(d, DATEACTE, n = 1)),
   window = c(0, 180),
 
   combine_channels   = "text_ssi & (cim10_ssi | act_revision)",  # researcher's rule;
