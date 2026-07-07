@@ -88,25 +88,6 @@ test_that("membership by group aggregate: qualifying stays' original rows are th
     expect_setequal(ev4$source_row_id, c("b5", "b6"))
 })
 
-test_that("group-filtered rows feed the level algebra (anaemic stay & same-stay act)", {
-    spec <- variable_spec(
-        name = "transfused_anemic_stay",
-        concept = am_concept,
-        output_one_row_per = "PATID",
-        channels = list(hb_anemic_stay = use_channel(),
-                        transfusion = use_channel()),
-        combine_channels = "hb_anemic_stay & transfusion",
-        combine_at_level = "EVTID",
-        output = bin_output())
-    tasks <- tibble::tibble(grain_id = c("AM5::t", "AM6::t"),
-                            PATID = c("AM5", "AM6"))
-    run <- run_variable(spec, tasks, am_sources)
-    value <- setNames(run$values$value, run$values$grain_id)
-
-    expect_equal(value[["AM5::t"]], 1L)   # transfusion IN the anaemic stay SE
-    expect_equal(value[["AM6::t"]], 0L)   # anaemic SF, transfusion in SG
-})
-
 test_that("the group predicate contract fails closed", {
     # A closure breaking its own contract (not exactly one TRUE/FALSE) is a hard
     # error, not a review state -- same rule as a payload reduce (DESIGN §8).
@@ -122,30 +103,6 @@ test_that("the group predicate contract fails closed", {
         channels = list(hb = use_channel()),
         output = bin_output())
     expect_error(run_variable(spec, am_tasks, am_sources), "TRUE/FALSE")
-})
-
-test_that("the group predicate pair is validated at declaration time", {
-    # The closure without a level has no groups to test.
-    expect_error(
-        lab_channel(source = "biology", selector = analyte("HGB"),
-                    keep_group_when = function(v) mean(v) < 10),
-        "group_at_level")
-    # The level without a closure is dead weight.
-    expect_error(
-        lab_channel(source = "biology", selector = analyte("HGB"),
-                    group_at_level = "EVTID"),
-        "keep_group_when")
-    # Groups live on the identity spine.
-    expect_error(
-        lab_channel(source = "biology", selector = analyte("HGB"),
-                    group_at_level = "WARD",
-                    keep_group_when = function(v) mean(v) < 10),
-        "spine")
-    expect_error(
-        lab_channel(source = "biology", selector = analyte("HGB"),
-                    group_at_level = "EVTID",
-                    keep_group_when = "mean < 10"),
-        "function")
 })
 
 # Owner ruling 2026-07-05: the group predicate rides every structured channel

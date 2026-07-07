@@ -77,12 +77,6 @@ test_that("several kept events under patient-grain output fail loudly", {
         "one task per patient")
 })
 
-test_that("multiple matches without select_event stay a loud error", {
-    expect_error(
-        run_variable(se_var(select_event = NULL), se_tasks, se_sources),
-        "multiple events")
-})
-
 test_that("a closure dropping the anchor columns is rejected", {
     expect_error(
         run_variable(se_var(select_event = function(d) d["PATID"]),

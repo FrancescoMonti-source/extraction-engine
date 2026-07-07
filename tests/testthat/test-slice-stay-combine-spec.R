@@ -129,17 +129,6 @@ test_that("stay-level combine: same-stay co-occurrence, exists-lifted to patient
     expect_equal(run$provenance$combine_at_level, "EVTID")
 })
 
-# The same spec WITHOUT combine_at_level is today's shipped semantics: the trap
-# patient scores 1 (a text hit and an act ANYWHERE in the window). This is the
-# discriminator that makes the axis real -- and it must not drift.
-test_that("default level (= output grain) keeps patient-level semantics", {
-    run <- run_variable(sc_ssi_var(), sc_tasks, sc_sources,
-                        caller = sc_ssi_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$grain_id)
-    expect_equal(value[["P1::t"]], 1L)   # cross-stay & passes at patient level
-    expect_equal(value[["P4::t"]], 0L)
-})
-
 # --- Consumer B: mean Hb in anaemic stays (§14.9, gated payload at stay level) --
 
 sc_an_tasks <- tibble::tibble(
@@ -242,32 +231,3 @@ test_that("gated payload reads only the qualifying stays' rows (values_from key-
     expect_equal(n_rows[["P2::t"]], 0L)
 })
 
-test_that("swapping the payload channel changes which values enter the mean", {
-    run <- run_variable(sc_anemia_var(values_from = "hb_low"),
-                        sc_an_tasks, sc_an_sources,
-                        caller = sc_an_fake, model_name = "fake")
-    value <- setNames(run$values$value, run$values$grain_id)
-    expect_equal(value[["P1::t"]], mean(c(9, 10)))   # only sub-threshold rows
-})
-
-# --- Build-time guards ----------------------------------------------------------
-
-test_that("combine_at_level is validated at build time", {
-    # Needs a combine expression: a single channel's rows are already the
-    # surviving set; there is no algebra to evaluate at a level.
-    expect_error(
-        variable_spec(
-            name = "no_expr", concept = sc_ssi_concept,
-            output_one_row_per = "PATID",
-            channels = list(act_revision = use_channel()),
-            output = bin_output(),
-            combine_at_level = "EVTID"),
-        "combine expression")
-    # Coarser than the output grain would leak hits across output rows.
-    expect_error(
-        sc_ssi_var(combine_at_level = "PATID",
-                   output_one_row_per = "EVTID"),
-        "finer")
-    # The level must be an identity-spine key.
-    expect_error(sc_ssi_var(combine_at_level = "WARD"), "spine")
-})

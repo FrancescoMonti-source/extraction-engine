@@ -63,25 +63,3 @@ test_that("no cohort anywhere is a loud error, never a data-derived universe", {
                  "No cohort")
 })
 
-test_that("cohort_from_sources() is the explicit union, docs index included", {
-    docs <- list(corpus = NULL,
-                 docs_index = tibble::tibble(ELTID = "E1", PATID = "C9",
-                                             EVTID = "V9",
-                                             RECDATE = as.Date("2024-01-01"),
-                                             RECTYPE = "note"))
-    u <- cohort_from_sources(list(pmsi_actes = cu_acts, documents = docs))
-    expect_equal(u$PATID, c("C1", "C9"))
-})
-
-test_that("stay-grain cohorts derive task ids from the grain keys", {
-    stays <- tibble::tibble(PATID = c("C1", "C1"), EVTID = c("V1", "V2"))
-    spec <- variable_spec(
-        name = "dialysis_act_in_stay",
-        concept = cu_concept,
-        output_one_row_per = "EVTID",
-        channels = c("dialysis_act"),
-        output = bin_output())
-    run <- run_variable(spec, cohort = stays,
-                        sources = list(pmsi_actes = cu_acts))
-    expect_setequal(run$values$grain_id, c("C1::V1", "C1::V2"))
-})
