@@ -55,7 +55,7 @@ rw_event_concept <- function() {
             required_roles = c("subject_id", "event_id", "point_date", "text",
                                "source_item_id"),
             linkage = c("subject", "event"), extractor = definition,
-            default_method = llm_after_lucene(function(x) x))))
+            default_method = llm_after_lucene())))
 }
 
 rw_event_variable <- function(anchor = NULL, window = NULL) {

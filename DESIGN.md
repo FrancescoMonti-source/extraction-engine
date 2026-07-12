@@ -50,10 +50,14 @@ The existing semantics are preserved:
 - evidence links resolve to native source coordinates;
 - provenance records the compiled definition and relevant runtime facts.
 
-Text measurement accepts an `ellmer` Chat supplied by the caller. Each task uses
-isolated conversation state. Provider, model, parameters, call status, and
-available truncation diagnostics are audit facts. Model output remains
-review-by-design; the engine does not claim model accuracy.
+A text variable declares its Ollama model and model parameters. `run_variable()`
+constructs one base `ellmer` Chat for that variable; an explicitly supplied Chat
+remains a test/debug override. Each task uses an isolated clone of that base Chat.
+`run_protocol()` executes variables sequentially in list order, completing every
+task row of one variable before resolving the next variable's model. Provider,
+model, parameters, call status, and available truncation diagnostics are audit
+facts. Model output remains review-by-design; the engine does not claim model
+accuracy.
 
 ## Non-goals
 

@@ -85,7 +85,7 @@ sc_ssi_concept <- concept_spec(
                 system_prompt = paste(
                     "Identify only an explicitly documented surgical site",
                     "infection. Do not infer absence from silence.")),
-            default_method = llm_after_lucene(function(x) x),
+            default_method = llm_after_lucene(),
             linkage = "subject"),
         cim10_ssi = code_channel(
             source = "pmsi_diag",
@@ -185,7 +185,7 @@ sc_anemia_concept <- concept_spec(
                 system_prompt = paste(
                     "Identify only explicitly documented anaemia.",
                     "Do not infer absence from silence.")),
-            default_method = llm_after_lucene(function(x) x),
+            default_method = llm_after_lucene(),
             linkage = "subject"),
         hb_low = lab_channel(
             source = "biology",

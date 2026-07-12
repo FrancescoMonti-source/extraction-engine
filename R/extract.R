@@ -9,17 +9,17 @@
 # the provenance assertion, the four views, and a generic physician review view.
 # =============================================================================
 
-# A task definition bundles everything variable-specific.
+# An LLM task bundles everything variable-specific.
 # parser(result, snippet_ids) must return:
 #   list(fields = tibble(field, status, normalized_value, evidence_ids (list-col),
 #                        field_validity in {"valid","invalid"}, validity_reason),
 #        summary = scalar character or NA)
-new_task_definition <- function(name, system_prompt, type_builder, prompt_builder,
-                                parser, summary_field = NULL, summary_required = FALSE) {
+llm_task <- function(name, system_prompt, type_builder, prompt_builder,
+                     parser, summary_field = NULL, summary_required = FALSE) {
     if (!is.character(name) || length(name) != 1L || !nzchar(name) ||
         !is.character(system_prompt) || length(system_prompt) != 1L ||
         !nzchar(system_prompt)) {
-        stop("new_task_definition() requires non-empty name and system_prompt.",
+        stop("llm_task() requires non-empty name and system_prompt.",
              call. = FALSE)
     }
     for (value in list(type_builder = type_builder,
@@ -38,7 +38,7 @@ new_task_definition <- function(name, system_prompt, type_builder, prompt_builde
              type_builder = type_builder, prompt_builder = prompt_builder,
              parser = parser, summary_field = summary_field,
              summary_required = summary_required),
-        class = c("ee_task_definition", "list"))
+        class = c("ee_llm_task", "list"))
 }
 
 scalar_present <- function(x) {
@@ -119,7 +119,7 @@ binary_presence_text_definition <- function(name, status_key, field, system_prom
             citation_warning_reason = cite$citation_warning_reason)
         list(fields = fields, summary = NA_character_)
     }
-    new_task_definition(
+    llm_task(
         name = name,
         system_prompt = system_prompt,
         type_builder = function(ids) {
@@ -149,6 +149,30 @@ binary_presence_text_definition <- function(name, status_key, field, system_prom
 }
 
 APPROVED_MODELS <- c("gemma3:4b")
+
+# A variable owns its model choice; the engine owns transport construction.
+# Kept behind a tiny seam so package tests can verify orchestration without
+# starting a real Ollama request.
+.create_ollama_chat <- function(model, params) {
+    ellmer::chat_ollama(model = model, params = params)
+}
+
+.variable_needs_chat <- function(variable) {
+    any(vapply(variable$channels, function(channel) {
+        identical(channel$type, "text")
+    }, logical(1)))
+}
+
+.resolve_variable_chat <- function(variable, chat) {
+    if (!is.null(chat) || !.variable_needs_chat(variable)) return(chat)
+    if (is.null(variable$model)) {
+        stop("Text variable '", variable$name,
+             "' must declare model = <Ollama model> in variable_spec() ",
+             "or receive chat = <ellmer Chat> in run_variable().",
+             call. = FALSE)
+    }
+    .create_ollama_chat(variable$model, variable$model_params)
+}
 
 .chat_metadata <- function(chat) {
     if (is.null(chat)) {
@@ -258,21 +282,21 @@ APPROVED_MODELS <- c("gemma3:4b")
 .select_task_candidates <- function(selector, rows, task_id) {
     selected <- selector(rows)
     if (!is.data.frame(selected) || !all(c("task_id", "snippet_id") %in% names(selected))) {
-        stop("llm_after_lucene() candidates must return candidate rows.",
+        stop("Post-Lucene candidate selection must return candidate rows.",
              call. = FALSE)
     }
     if (!nrow(selected)) {
-        stop("llm_after_lucene() candidates selected no row for the current task.",
+        stop("Post-Lucene candidate selection kept no row for the current task.",
              call. = FALSE)
     }
     ids <- as.character(selected$snippet_id)
     if (anyNA(ids) || anyDuplicated(ids)) {
-        stop("llm_after_lucene() candidates returned missing or duplicate snippet ids.",
+        stop("Post-Lucene candidate selection returned missing or duplicate snippet ids.",
              call. = FALSE)
     }
     index <- match(ids, as.character(rows$snippet_id))
     if (anyNA(index) || any(as.character(selected$task_id) != task_id)) {
-        stop("llm_after_lucene() candidates may only select/reorder supplied rows.",
+        stop("Post-Lucene candidate selection may only select/reorder supplied rows.",
              call. = FALSE)
     }
     rows[index, , drop = FALSE]
@@ -301,7 +325,7 @@ APPROVED_MODELS <- c("gemma3:4b")
 run_extraction <- function(coverage, candidates, definition, chat,
                            candidate_selector, query = NA_character_,
                            sample_n = 0L) {
-    .check_task_definition(definition)
+    .check_llm_task(definition)
     if (!is.function(candidate_selector)) {
         stop("candidate_selector must be a function.", call. = FALSE)
     }

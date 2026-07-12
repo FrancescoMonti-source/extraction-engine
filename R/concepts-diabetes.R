@@ -68,7 +68,7 @@ diabetes_baseline_status <- function(
         channels = list(
             pmsi_diag_e10_e14 = use_channel(),
             text_diabetes_mentions = use_channel(
-                method = llm_after_lucene(function(x) x))),
+                method = llm_after_lucene())),
         output = bin_output(),
         combine_channels = any_positive())
 }

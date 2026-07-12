@@ -49,11 +49,13 @@ analyte_value(codes, gt = NULL, lt = NULL, unit = NULL, keep_when = NULL)
 \item{selector}{A selector compatible with the typed channel.}
 \item{native_grain}{Optional descriptive native grain.}
 \item{required_roles}{Source roles the authored definition expects.}
-\item{linkage}{Relational linkage components, \code{"subject"} and optionally
-\code{"event"}.}
+\item{linkage}{Relational eligibility scope. \code{"subject"} joins source rows
+to a task by \code{PATID}; including \code{"event"} joins by
+\code{PATID + EVTID}. It does not itself group snippets: the variable's output
+grain determines the task receiving those eligible rows.}
 \item{group_at_level}{Optional identity-spine grouping level.}
 \item{keep_group_when}{A plain function returning one logical per group.}
-\item{extractor}{A task definition for structured text extraction.}
+\item{extractor}{An explicit LLM task created with \code{llm_task()}.}
 \item{default_method}{An optional default \code{llm_after_lucene()} method.}
 \item{pattern,codes}{Code or analyte values.}
 \item{match}{Exact or regular-expression matching.}

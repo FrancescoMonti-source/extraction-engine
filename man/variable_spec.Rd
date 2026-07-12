@@ -17,7 +17,9 @@ variable_spec(
   channels = list(),
   output = NULL,
   combine_channels = NULL,
-  combine_at_level = NULL
+  combine_at_level = NULL,
+  model = NULL,
+  model_params = list()
 )
 
 use_channel(method = NULL, extractor = NULL, selector = NULL,
@@ -42,6 +44,11 @@ anchor.}
 \item{combine_channels}{A hit-set expression string or combiner.}
 \item{combine_at_level}{Optional identity-spine key at which to evaluate a
 multi-channel expression.}
+\item{model}{Optional Ollama model name owned by this variable. It is required
+for automatic execution of selected text channels unless \code{run_variable()}
+receives an explicit \pkg{ellmer} Chat override.}
+\item{model_params}{Named list of parameters used when constructing this
+variable's Ollama Chat.}
 \item{method,extractor,selector}{Optional local replacements for an activated
 channel. A selector replaces the complete inherited selector.}
 \item{keep_when}{Optional row predicate that extends an inherited analyte

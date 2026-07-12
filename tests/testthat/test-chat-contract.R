@@ -13,17 +13,19 @@ chat_sources <- list(documents = list(
     coverage = tibble::tibble(grain_id = "CHAT1", coverage_state = "candidate"),
     candidates = chat_candidates))
 
-chat_variable <- function() {
+chat_variable <- function(name = "chat_contract", model = NULL,
+                          model_params = list()) {
     concept <- smoking_concept_spec()
     variable_spec(
-        name = "chat_contract", concept = concept,
+        name = name, concept = concept,
         output_one_row_per = "PATID", anchor = "anchor_date",
         window = c(-30, 0),
         channels = list(text_smoking_mentions = use_channel(
-            method = llm_after_lucene(
+            method = llm_after_lucene(select_candidates =
                 function(rows) rows[rows$snippet_id == "S002", , drop = FALSE]),
             extractor = smoking_definition())),
-        output = cat_output(SMOKING_STATUSES))
+        output = cat_output(SMOKING_STATUSES),
+        model = model, model_params = model_params)
 }
 
 test_that("direct Chat injection is isolated and records params", {
@@ -71,4 +73,56 @@ test_that("model errors retain truncation diagnostics", {
     expect_equal(attempt$inferred_finish_reason, "length")
     expect_match(attempt$partial_response, "smoking_status", fixed = TRUE)
     expect_equal(run$channel_status$status, "error")
+})
+
+test_that("run_protocol creates one declared chat per variable, not per row", {
+    # Orchestration contract: variables run sequentially. Switching model once
+    # per variable is acceptable; constructing a transport per cohort row is not.
+    tasks <- tibble::tibble(
+        grain_id = c("AUTO1", "AUTO2"), PATID = c("P1", "P2"),
+        anchor_date = as.Date("2025-01-15"))
+    candidates <- tibble::tibble(
+        grain_id = c("AUTO1", "AUTO2"), snippet_id = "S002",
+        hit_ref = c("D1::1", "D2::1"), ELTID = c("D1", "D2"),
+        EVTID = c("E1", "E2"), sentence = 1L,
+        hit_text = "KEEP", snippet_text = "KEEP",
+        RECDATE = as.Date("2025-01-10"), RECTYPE = "note")
+    sources <- list(documents = list(
+        coverage = tibble::tibble(
+            grain_id = tasks$grain_id, coverage_state = "candidate"),
+        candidates = candidates))
+
+    created <- character()
+    n_calls <- 0L
+    responder <- function(...) {
+        n_calls <<- n_calls + 1L
+        list(smoking_status = "actif", evidence_ids = list("S002"),
+             decision_note = "documented")
+    }
+    testthat::local_mocked_bindings(
+        .create_ollama_chat = function(model, params) {
+            created <<- c(created, model)
+            fake_chat(responder, model = model, params = params)
+        },
+        .package = "extractionengine")
+
+    variables <- list(
+        small = chat_variable(
+            name = "small", model = "model-small",
+            model_params = list(temperature = 0, seed = 1L)),
+        large = chat_variable(
+            name = "large", model = "model-large",
+            model_params = list(temperature = 0, seed = 2L)))
+    runs <- run_protocol(variables, cohort = tasks, sources = sources)
+
+    expect_equal(created, c("model-small", "model-large"))
+    expect_equal(n_calls, 4L) # two task rows for each of two variables
+    expect_equal(runs$small$provenance$model, "model-small")
+    expect_equal(runs$large$provenance$model, "model-large")
+})
+
+test_that("a text variable needs a declared model or an explicit Chat", {
+    expect_error(
+        run_variable(chat_variable(), chat_tasks, chat_sources),
+        "must declare model")
 })

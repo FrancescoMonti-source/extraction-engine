@@ -551,7 +551,7 @@
                 !identical(method$kind, "llm_after_lucene") ||
                 !is.function(method$candidates)) {
                 stop("Text channel '", channel_name,
-                     "' requires llm_after_lucene(candidates = <function>).",
+                     "' requires llm_after_lucene().",
                      call. = FALSE)
             }
             text_inputs <- .resolve_text_inputs(sources[[source]], channel_def,
@@ -1274,7 +1274,12 @@
             method = if (inherits(ch$method, "ee_extraction_method")) {
                 list(
                     kind = ch$method$kind,
-                    candidates = paste(deparse(ch$method$candidates), collapse = " "))
+                    candidate_policy = ch$method$candidate_policy,
+                    max_candidates = ch$method$max_candidates,
+                    select_candidates = if (identical(
+                        ch$method$candidate_policy, "custom")) {
+                        paste(deparse(ch$method$candidates), collapse = " ")
+                    } else NULL)
             } else NULL,
             # Aggregate membership predicate (§16.7): the executed group rule,
             # serializable -- level + deparsed closure, like the output's reduce.
@@ -1445,6 +1450,11 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
     # "PATID" must fail loudly (DESIGN §7).
     tasks <- .resolve_anchor(variable, tasks, sources)
     grain_keys <- .check_output_grain(variable, tasks)
+    # Resolve transport ONCE per variable. run_protocol() iterates variables in
+    # list order, and all of this variable's task rows are processed before the
+    # next model can be selected. Per-task Chat clones isolate conversation state;
+    # they keep the same provider/model and do not reconfigure Ollama.
+    chat <- .resolve_variable_chat(variable, chat)
     # Scoping rule (DESIGN §7): an explicit event linkage always constrains rows
     # to PATID + EVTID. Otherwise a declared window gathers per subject inside
     # each task's anchored window; with no window, the output grain is the scope.
@@ -1541,7 +1551,9 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
 
 # The protocol run: every variable of a study over ONE declared cohort laid
 # down with the data (sources$cohort), so all outputs share the denominator by
-# construction. Today a thin orchestrator; study-level duties (shared channel
+# construction. Variables execute sequentially in list order: each run resolves
+# its own model once, then processes all of that variable's rows before the next
+# variable. Today a thin orchestrator; study-level duties (shared channel
 # caching, one combined output table, study provenance bundle) wait for their
 # consumers.
 run_protocol <- function(variables, cohort = NULL, sources = NULL,

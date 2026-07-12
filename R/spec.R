@@ -286,7 +286,7 @@ use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
         stop("use_channel() method must be created with llm_after_lucene().",
              call. = FALSE)
     }
-    if (!is.null(extractor)) .check_task_definition(extractor)
+    if (!is.null(extractor)) .check_llm_task(extractor)
     if (!is.null(selector) && !inherits(selector, "ee_selector")) {
         stop("use_channel() selector must be created with a selector constructor.",
              call. = FALSE)
@@ -334,7 +334,8 @@ use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
 variable_spec <- function(name, concept, output_one_row_per = "PATID",
                            anchor = NULL, window = NULL, channels = list(),
                            output = NULL, combine_channels = NULL,
-                           combine_at_level = NULL) {
+                           combine_at_level = NULL, model = NULL,
+                           model_params = list()) {
     if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
         stop("variable_spec() requires one non-empty name.", call. = FALSE)
     }
@@ -343,6 +344,27 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
     }
     if (!inherits(output, "ee_output_type")) {
         stop("variable_spec() output must be created with an output constructor.",
+             call. = FALSE)
+    }
+    if (!is.null(model) &&
+        (!is.character(model) || length(model) != 1L || is.na(model) ||
+         !nzchar(model))) {
+        stop("variable_spec() model must be one non-empty model name or NULL.",
+             call. = FALSE)
+    }
+    if (is.null(model_params)) model_params <- list()
+    if (!is.list(model_params)) {
+        stop("variable_spec() model_params must be a named list.",
+             call. = FALSE)
+    }
+    if (length(model_params) &&
+        (is.null(names(model_params)) || anyNA(names(model_params)) ||
+         any(!nzchar(names(model_params))) || anyDuplicated(names(model_params)))) {
+        stop("variable_spec() model_params must be a named list with unique ",
+             "non-empty names.", call. = FALSE)
+    }
+    if (is.null(model) && length(model_params)) {
+        stop("variable_spec() model_params require model = <model name>.",
              call. = FALSE)
     }
     if (!is.null(anchor) && !inherits(anchor, "ee_index_event") &&
@@ -371,6 +393,15 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
         stop("Selected channel(s) not declared by concept_spec or inline: ",
              paste(unknown, collapse = ", "), call. = FALSE)
     }
+    catalog <- c(concept$channels, inline_channels)
+    has_text_channel <- any(vapply(
+        names(channels),
+        function(channel_name) identical(catalog[[channel_name]]$type, "text"),
+        logical(1)))
+    if (!is.null(model) && !has_text_channel) {
+        stop("variable_spec() model has no effect without a selected text channel.",
+             call. = FALSE)
+    }
 
     window <- .as_window(window)
     if (!is.null(window) && is.null(anchor)) {
@@ -394,7 +425,8 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
               anchor = anchor,
               window = window, channels = channels,
               inline_channels = inline_channels, output = output,
-              combine = combine, combine_at_level = combine_at_level),
+              combine = combine, combine_at_level = combine_at_level,
+              model = model, model_params = model_params),
         "ee_variable_spec")
 }
 
@@ -470,6 +502,17 @@ inspect.default <- function(x, ...) {
     invisible(NULL)
 }
 
+.print_linkage <- function(linkage, indent = "    ") {
+    if (!length(linkage)) return(invisible(NULL))
+    scope <- if ("event" %in% linkage) {
+        "same PATID + EVTID"
+    } else {
+        "same PATID"
+    }
+    cat(indent, "scope: ", scope, "\n", sep = "")
+    invisible(NULL)
+}
+
 print.ee_concept_spec <- function(x, ...) {
     cat("Concept: ", x$name, "\n", sep = "")
     cat("Channels:\n")
@@ -479,6 +522,7 @@ print.ee_concept_spec <- function(x, ...) {
         cat("    type: ", channel$type, "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
+        .print_linkage(channel$linkage)
     }
     invisible(x)
 }
@@ -489,6 +533,9 @@ print.ee_variable_spec <- function(x, ...) {
     cat("Concept: ", resolved$concept, "\n", sep = "")
     cat("Output: ", resolved$output$kind, ", one row per ",
         resolved$output_one_row_per, "\n", sep = "")
+    if (!is.null(resolved$model)) {
+        cat("Model: ", resolved$model, "\n", sep = "")
+    }
     if (is.null(resolved$window)) {
         cat("Window: whole available history at the declared grain\n")
     } else {
@@ -503,6 +550,26 @@ print.ee_variable_spec <- function(x, ...) {
         cat("  ", name, "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
+        .print_linkage(channel$linkage)
+        if (inherits(channel$method, "ee_extraction_method")) {
+            candidate_rule <- switch(
+                channel$method$candidate_policy,
+                all = "all matches",
+                first_n = paste("first", channel$method$max_candidates,
+                                "matches"),
+                custom = paste("custom selector:",
+                               .one_line(channel$method$candidates)),
+                "unknown policy")
+            cat("    candidates after Lucene: ",
+                candidate_rule, "\n", sep = "")
+        }
+        if (inherits(channel$extractor, "ee_llm_task")) {
+            instruction <- gsub("\\s+", " ", channel$extractor$system_prompt)
+            cat("    llm task: ", channel$extractor$name, "\n", sep = "")
+            cat("    instruction: ", trimws(instruction), "\n", sep = "")
+            cat("    ellmer type: ",
+                .one_line(channel$extractor$type_builder), "\n", sep = "")
+        }
     }
     combine <- resolved$combine_rule
     if (length(combine) == 1L && !is.na(combine)) {
@@ -641,6 +708,8 @@ resolve_variable_spec <- function(variable) {
             combine = variable$combine,
             combine_rule = combine_rule,
             combine_at_level = variable$combine_at_level,
+            model = variable$model,
+            model_params = variable$model_params,
             channels = resolved_channels),
         "ee_resolved_variable_spec")
 }

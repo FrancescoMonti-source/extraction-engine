@@ -138,15 +138,44 @@ hit_set_difference <- function(include, exclude = character()) {
 }
 
 # --- text extraction methods --------------------------------------------------
-# Candidate choice is a plain R function over one task's standardized candidate
-# rows. It must be explicit because ordering/limiting is part of the executed rule.
-llm_after_lucene <- function(candidates = NULL) {
-    if (!is.function(candidates)) {
-        stop("llm_after_lucene() requires candidates = <plain function>.",
+# The common path is intentionally declarative: no arguments means every Lucene
+# match. An optional maximum keeps the first N rows in the engine's deterministic
+# candidate order. A custom selector remains available, but is named as such so a
+# study author can see that it changes evidence selection.
+llm_after_lucene <- function(max_candidates = NULL, select_candidates = NULL) {
+    if (!is.null(max_candidates)) {
+        if (!is.numeric(max_candidates) || length(max_candidates) != 1L ||
+            is.na(max_candidates) || !is.finite(max_candidates) ||
+            max_candidates < 1 || max_candidates != floor(max_candidates) ||
+            max_candidates > .Machine$integer.max) {
+            stop("llm_after_lucene() max_candidates must be one positive integer.",
+                 call. = FALSE)
+        }
+        max_candidates <- as.integer(max_candidates)
+    }
+    if (!is.null(select_candidates) && !is.function(select_candidates)) {
+        stop("llm_after_lucene() select_candidates must be a plain function.",
              call. = FALSE)
     }
-    .new_spec(list(kind = "llm_after_lucene", candidates = candidates),
-                       "ee_extraction_method")
+    if (!is.null(max_candidates) && !is.null(select_candidates)) {
+        stop("llm_after_lucene() takes either max_candidates or ",
+             "select_candidates, not both.", call. = FALSE)
+    }
+
+    if (is.function(select_candidates)) {
+        policy <- "custom"
+        selector <- select_candidates
+    } else if (!is.null(max_candidates)) {
+        policy <- "first_n"
+        selector <- function(rows) utils::head(rows, max_candidates)
+    } else {
+        policy <- "all"
+        selector <- base::identity
+    }
+    .new_spec(
+        list(kind = "llm_after_lucene", candidate_policy = policy,
+             max_candidates = max_candidates, candidates = selector),
+        "ee_extraction_method")
 }
 
 # --- output (cohort column) types ---------------------------------------------

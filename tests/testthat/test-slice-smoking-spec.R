@@ -119,7 +119,7 @@ test_that("categorical assembly rejects a valid value outside declared levels", 
         concept = smoking_concept_spec(),
         anchor = "anchor_date", window = c(-365, 7),
         channels = list(text_smoking_mentions = use_channel(
-            method = llm_after_lucene(function(x) x),
+            method = llm_after_lucene(),
             extractor = smoking_definition())),
         output = cat_output("sevre"))
 

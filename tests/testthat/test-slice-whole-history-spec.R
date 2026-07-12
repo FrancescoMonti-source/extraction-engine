@@ -84,7 +84,7 @@ wht_variable <- function() {
         concept = diabetes_concept_spec(),
         output_one_row_per = "PATID", anchor = NULL, window = NULL,   # whole history
         channels = list(text_diabetes_mentions =
-                            use_channel(method = llm_after_lucene(function(x) x))),
+                            use_channel(method = llm_after_lucene())),
         output = bin_output())                            # single channel -> membership
 }
 

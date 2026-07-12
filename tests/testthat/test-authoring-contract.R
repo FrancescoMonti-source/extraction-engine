@@ -3,7 +3,15 @@ test_that("authoring constructors reject unread arguments", {
 
     expect_error(use_channel(prompt = "ignored"), "unused argument")
     expect_error(use_channel(method = 42), "llm_after_lucene")
-    expect_error(llm_after_lucene(), "requires candidates")
+    expect_equal(llm_after_lucene()$candidate_policy, "all")
+    capped <- llm_after_lucene(max_candidates = 10)
+    expect_equal(capped$max_candidates, 10L)
+    expect_equal(nrow(capped$candidates(data.frame(x = 1:20))), 10L)
+    expect_error(llm_after_lucene(max_candidates = 0), "positive integer")
+    expect_error(
+        llm_after_lucene(
+            max_candidates = 10, select_candidates = identity),
+        "either max_candidates or select_candidates")
     expect_error(
         code_channel("pmsi_diag", selector, prompt = "ignored"),
         "unused argument")
@@ -16,7 +24,7 @@ test_that("output constructors require unique explicit contracts", {
     expect_error(struct_output(character()), "unique non-empty fields")
     expect_error(struct_output(c("field", "field")), "unique non-empty fields")
     expect_error(
-        new_task_definition(
+        llm_task(
             "probe", "system", function(...) NULL, function(...) "prompt",
             function(...) NULL, summary_required = 1),
         "summary_required must be TRUE or FALSE")
@@ -80,4 +88,50 @@ test_that("authored concept and variable specs print as concise study definition
     expect_match(variable_text, "Study variable: anaemia", fixed = TRUE)
     expect_match(variable_text, "Output: binary, one row per PATID", fixed = TRUE)
     expect_match(variable_text, "rule:", fixed = TRUE)
+})
+
+test_that("a text variable owns its model configuration", {
+    definition <- binary_presence_text_definition(
+        name = "mention", status_key = "mention_status", field = "mention",
+        system_prompt = "Extract only documented mentions.")
+    concept <- concept_spec("text mention", list(
+        mentions = text_channel(
+            "documents", lucene_query("term*"), extractor = definition,
+            default_method = llm_after_lucene(), linkage = "event")))
+    variable <- variable_spec(
+        "mention_enum", concept,
+        channels = list(mentions = use_channel()), output = bin_output(),
+        model = "gemma3:4b",
+        model_params = list(temperature = 0, seed = 42L))
+
+    compiled <- resolve_variable_spec(variable)
+    printed <- paste(capture.output(print(variable)), collapse = "\n")
+    expect_equal(compiled$model, "gemma3:4b")
+    expect_equal(compiled$model_params$seed, 42L)
+    expect_match(printed, "Model: gemma3:4b", fixed = TRUE)
+    expect_match(printed, "scope: same PATID + EVTID", fixed = TRUE)
+    expect_match(printed, "candidates after Lucene: all matches",
+                 fixed = TRUE)
+    expect_match(printed, "llm task: mention", fixed = TRUE)
+    expect_match(printed, "ellmer type:", fixed = TRUE)
+
+    expect_error(
+        variable_spec(
+            "bad", concept, channels = list(mentions = use_channel()),
+            output = bin_output(), model_params = list(seed = 1L)),
+        "require model")
+    expect_error(
+        variable_spec(
+            "bad", concept, channels = list(mentions = use_channel()),
+            output = bin_output(), model = "gemma3:4b",
+            model_params = list(1L)),
+        "named list")
+
+    structured <- concept_spec("codes", list(
+        code = code_channel("pmsi_diag", icd10("^E1"))))
+    expect_error(
+        variable_spec(
+            "dead model", structured, channels = list(code = use_channel()),
+            output = bin_output(), model = "gemma3:4b"),
+        "no effect")
 })

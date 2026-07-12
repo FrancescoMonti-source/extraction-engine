@@ -86,7 +86,7 @@ parse_smoking <- function(result, snippet_ids) {
 }
 
 smoking_definition <- function() {
-    new_task_definition(
+    llm_task(
         name = "smoking", system_prompt = SMOKING_SYSTEM_PROMPT,
         type_builder = type_smoking, prompt_builder = prompt_smoking,
         parser = parse_smoking, summary_field = NULL, summary_required = FALSE)

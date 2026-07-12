@@ -20,8 +20,11 @@ grain before internal extraction tasks are derived.}
 \item{sources}{Named EDSAN views and, for text retrieval, document candidate
 inputs. Logical package source names are connected to caller objects here, for
 example \code{list(biology = bio)}.}
-\item{chat}{An optional \pkg{ellmer} Chat. It is required by text channels and is
-deep-cloned and cleared for every task.}
+\item{chat}{An optional \pkg{ellmer} Chat override. When omitted, a text
+variable creates one Ollama Chat from its declared \code{model} and
+\code{model_params}; that base Chat is then deep-cloned and cleared for every
+task. \code{run_protocol()} completes every task of one variable before moving
+to the next variable and its model.}
 }
 \value{
 \code{run_variable()} returns values, per-channel status and coverage, resolvable

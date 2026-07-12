@@ -53,7 +53,7 @@ documented_smoking_status_periop <- function(
         anchor = anchor,
         window = window,
         channels = list(text_smoking_mentions = use_channel(
-            method = llm_after_lucene(function(x) x),
+            method = llm_after_lucene(),
             extractor = smoking_definition())),
         output = cat_output(SMOKING_STATUSES))
 }

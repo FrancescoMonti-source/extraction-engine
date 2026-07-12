@@ -7,12 +7,12 @@
     text = "text_candidate",
     doc = "doc_hit")
 
-.check_task_definition <- function(x, what = "extractor") {
+.check_llm_task <- function(x, what = "extractor") {
     required <- c("system_prompt", "type_builder", "prompt_builder", "parser")
     if (!is.list(x) || !all(required %in% names(x)) ||
         !is.function(x$type_builder) || !is.function(x$prompt_builder) ||
         !is.function(x$parser)) {
-        stop(what, " must be created with new_task_definition().", call. = FALSE)
+        stop(what, " must be created with llm_task().", call. = FALSE)
     }
     invisible(TRUE)
 }
@@ -63,7 +63,7 @@ channel <- function(source, selector, type,
         if (!identical(type, "text")) {
             stop("extractor is valid only for text_channel().", call. = FALSE)
         }
-        .check_task_definition(extractor)
+        .check_llm_task(extractor)
     }
     if (!is.null(default_method) &&
         !inherits(default_method, "ee_extraction_method")) {

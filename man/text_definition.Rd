@@ -1,9 +1,9 @@
-\name{new_task_definition}
-\alias{new_task_definition}
+\name{llm_task}
+\alias{llm_task}
 \alias{binary_presence_text_definition}
-\title{Define structured text measurements}
+\title{Define explicit LLM tasks}
 \usage{
-new_task_definition(
+llm_task(
   name,
   system_prompt,
   type_builder,
@@ -24,7 +24,10 @@ binary_presence_text_definition(
 \arguments{
 \item{name}{Definition name.}
 \item{system_prompt}{Task-owned system instruction.}
-\item{type_builder}{Function from supplied snippet IDs to an \pkg{ellmer} type.}
+\item{type_builder}{Function from supplied snippet IDs to a plain
+\pkg{ellmer} response type. Keeping this builder in the authored specification
+makes the model-visible schema explicit while allowing evidence IDs to be
+constrained per task.}
 \item{prompt_builder}{Function from a task row and candidate rows to a prompt.}
 \item{parser}{Function validating the structured result and its evidence IDs.}
 \item{summary_field}{Optional field name used for a task summary.}
@@ -33,9 +36,10 @@ binary_presence_text_definition(
 \item{field}{Engine output field name.}
 \item{evidence_max_items}{Maximum evidence identifiers in the generated type.}
 }
-\value{A text task definition consumed by \code{text_channel()} or
+\value{An explicit LLM task consumed by \code{text_channel()} or
 \code{use_channel()}.}
 \description{
-Task definitions own the response schema and parser. The engine controls the call,
+An LLM task keeps its instruction, plain \pkg{ellmer} response type, prompt, and
+parser together in the study specification. The engine controls the call,
 evidence resolution, failure isolation, and audit envelope.
 }
