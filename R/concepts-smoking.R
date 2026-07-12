@@ -1,5 +1,5 @@
 # =============================================================================
-# concepts-smoking.R -- a NEUTRAL smoking concept + a documented-status template
+# concepts-smoking.R -- internal example concept and plain variable builder
 # -----------------------------------------------------------------------------
 # smoking_concept_spec() is deliberately neutral ("where smoking text lives"), not
 # a current-status taxonomy: the concept could later feed pack-years or lifetime
@@ -43,15 +43,16 @@ smoking_concept_spec <- function() {
 # the status documented in [anchor - 365d, anchor + 7d]. Concept-specific
 # quickstart -- "documented status" lives here (extractor + categorical output;
 # single channel, so combine_channels = NULL), not in the neutral concept.
-documented_smoking_status_periop_template <- function(concept = smoking_concept_spec()) {
-    variable_template(
-        name = "documented_smoking_status_periop_template",
+documented_smoking_status_periop <- function(
+        name, anchor, output_one_row_per = "PATID", window = c(-365, 7),
+        concept = smoking_concept_spec()) {
+    variable_spec(
+        name = name,
         concept = concept,
-        defaults = list(
-            window = c(-365, 7),
-            channels = c("text_smoking_mentions"),
-            text_method = llm_after_lucene(),
-            text_extractor = smoking_definition(),   # categorical answer schema (types/smoking.R)
-            output = cat_output(SMOKING_STATUSES)))  # single channel -> combine_channels = NULL;
-                                                            # output drives assembly
+        output_one_row_per = output_one_row_per,
+        anchor = anchor,
+        window = window,
+        channels = list(text_smoking_mentions = use_channel(
+            method = llm_after_lucene(), extractor = smoking_definition())),
+        output = cat_output(SMOKING_STATUSES))
 }

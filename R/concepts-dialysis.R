@@ -49,15 +49,19 @@ dialysis_concept_spec <- function() {
 
 # Multi-source OR baseline. "Documented status" answer schema lives at the
 # activation (text_extractor); combine is the researcher's explicit any_positive().
-dialysis_status_template <- function(concept = dialysis_concept_spec()) {
-    variable_template(
-        name = "dialysis_status_template",
+dialysis_status <- function(
+        name, anchor, output_one_row_per = "PATID", window = c(-3650, 7),
+        concept = dialysis_concept_spec()) {
+    variable_spec(
+        name = name,
         concept = concept,
-        defaults = list(
-            window = c(-3650, 7),
-            channels = c("pmsi_diag_dialysis", "text_dialysis_mentions"),
-            text_method = llm_after_lucene(),
-            text_extractor = dialysis_text_definition(),
-            output = bin_output(),
-            combine_channels = any_positive()))   # build = .default_template_build(concept)
+        output_one_row_per = output_one_row_per,
+        anchor = anchor,
+        window = window,
+        channels = list(
+            pmsi_diag_dialysis = use_channel(),
+            text_dialysis_mentions = use_channel(
+                method = llm_after_lucene(), extractor = dialysis_text_definition())),
+        output = bin_output(),
+        combine_channels = any_positive())
 }

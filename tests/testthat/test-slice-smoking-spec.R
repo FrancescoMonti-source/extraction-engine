@@ -1,5 +1,4 @@
-# Contract tests for slice 2: a NEUTRAL smoking concept + documented-status
-# template -> categorical text variable. Synthetic data, deterministic fake model.
+# Contract tests for a neutral smoking concept plus a plain variable builder.
 # Protects architecture boundaries (categorical output, single-channel assembly,
 # abstention, invalid->needs_review, no_candidate, and D1 keep-and-flag), not
 # clinical truth for smoking.
@@ -55,9 +54,8 @@ sm_fake <- function(prompt, type, system_prompt) {
 }
 
 smoking_periop <- function() {
-    variable_spec(
-        template = documented_smoking_status_periop_template(),
-        name = "tabac_statut_periop", output_one_row_per = "PATID", anchor = "anchor_date")
+    documented_smoking_status_periop(
+        name = "tabac_statut_periop", anchor = "anchor_date")
 }
 
 # Why: single-channel categorical assembly (combine_channels = NULL, output = categorical)

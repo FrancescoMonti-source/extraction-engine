@@ -16,4 +16,6 @@ test_that("source role maps use target names", {
         c(source_item_id = "ELTID", source_result_id = "BIOL_ID",
           value_num = "value", value_str = "value_raw"))
     expect_equal(source_roles(DOCS_SOURCE)$document_type, "RECTYPE")
+    expect_equal(DOCS_SOURCE$normalizer, "process_doceds")
+    expect_equal(DIAG_SOURCE$source_time_kind, "interval")
 })

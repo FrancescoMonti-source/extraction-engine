@@ -55,7 +55,7 @@ index_event <- function(source, selector, at = NULL,
              "subject's matched event rows (or NULL: single match required).",
              call. = FALSE)
     }
-    .experimental_spec(list(source = source, selector = selector, at = at,
+    .new_spec(list(source = source, selector = selector, at = at,
                             select_event = select_event),
                        "ee_index_event")
 }
@@ -80,7 +80,7 @@ index_event <- function(source, selector, at = NULL,
 # expression "a | b | ..." over the activated channels (>=2). It is not a distinct
 # evaluator -- it produces a hit_set_expr like any other boolean combine.
 any_positive <- function() {
-    .experimental_spec(list(kind = "any_positive"), "ee_combiner")
+    .new_spec(list(kind = "any_positive"), "ee_combiner")
 }
 
 # String boolean hit-set expression -- the public boolean-combine surface:
@@ -101,7 +101,7 @@ hit_set_expr <- function(expr) {
     if (!length(channels)) {
         stop("A hit-set expression must reference >=1 channel.", call. = FALSE)
     }
-    .experimental_spec(
+    .new_spec(
         list(kind = "hit_set_expr", expr = expr, ast = ast, channels = channels),
         "ee_combiner")
 }
@@ -144,7 +144,7 @@ hit_set_difference <- function(include, exclude = character()) {
 # method (DESIGN §9/§16 -- no wrapper ctor, invariant 33); an unread knob is not
 # carried in the meantime.
 llm_after_lucene <- function() {
-    .experimental_spec(list(kind = "llm_after_lucene"),
+    .new_spec(list(kind = "llm_after_lucene"),
                        "ee_extraction_method")
 }
 
@@ -173,13 +173,13 @@ llm_after_lucene <- function() {
 }
 
 bin_output <- function() {
-    .experimental_spec(list(kind = "binary"), "ee_output_type")
+    .new_spec(list(kind = "binary"), "ee_output_type")
 }
 
 num_output <- function(values_from = NULL, reduce = NULL) {
     .check_payload_args("num_output()", values_from, reduce,
                         reduce_required = TRUE)
-    .experimental_spec(
+    .new_spec(
         list(kind = "number", values_from = values_from, reduce = reduce),
         "ee_output_type")
 }
@@ -199,7 +199,7 @@ cat_output <- function(levels, values_from = NULL, reduce = NULL) {
         stop("cat_output() values_from without reduce has no meaning: the payload ",
              "flavor needs both.", call. = FALSE)
     }
-    .experimental_spec(
+    .new_spec(
         list(kind = "categorical", levels = levels,
              values_from = values_from, reduce = reduce),
         "ee_output_type")
@@ -214,7 +214,7 @@ cat_output <- function(levels, values_from = NULL, reduce = NULL) {
 date_output <- function(values_from = NULL, reduce = NULL) {
     .check_payload_args("date_output()", values_from, reduce,
                         reduce_required = TRUE)
-    .experimental_spec(
+    .new_spec(
         list(kind = "date", values_from = values_from, reduce = reduce),
         "ee_output_type")
 }
@@ -223,6 +223,6 @@ date_output <- function(values_from = NULL, reduce = NULL) {
 # anastomosis durations / types / locations from one operative report). The output
 # contract belongs to the task, not to one scalar column.
 struct_output <- function(fields) {
-    .experimental_spec(list(kind = "fields", fields = as.character(fields)),
+    .new_spec(list(kind = "fields", fields = as.character(fields)),
                        "ee_output_type")
 }

@@ -1,34 +1,43 @@
-# Contract tests for the deterministic structured path. Synthetic data only.
+test_that("prepared views retain redsan types without engine coercion", {
+    # Source/process contract: redsan owns warehouse parsing. The engine view is
+    # only a plain rename plus an explicit row coordinate for repeated records.
+    pmsi <- redsan::process_pmsi(list(list(
+        PATID = "P1", EVTID = "E1", ELTID = "L1",
+        DATENT = "2025-06-22 00:30", DATSORT = "2025-06-23",
+        PATAGE = "50", DALL = "01:E11.9 02:I10")))$diag
+    diag <- dplyr::transmute(
+        pmsi,
+        source_row_id = paste0("diag:", seq_len(dplyr::n())),
+        PATID, EVTID, ELTID, diag, DATENT, DATSORT, PATAGE)
 
-# Why: loaders are the boundary between prepared study files and deterministic
-# measurement. They must preserve the hospital calendar date, native identifiers,
-# and all source rows so concept filtering happens in the variable logic rather
-# than silently changing source coverage during loading.
-test_that("structured loaders preserve local dates and native provenance", {
-    pmsi_path <- tempfile(fileext = ".rds")
-    bio_path <- tempfile(fileext = ".rds")
-    on.exit(unlink(c(pmsi_path, bio_path)), add = TRUE)
-    local_time <- as.POSIXct("2025-06-22 00:30:00", tz = "Europe/Paris")
+    biology <- redsan::process_biol(list(examA = list(
+        PATID = "P1", EVTID = "E1", ELTID = "B1",
+        DATEXAM = "2025-06-22 00:30", PATAGE = "50", PATSEX = "M",
+        RESULTATS = data.frame(
+            TYPEANA = c("K.K", "K.K"), NUMRES = c("5.4", "<3")))))
+    biol <- dplyr::transmute(
+        biology,
+        source_row_id = paste0("biol:", seq_len(dplyr::n())),
+        PATID, EVTID, ELTID, BIOL_ID, DATEXAM,
+        analyte = TYPEANA, value = NUMRES_NUM, value_raw = NUMRES,
+        PATSEX, PATAGE)
 
-    saveRDS(list(diag = tibble::tibble(
-        PATID = c("P1", "P1"), EVTID = c("E1", "E1"),
-        ELTID = c("D1", "D2"), diag = c("E11.9", "I10"),
-        DATENT = local_time, DATSORT = local_time)), pmsi_path)
-    saveRDS(tibble::tibble(
-        PATID = c("P1", "P1"), EVTID = c("E1", "E1"),
-        ELTID = c("L1", "L2"), biol_ID = c("B1", "B2"),
-        DATEXAM = local_time, TYPEANA = c("K.K", "NA.NA"),
-        NUMRES = c("5.4", "140"),
-        PATSEX = c("M", "M"), PATAGE = c(50, 50)), bio_path)
+    expect_true(inherits(diag$DATENT, "POSIXct"))
+    expect_type(diag$PATAGE, "double")
+    expect_true(inherits(biol$DATEXAM, "POSIXct"))
+    expect_equal(biol$value, c(5.4, NA_real_))
+    expect_equal(biol$value_raw, c("5.4", "<3"))
+    expect_type(biol$PATAGE, "double")
+    expect_silent(validate_source_view(diag, DIAG_SOURCE))
+    expect_silent(validate_source_view(biol, BIOL_SOURCE))
+})
 
-    diag <- load_pmsi_diag(pmsi_path)
-    biol <- load_biol_results(bio_path)
+test_that("prepared-view validation fails closed on untyped numeric payloads", {
+    view <- tibble::tibble(
+        source_row_id = "biol:1", PATID = "P1", EVTID = "E1", ELTID = "B1",
+        BIOL_ID = "examA", DATEXAM = as.Date("2025-06-22"),
+        analyte = "K.K", value = "5.4", value_raw = "5.4")
 
-    expect_equal(diag$DATENT, rep(as.Date("2025-06-22"), 2))
-    expect_equal(biol$DATEXAM, rep(as.Date("2025-06-22"), 2))
-    expect_equal(diag[c("PATID", "EVTID", "ELTID", "diag")],
-                 tibble::tibble(PATID = c("P1", "P1"), EVTID = c("E1", "E1"),
-                                ELTID = c("D1", "D2"), diag = c("E11.9", "I10")))
-    expect_equal(biol$BIOL_ID, c("B1", "B2"))
-    expect_equal(nrow(biol), 2L) # concept filtering belongs in the measurement rule
+    expect_error(validate_source_view(view, BIOL_SOURCE),
+                 "value_num must bind a numeric column")
 })

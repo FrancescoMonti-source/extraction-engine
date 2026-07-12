@@ -34,15 +34,16 @@ anastomoses_concept_spec <- function() {
                 linkage = c("subject", "event"))))            # EVENT scope, not a date window
 }
 
-recipient_anastomoses_template <- function(concept = anastomoses_concept_spec()) {
-    variable_template(
-        name = "recipient_anastomoses_template",
+recipient_anastomoses <- function(
+        name, anchor = NULL, output_one_row_per = "PATID",
+        concept = anastomoses_concept_spec()) {
+    variable_spec(
+        name = name,
         concept = concept,
-        defaults = list(
-            window = NULL,                                    # event-scoped: no date window
-            channels = c("text_operative_report"),
-            text_method = llm_after_lucene(),
-            text_extractor = anastomoses_definition(),        # multi-field answer schema
-            output = struct_output(names(ANASTOMOSES_FIELDS)))) # single channel -> combine_channels = NULL;
-                                                               # output drives assembly
+        output_one_row_per = output_one_row_per,
+        anchor = anchor,
+        window = NULL,
+        channels = list(text_operative_report = use_channel(
+            method = llm_after_lucene(), extractor = anastomoses_definition())),
+        output = struct_output(names(ANASTOMOSES_FIELDS)))
 }

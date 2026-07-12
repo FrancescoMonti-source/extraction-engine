@@ -1,21 +1,17 @@
 # =============================================================================
-# spec.R -- experimental study-variable vocabulary (core constructors)
+# spec.R -- study-variable vocabulary and compiler
 # -----------------------------------------------------------------------------
-# Thin list/S3 constructors for the formalized architecture. This is NOT a stable
-# public DSL; it is the smallest executable surface needed to test the boundary:
-#   source_spec -> concept_spec -> channels -> variable_template -> variable_spec
-#   -> run_variable.
+# Thin list/S3 constructors for the package architecture:
+#   source_spec -> concept_spec -> channels -> variable_spec -> run_variable.
 # Companion files: channels.R (channel + selector ctors), operators.R (windows /
 # reducers / combiners / outputs / absence), run_variable.R (the execution spine),
 # concepts-diabetes.R (the first concrete concept). Keep the API experimental: we
 # are validating object boundaries and execution flow, not freezing syntax.
 # =============================================================================
 
-# Every spec object is tagged so a reader (and a test) can see the API is not yet
-# frozen, and so the runner can dispatch on class rather than on a name string.
-.experimental_spec <- function(x, class) {
-    structure(x, class = c(class, "ee_experimental", "list"),
-              api_status = "experimental")
+# Internal constructor used by every authored and compiled record.
+.new_spec <- function(x, class) {
+    structure(x, class = c(class, "list"))
 }
 
 .require_named_list <- function(x, what) {
@@ -49,7 +45,7 @@
     if (is.null(window) || inherits(window, "ee_window")) return(window)
     if (is.numeric(window) && length(window) == 2L && !anyNA(window) &&
         window[[1]] <= window[[2]]) {
-        return(.experimental_spec(
+        return(.new_spec(
             list(kind = "relative_window",
                  from_days = as.numeric(window[[1]]),
                  to_days = as.numeric(window[[2]]),
@@ -273,41 +269,34 @@ concept_spec <- function(name, channels) {
         stop("All concept channels must be created with channel constructors.",
              call. = FALSE)
     }
-    .experimental_spec(list(name = name, channels = channels), "ee_concept_spec")
+    .new_spec(list(name = name, channels = channels), "ee_concept_spec")
 }
 
 # use_channel() is the per-channel activation record placed inside a variable_spec.
 #   method    -> variable-owned extraction strategy (e.g. llm_after_lucene())
 #   extractor -> optional override of the concept-owned answer definition
-use_channel <- function(method = NULL, extractor = NULL,
-                        selector = NULL, prompt = NULL, ...) {
-    extra <- list(...)
-    # An activation NEVER carries source: the name binding IS the reference to the
-    # concept-declared channel, and re-declaring the source there lets definitions
-    # drift (DESIGN §6). Rejected loudly rather than silently ignored.
-    if ("source" %in% names(extra)) {
-        stop("use_channel() does not take source: an activation references a ",
-             "declared channel by name; source lives on the channel definition.",
+use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
+                        reducer = NULL) {
+    if (!is.null(reducer)) {
+        stop("use_channel() no longer takes reducer: reduction lives on the ",
+              "output -- num_output(values_from =, reduce =) / ",
+              "cat_output(levels, values_from =, reduce =).", call. = FALSE)
+    }
+    if (!is.null(method) && !inherits(method, "ee_extraction_method")) {
+        stop("use_channel() method must be created with llm_after_lucene().",
              call. = FALSE)
     }
-    # Reduction is the variable's question, not a channel property: it lives on the
-    # output (num_output/cat_output(values_from =, reduce =), DESIGN §8, wired
-    # 2026-07-05). The old activation spelling is rejected, not silently carried.
-    if ("reducer" %in% names(extra)) {
-        stop("use_channel() no longer takes reducer: reduction lives on the ",
-             "output -- num_output(values_from =, reduce =) / ",
-             "cat_output(levels, values_from =, reduce =).", call. = FALSE)
+    if (!is.null(extractor)) .check_task_definition(extractor)
+    if (!is.null(selector) && !inherits(selector, "ee_selector")) {
+        stop("use_channel() selector must be created with a selector constructor.",
+             call. = FALSE)
     }
-    if (length(extra) && (is.null(names(extra)) || any(!nzchar(names(extra))))) {
-        stop("use_channel() extra arguments must be named.", call. = FALSE)
-    }
-    .experimental_spec(
-        c(list(method = method, extractor = extractor,
-               selector = selector, prompt = prompt), extra),
+    .new_spec(
+        list(method = method, extractor = extractor, selector = selector),
         "ee_channel_use")
 }
 
-# Turn a template's declared channel selection into per-channel use_channel()
+# Turn a builder's declared channel selection into per-channel use_channel()
 # records. Generic: a text-type channel receives the template's text method and,
 # when the concept is neutral (no answer schema on the channel), the template's
 # text_extractor -- so "which documented status" is a template/activation choice,
@@ -328,99 +317,26 @@ use_channel <- function(method = NULL, extractor = NULL,
     setNames(uses, channel_names)
 }
 
-# The default template build(): map the merged params 1:1 into a variable_spec,
-# activating the declared channels with the template's text method/extractor. Every
-# concept template (diabetes, smoking, dialysis, anastomoses) used this SAME closure --
-# the only per-concept difference (whether a text_extractor is supplied) is already
-# just a param, NULL when absent -- so it is factored here instead of copy-pasted into
-# each concept. A template needing a genuinely different assembly can still pass its
-# own build = to variable_template().
-.default_template_build <- function(concept) {
-    function(params) {
-        variable_spec(
-            name = params$name,
-            concept = concept,
-            output_one_row_per = params$output_one_row_per,
-            anchor = params$anchor,
-            window = params$window,
-            channels = .activate_channels(
-                concept, params$channels,
-                text_method = params$text_method,
-                text_extractor = params$text_extractor),
-            output = params$output,
-            combine_channels = params$combine_channels,
-            template_name = params$template_name)
-    }
-}
-
-# A variable_template is a CONCEPT-SPECIFIC parametric quickstart (not a generic
-# computation pattern). Its build() turns merged parameters into a variable_spec; when
-# omitted it defaults to the 1:1 .default_template_build() above (the common case).
-variable_template <- function(name, concept, defaults = list(), build = NULL) {
-    if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
-        stop("variable_template() requires one non-empty name.", call. = FALSE)
-    }
-    if (!inherits(concept, "ee_concept_spec")) {
-        stop("variable_template() requires a concept_spec().", call. = FALSE)
-    }
-    if (is.null(build)) build <- .default_template_build(concept)
-    if (!is.function(build)) {
-        stop("variable_template() build= must be a function.", call. = FALSE)
-    }
-    .experimental_spec(
-        list(name = name, concept = concept, defaults = defaults, build = build),
-        "ee_variable_template")
-}
-
 # A variable_spec is the concrete executable definition of one analytical variable.
-# It may be built from a template (template=) or written directly (concept=).
-variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PATID",
-                          anchor = NULL, window = NULL, channels = list(),
-                          output = NULL, combine_channels = NULL,
-                          combine_at_level = NULL,
-                          template = NULL, template_name = NULL, ...) {
-    extras <- list(...)
-    # Renamed 2026-07-05 (ratified 2026-07-04, DESIGN §7): the expression is set
-    # algebra over CHANNELS at a level -- the old name is rejected loudly, not
-    # silently accepted alongside the new one.
-    if ("combine" %in% names(extras)) {
-        stop("variable_spec() `combine` was renamed: use combine_channels = ",
-             "\"expr\" (+ optional combine_at_level =).", call. = FALSE)
-    }
-    if (!is.null(template)) {
-        if (!inherits(template, "ee_variable_template")) {
-            stop("template must be created with variable_template().", call. = FALSE)
-        }
-        overrides <- extras
-        if ("absence_policy" %in% names(overrides)) {
-            stop("absence_policy is no longer a variable_spec() argument; ",
-                 "use output type plus channel coverage/audit status instead.",
-                 call. = FALSE)
-        }
-        if (!missing(name)) overrides$name <- name
-        if (!missing(output_one_row_per)) overrides$output_one_row_per <- output_one_row_per
-        if (!missing(anchor)) overrides$anchor <- anchor
-        if (!missing(window)) overrides$window <- window
-        if (!missing(channels)) overrides$channels <- channels
-        if (!missing(output)) overrides$output <- output
-        if (!missing(combine_channels)) overrides$combine_channels <- combine_channels
-        if (!missing(combine_at_level)) overrides$combine_at_level <- combine_at_level
-        params <- utils::modifyList(template$defaults, overrides, keep.null = TRUE)
-        params$template_name <- template$name
-        return(template$build(params))
-    }
-
-    unused <- names(extras)
-    if (length(unused)) {
-        stop("Unused variable_spec() argument(s): ",
-             paste(unused, collapse = ", "), call. = FALSE)
-    }
-
+# Reuse is an ordinary R function that calls this constructor.
+variable_spec <- function(name, concept, output_one_row_per = "PATID",
+                           anchor = NULL, window = NULL, channels = list(),
+                           output = NULL, combine_channels = NULL,
+                           combine_at_level = NULL) {
     if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
         stop("variable_spec() requires one non-empty name.", call. = FALSE)
     }
     if (!inherits(concept, "ee_concept_spec")) {
         stop("variable_spec() requires a concept_spec().", call. = FALSE)
+    }
+    if (!inherits(output, "ee_output_type")) {
+        stop("variable_spec() output must be created with an output constructor.",
+             call. = FALSE)
+    }
+    if (!is.null(anchor) && !inherits(anchor, "ee_index_event") &&
+        (!is.character(anchor) || length(anchor) != 1L || !nzchar(anchor))) {
+        stop("variable_spec() anchor must be NULL, one task column, or index_event().",
+             call. = FALSE)
     }
     # output_one_row_per is the OUTPUT GRAIN: the concrete task column one output row
     # represents ("PATID" = one row per patient, "EVTID" = one row per stay). It is
@@ -457,13 +373,12 @@ variable_spec <- function(name = NULL, concept = NULL, output_one_row_per = "PAT
     .check_expr_channels(combine, names(channels),
                          payload_channel = output$values_from)
 
-    .experimental_spec(
+    .new_spec(
         list(name = name, concept = concept, output_one_row_per = output_one_row_per,
-             anchor = anchor,
-             window = window, channels = channels,
-             inline_channels = inline_channels, output = output,
-             combine = combine, combine_at_level = combine_at_level,
-             template = template_name),
+              anchor = anchor,
+              window = window, channels = channels,
+              inline_channels = inline_channels, output = output,
+              combine = combine, combine_at_level = combine_at_level),
         "ee_variable_spec")
 }
 
@@ -481,21 +396,24 @@ inspect.ee_variable_spec <- function(x, ...) {
 }
 
 inspect.ee_concept_spec <- function(x, ...) {
-    .experimental_spec(
+    .new_spec(
         list(name = x$name,
              channels = lapply(x$channels, inspect)),
         "ee_concept_inspection")
 }
 
 inspect.ee_channel <- function(x, ...) {
-    .experimental_spec(
+    .new_spec(
         list(type = x$type,
              source = x$source,
              selector = x$selector,
              native_grain = x$native_grain,
              required_roles = x$required_roles,
-             linkage = x$linkage,
-             extractor = x$extractor),
+              linkage = x$linkage,
+              extractor = x$extractor,
+              default_method = x$default_method,
+              group_at_level = x$group_at_level,
+              keep_group_when = x$keep_group_when),
         "ee_channel_inspection")
 }
 
@@ -540,7 +458,7 @@ inspect.default <- function(x, ...) {
     # concept baseline.
     selector <- .inherit_from_activation(channel_def, channel_use, "selector")
 
-    .experimental_spec(
+    .new_spec(
         list(
             name = name,
             type = channel_def$type,
@@ -550,16 +468,18 @@ inspect.default <- function(x, ...) {
             native_grain = channel_def$native_grain,
             required_roles = channel_def$required_roles,
             linkage = channel_def$linkage,
+            produces = channel_def$produces,
+            group_at_level = channel_def$group_at_level,
+            keep_group_when = channel_def$keep_group_when,
             method = method$value,
             method_source = method$source,
             extractor = extractor$value,
-            extractor_source = extractor$source,
-            activation = channel_use,
-            channel = channel_def),
+            extractor_source = extractor$source),
         "ee_resolved_channel")
 }
 
 resolve_variable_spec <- function(variable) {
+    if (inherits(variable, "ee_resolved_variable_spec")) return(variable)
     if (!inherits(variable, "ee_variable_spec")) {
         stop("resolve_variable_spec() requires a variable_spec().", call. = FALSE)
     }
@@ -577,17 +497,17 @@ resolve_variable_spec <- function(variable) {
         NA_character_
     }
 
-    .experimental_spec(
+    .new_spec(
         list(
             name = variable$name,
             concept = variable$concept$name,
             output_one_row_per = variable$output_one_row_per,
             anchor = variable$anchor,
             window = variable$window,
-            template = variable$template,
             output = variable$output,
             combine = variable$combine,
             combine_rule = combine_rule,
+            combine_at_level = variable$combine_at_level,
             channels = resolved_channels),
         "ee_resolved_variable_spec")
 }

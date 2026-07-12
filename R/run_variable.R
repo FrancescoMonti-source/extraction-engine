@@ -25,12 +25,9 @@
 #       fields  -> the task's several extracted fields.
 # =============================================================================
 
-# A variable's channel catalog = the concept's channels plus any variable-local
-# inline definitions (DESIGN §5 entry forms); inline shadows nothing (name
-# collisions are rejected at build).
+# Execution receives only the compiled representation.
 .channel_def <- function(variable, channel_name) {
-    variable$inline_channels[[channel_name]] %||%
-        variable$concept$channels[[channel_name]]
+    variable$channels[[channel_name]]
 }
 
 .source_name_for_channel <- function(channel_name, variable) {
@@ -320,11 +317,15 @@
     # used for `extractor` below. Resolved ONCE and used by every branch (and threaded
     # into text retrieval) so the override is uniform: a half-applied selector would
     # retrieve on one query and match/extract on another.
-    selector <- variable$channels[[channel_name]]$selector %||% channel_def$selector
+    selector <- channel_def$selector
     source <- channel_def$source
     if (!source %in% names(sources)) {
         stop("Missing source data for channel '", channel_name,
              "' (source: ", source, ").", call. = FALSE)
+    }
+    if (channel_def$type %in% c("code", "act", "lab")) {
+        spec <- EE_SOURCES[[source]]
+        if (!is.null(spec)) validate_source_view(sources[[source]], spec)
     }
     # The window is only meaningful for date/interval-scoped structured channels;
     # text eligibility (date-window OR event membership) is resolved upstream, so a
@@ -413,8 +414,7 @@
             }
             # The answer schema may live on the activation (neutral concept, e.g.
             # smoking) or default to the channel (concept-owned, e.g. diabetes).
-            extractor <- variable$channels[[channel_name]]$extractor
-            if (is.null(extractor)) extractor <- channel_def$extractor
+            extractor <- channel_def$extractor
             if (is.null(extractor)) {
                 stop("Text channel '", channel_name,
                      "' has no extractor (activation or concept).", call. = FALSE)
@@ -1059,8 +1059,7 @@
 }
 
 .build_provenance <- function(variable, model_name) {
-    resolved <- resolve_variable_spec(variable)
-    channels <- lapply(resolved$channels, function(ch) {
+    channels <- lapply(variable$channels, function(ch) {
         spec <- if (ch$source %in% names(EE_SOURCES)) EE_SOURCES[[ch$source]]
                 else NULL
         list(
@@ -1073,9 +1072,9 @@
             extractor_source = ch$extractor_source,
             # Aggregate membership predicate (§16.7): the executed group rule,
             # serializable -- level + deparsed closure, like the output's reduce.
-            group_at_level = ch$channel$group_at_level,
-            keep_group_when = if (is.function(ch$channel$keep_group_when)) {
-                paste(deparse(ch$channel$keep_group_when), collapse = " ")
+            group_at_level = ch$group_at_level,
+            keep_group_when = if (is.function(ch$keep_group_when)) {
+                paste(deparse(ch$keep_group_when), collapse = " ")
             } else NULL)
     })
     window <- if (inherits(variable$window, "ee_window")) {
@@ -1100,12 +1099,11 @@
     structure(
         list(
             variable = variable$name,
-            concept = variable$concept$name,
-            template = variable$template,
+            concept = variable$concept,
             output_one_row_per = variable$output_one_row_per,
             anchor = .provenance_anchor(variable$anchor),
             window = window,
-            combine = resolved$combine_rule,
+            combine = variable$combine_rule,
             # The EXECUTED evaluation level: the declared combine_at_level, or the
             # output grain it defaults to. NULL when there is no combine algebra.
             combine_at_level = if (inherits(variable$combine, "ee_combiner") &&
@@ -1203,10 +1201,11 @@ cohort_from_sources <- function(sources) {
 }
 
 run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
-                         model_name = "fake") {
+                          model_name = "fake") {
     if (!inherits(variable, "ee_variable_spec")) {
         stop("run_variable() requires a variable_spec().", call. = FALSE)
     }
+    variable <- resolve_variable_spec(variable)
     if (!length(variable$channels)) {
         stop("variable_spec has no selected channels.", call. = FALSE)
     }

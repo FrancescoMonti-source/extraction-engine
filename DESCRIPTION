@@ -21,7 +21,6 @@ Imports:
     dplyr,
     ellmer (>= 0.4.1),
     jsonlite,
-    openxlsx,
     redsan (>= 0.1.1),
     rlang,
     stringr,

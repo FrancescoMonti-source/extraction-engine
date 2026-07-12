@@ -1,116 +1,4 @@
-# =============================================================================
-# data.R — D0840 project data loaders (glue, not engine)
-# -----------------------------------------------------------------------------
-# This is the SOURCE LAYER: the only place raw warehouse column names appear.
-# Each source is a DECLARATION (`source_spec`) mapping raw columns -> canonical
-# roles (subject_id / event_id / source_item_id / point_date / event_start /
-# event_end / value_num / value_str / analyte / code / text / ...); one generic
-# `normalize_source()` applies the shared normalization (Europe/Paris clinical
-# dates, numeric coercion, source-row ids, presence/uniqueness checks). A new
-# warehouse re-declares only these specs; nothing else should mention a raw column
-# name. Output column names are still the historical runner names for now; the
-# target role vocabulary is exposed through source metadata.
-# Privacy: identifier-bearing workbooks are read column-by-column (see
-# read_workbook_columns); the docs RDS carries no direct identifiers.
-# =============================================================================
-
-# EDSAN timestamps use the hospital's local timezone. Date conversion must retain
-# that clinical calendar day rather than derive a UTC date near local midnight.
-WAREHOUSE_TZ <- "Europe/Paris"
-
-clean_mixed_date <- function(x) {
-    if (inherits(x, "Date")) return(x)
-    if (inherits(x, "POSIXt")) return(as.Date(x, tz = WAREHOUSE_TZ))
-    x <- trimws(as.character(x))
-    out <- rep(as.Date(NA), length(x))
-    is_num <- grepl("^\\d+(\\.\\d+)?$", x)
-    out[is_num] <- as.Date(as.numeric(x[is_num]), origin = "1899-12-30")
-    is_txt <- !is_num & nzchar(x)
-    out[is_txt] <- as.Date(substr(x[is_txt], 1, 10))
-    out
-}
-
-# Models that have passed scripts/check_grammar_enforcement.R (grammar-constrained
-# output is the premise of runtime validation). Extraction must refuse ungated
-# models unless explicitly overridden, since reasoning models fail open to prose.
-APPROVED_MODELS <- c("gemma3:4b")
-
-require_gated_model <- function(model) {
-    if (!model %in% APPROVED_MODELS && !nzchar(Sys.getenv("ALLOW_UNGATED_MODEL"))) {
-        stop(sprintf(
-            "Model '%s' has not passed the grammar gate (scripts/check_grammar_enforcement.R). Approved: %s. Set ALLOW_UNGATED_MODEL=1 to override.",
-            model, paste(APPROVED_MODELS, collapse = ", ")), call. = FALSE)
-    }
-    invisible(model)
-}
-
-# Path to the persisted canonical corpus: shared dataset dir, else round-3 output.
-corpus_path <- function() {
-    shared <- path_data("D0840", "canonical_tcorpus.rds")
-    localc <- file.path("outputs", "round3-experiments", "canonical_tcorpus.rds")
-    if (file.exists(shared)) shared else localc
-}
-
-# Read only the named columns from an identifier-bearing workbook, by locating
-# them in the header first (never loads other columns into memory).
-read_workbook_columns <- function(path, columns) {
-    header <- openxlsx::read.xlsx(path, rows = 1, colNames = TRUE)
-    idx <- match(columns, names(header))
-    if (anyNA(idx)) {
-        stop("Missing workbook columns: ",
-             paste(columns[is.na(idx)], collapse = ", "), call. = FALSE)
-    }
-    openxlsx::read.xlsx(path, cols = idx, colNames = TRUE)
-}
-
-# --- declared source layer ---------------------------------------------------
-# `col()` declares one output column: which raw column it comes from (`from`, a
-# fallback vector is allowed), how to normalize it (`kind`), and which canonical
-# engine role(s) it plays.
-col <- function(from, kind = c("chr", "num", "date"), role = NULL,
-                roles = NULL) {
-    if (is.null(roles)) roles <- role
-    roles <- as.character(roles %||% character())
-    roles <- roles[!is.na(roles) & nzchar(roles)]
-    structure(
-        list(
-            from = from,
-            kind = match.arg(kind),
-            role = if (length(roles)) roles[[1]] else NA_character_,
-            roles = roles),
-        class = c("ee_source_col", "list"),
-        api_status = "experimental")
-}
-
-# A source spec: the per-source raw->role mapping plus normalization options.
-source_spec <- function(name, cols, source_row_id = NULL, unique_cols = NULL,
-                        module = NULL, table = NULL, identifiers = character(),
-                        source_time_kind = NULL, source_time_start = NULL,
-                        source_time_end = NULL, query_date_keys = character(),
-                        default_batch_key = NULL, normalizer = NULL) {
-    structure(
-        list(
-            name = name,
-            module = .nullable_chr(module),
-            table = .nullable_chr(table),
-            identifiers = as.character(identifiers %||% character()),
-            source_time_kind = .nullable_chr(source_time_kind),
-            source_time_start = .nullable_chr(source_time_start),
-            source_time_end = .nullable_chr(source_time_end),
-            query_date_keys = as.character(query_date_keys %||% character()),
-            default_batch_key = .nullable_chr(default_batch_key),
-            normalizer = .nullable_chr(normalizer),
-            cols = cols,
-            roles = .source_role_map(cols),
-            source_row_id = source_row_id,
-            unique_cols = unique_cols),
-        class = c("ee_source_spec", "list"),
-        api_status = "experimental")
-}
-
-source_row_ids <- function(source, n) {
-    sprintf("%s:%08d", source, seq_len(n))
-}
+# EDSAN source boundary -------------------------------------------------------
 
 `%||%` <- function(x, y) {
     if (is.null(x)) y else x
@@ -121,18 +9,78 @@ source_row_ids <- function(source, n) {
         return(NULL)
     }
     x <- as.character(x)
-    if (length(x) != 1L) stop("Expected a single string.", call. = FALSE)
+    if (length(x) != 1L || !nzchar(x)) {
+        stop("Expected one non-empty string.", call. = FALSE)
+    }
     x
 }
 
-.source_role_map <- function(cols) {
-    out <- list()
-    for (nm in names(cols)) {
-        for (role in cols[[nm]]$roles) {
-            out[[role]] <- unique(c(out[[role]], nm))
-        }
+.source_contract <- function(module, table) {
+    if (!is.character(module) || length(module) != 1L || !nzchar(module) ||
+        !is.character(table) || length(table) != 1L || !nzchar(table)) {
+        stop("source_spec() requires one non-empty module and table.",
+             call. = FALSE)
     }
-    out
+    contract <- redsan::edsan_sources(module, table)
+    if (nrow(contract) != 1L) {
+        stop("source_spec() must resolve exactly one redsan source contract.",
+             call. = FALSE)
+    }
+    contract
+}
+
+.check_role_bindings <- function(roles) {
+    if (!is.list(roles) || is.null(names(roles)) || anyNA(names(roles)) ||
+        any(!nzchar(names(roles))) || anyDuplicated(names(roles))) {
+        stop("source_spec() roles must be a uniquely named list.", call. = FALSE)
+    }
+    bad <- vapply(roles, function(x) {
+        !is.character(x) || length(x) != 1L || is.na(x) || !nzchar(x)
+    }, logical(1))
+    if (any(bad)) {
+        stop("Every source role must bind to one non-empty prepared-view column: ",
+             paste(names(roles)[bad], collapse = ", "), ".", call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+# A source spec binds columns of an already prepared view to engine payload
+# roles. Source mechanics come from redsan's live registry; no value coercion or
+# warehouse parsing happens here.
+source_spec <- function(name, module, table, roles,
+                        required_columns = NULL, unique_columns = character()) {
+    if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
+        stop("source_spec() requires one non-empty name.", call. = FALSE)
+    }
+    .check_role_bindings(roles)
+    contract <- .source_contract(module, table)
+    required_columns <- unique(as.character(
+        required_columns %||% unlist(roles, use.names = FALSE)))
+    unique_columns <- unique(as.character(unique_columns))
+    bad_columns <- c(required_columns, unique_columns)
+    if (anyNA(bad_columns) || any(!nzchar(bad_columns))) {
+        stop("source_spec() column declarations must be non-empty strings.",
+             call. = FALSE)
+    }
+
+    structure(
+        list(
+            name = name,
+            module = module,
+            table = table,
+            grain = contract$grain[[1]],
+            identifiers = contract$identifiers[[1]],
+            source_time_kind = contract$source_time_kind[[1]],
+            source_time_start = contract$source_time_start[[1]],
+            source_time_end = .nullable_chr(contract$source_time_end[[1]]),
+            query_date_keys = contract$query_date_keys[[1]],
+            default_batch_key = contract$default_batch_key[[1]],
+            normalizer = .nullable_chr(contract$normalizer[[1]]),
+            redsan_version = as.character(utils::packageVersion("redsan")),
+            roles = roles,
+            required_columns = required_columns,
+            unique_columns = unique_columns),
+        class = c("ee_source_spec", "list"))
 }
 
 source_roles <- function(spec) {
@@ -142,162 +90,76 @@ source_roles <- function(spec) {
     spec$roles
 }
 
-.source_pick <- function(raw, candidates) {
-    hit <- intersect(candidates, names(raw))      # candidates' order wins (fallback)
-    if (length(hit)) raw[[hit[[1]]]] else NULL
-}
-
-# Generic loader body: project + normalize a raw frame per its source_spec.
-normalize_source <- function(raw, spec) {
-    if (!is.data.frame(raw)) {
-        stop(spec$name, ": expected a data frame.", call. = FALSE)
+# Validate a compatible prepared view without changing it. redsan owns typing;
+# this boundary only fails closed when a role-bound column is absent or untyped.
+validate_source_view <- function(data, spec) {
+    if (!inherits(spec, "ee_source_spec")) {
+        stop("validate_source_view() requires a source_spec().", call. = FALSE)
     }
-    picked  <- lapply(spec$cols, function(cc) .source_pick(raw, cc$from))
-    missing <- vapply(picked, is.null, logical(1))
-    if (any(missing)) {
-        want <- vapply(spec$cols[missing],
-                       function(cc) paste(cc$from, collapse = "/"), character(1))
-        stop(spec$name, ": missing columns: ", paste(want, collapse = ", "),
-             call. = FALSE)
+    if (!is.data.frame(data)) {
+        stop(spec$name, ": expected a prepared data frame.", call. = FALSE)
     }
-    out <- Map(function(cc, v) switch(cc$kind,
-                   chr  = as.character(v),
-                   num  = suppressWarnings(as.numeric(as.character(v))),
-                   date = clean_mixed_date(v)),
-               spec$cols, picked)
-    out <- tibble::as_tibble(out)
-    if (!is.null(spec$source_row_id)) {
-        out <- tibble::add_column(out,
-            source_row_id = source_row_ids(spec$source_row_id, nrow(out)), .before = 1L)
+    missing <- setdiff(spec$required_columns, names(data))
+    if (length(missing)) {
+        stop(spec$name, ": missing prepared-view columns: ",
+             paste(missing, collapse = ", "), ".", call. = FALSE)
     }
-    for (u in spec$unique_cols) {
-        v <- out[[u]]
-        if (anyNA(v) || any(!nzchar(v))) {
-            stop(spec$name, ": ", u, " must be non-missing.", call. = FALSE)
-        }
-        if (anyDuplicated(v)) {
-            stop(spec$name, ": ", u, " must be unique.", call. = FALSE)
+    for (column in spec$unique_columns) {
+        value <- data[[column]]
+        if (anyNA(value) || any(!nzchar(as.character(value))) ||
+            anyDuplicated(value)) {
+            stop(spec$name, ": ", column,
+                 " must be non-missing and unique.", call. = FALSE)
         }
     }
-    out
+    numeric_column <- spec$roles$value_num
+    if (!is.null(numeric_column) && !is.numeric(data[[numeric_column]])) {
+        stop(spec$name, ": role value_num must bind a numeric column; got '",
+             numeric_column, "'.", call. = FALSE)
+    }
+    for (role in intersect(c("point_date", "event_start", "event_end"),
+                           names(spec$roles))) {
+        column <- spec$roles[[role]]
+        if (!inherits(data[[column]], c("Date", "POSIXt"))) {
+            stop(spec$name, ": role ", role,
+                 " must bind a Date or POSIXt column; got '", column, "'.",
+                 call. = FALSE)
+        }
+    }
+    invisible(data)
 }
 
-# Document index used by adapters to resolve task<->document eligibility.
-# All documents (incl. empty ones); the corpus membership flag in retrieval()
-# separates eligible from searchable. No direct identifiers here; text lives in
-# the corpus (RECTXT), not the index.
-DOCS_SOURCE <- source_spec("docs index",
-    cols = list(
-        ELTID   = col("ELTID",   "chr",  roles = "source_item_id"),
-        PATID   = col("PATID",   "chr",  roles = "subject_id"),
-        EVTID   = col("EVTID",   "chr",  roles = "event_id"),
-        RECDATE = col("RECDATE", "date", roles = "point_date"),
-        RECTYPE = col("RECTYPE", "chr",  roles = "document_type"),
-        # Attribution of the document, always present in the raw docs table
-        # (owner, 2026-07-07): SEJUM = unité médicale, SEJUF = unité
-        # fonctionnelle. No role: the engine never interprets them --
-        # doc_meta(SEJUM = "ANES") names the column directly.
-        SEJUM   = col("SEJUM",   "chr"),
-        SEJUF   = col("SEJUF",   "chr")),
-    unique_cols = "ELTID",
-    module = "doceds",
-    table = "documents",
-    identifiers = c("PATID", "EVTID", "ELTID"),
-    source_time_kind = "point",
-    source_time_start = "RECDATE",
-    query_date_keys = "RECDATE",
-    default_batch_key = "RECDATE")
+DOCS_SOURCE <- source_spec(
+    name = "documents", module = "doceds", table = "documents",
+    roles = list(
+        subject_id = "PATID", event_id = "EVTID", source_item_id = "ELTID",
+        point_date = "RECDATE", document_type = "RECTYPE"),
+    unique_columns = "ELTID")
 
-load_docs_index <- function(docs_path) {
-    normalize_source(readRDS(docs_path), DOCS_SOURCE)
-}
+DIAG_SOURCE <- source_spec(
+    name = "pmsi diagnoses", module = "pmsi", table = "diag",
+    roles = list(
+        source_row_id = "source_row_id", subject_id = "PATID",
+        event_id = "EVTID", source_item_id = "ELTID", code = "diag",
+        event_start = "DATENT", event_end = "DATSORT"))
 
-# pmsi$diag: one row per ICD-10 diagnosis, attached to the parent stay interval.
-DIAG_SOURCE <- source_spec("pmsi diag",
-    cols = list(
-        PATID   = col("PATID",   "chr",  roles = "subject_id"),
-        EVTID   = col("EVTID",   "chr",  roles = "event_id"),
-        ELTID   = col("ELTID",   "chr",  roles = "source_item_id"),
-        diag    = col("diag",    "chr",  roles = "code"),
-        DATENT  = col("DATENT",  "date", roles = "event_start"),
-        DATSORT = col("DATSORT", "date", roles = "event_end")),
-    source_row_id = "pmsi_diag",
-    module = "pmsi",
-    table = "diag",
-    identifiers = c("PATID", "EVTID", "ELTID"),
-    source_time_kind = "interval",
-    source_time_start = "DATENT",
-    source_time_end = "DATSORT",
-    query_date_keys = c("DATENT", "DATSORT"),
-    default_batch_key = "DATENT",
-    normalizer = "process_pmsi")
+BIOL_SOURCE <- source_spec(
+    name = "biology results", module = "biol", table = "results",
+    roles = list(
+        source_row_id = "source_row_id", subject_id = "PATID",
+        event_id = "EVTID", source_item_id = "ELTID",
+        source_result_id = "BIOL_ID", point_date = "DATEXAM",
+        analyte = "analyte", value_num = "value", value_str = "value_raw"))
 
-load_pmsi_diag <- function(pmsi_path) {
-    x <- readRDS(pmsi_path)
-    normalize_source(if (is.data.frame(x)) x else x$diag, DIAG_SOURCE)
-}
+ACTE_SOURCE <- source_spec(
+    name = "PMSI acts", module = "pmsi", table = "actes",
+    roles = list(
+        source_row_id = "source_row_id", subject_id = "PATID",
+        event_id = "EVTID", source_item_id = "ELTID", code = "CODEACTE",
+        point_date = "DATEACTE"))
 
-# All biology results. Serum/plasma potassium is TYPEANA "K.K"; its unit is fixed
-# by organisational convention, so UNITE is intentionally not read. `value` is the
-# numeric result; `value_raw` keeps the original string for audit.
-BIOL_SOURCE <- source_spec("biol results",
-    cols = list(
-        PATID     = col("PATID",                 "chr",  roles = "subject_id"),
-        EVTID     = col("EVTID",                 "chr",  roles = "event_id"),
-        ELTID     = col("ELTID",                 "chr",  roles = "source_item_id"),
-        BIOL_ID   = col(c("biol_ID", "BIOL_ID"), "chr",  roles = "source_result_id"),
-        DATEXAM   = col("DATEXAM",               "date", roles = "point_date"),
-        analyte   = col("TYPEANA",               "chr",  roles = "analyte"),
-        value_raw = col("NUMRES",                "chr",  roles = "value_str"),
-        value     = col("NUMRES",                "num",  roles = "value_num"),
-        # Subject attributes carried on every biology row (owner 2026-07-07: PATSEX
-        # and PATAGE are always present in the raw HDW table). Role-less: the engine
-        # never interprets them -- a subject-context analyte_value(keep_when =) names
-        # them directly (sex/age reference ranges). Same pattern as docs SEJUM/SEJUF.
-        PATSEX    = col("PATSEX",                 "chr"),
-        PATAGE    = col("PATAGE",                 "num")),
-    source_row_id = "biol",
-    module = "biol",
-    table = "results",
-    identifiers = c("PATID", "EVTID", "ELTID", "BIOL_ID"),
-    source_time_kind = "point",
-    source_time_start = "DATEXAM",
-    query_date_keys = "DATEXAM",
-    default_batch_key = "DATEXAM",
-    normalizer = "process_biol")
-
-load_biol_results <- function(bio_path) {
-    normalize_source(readRDS(bio_path), BIOL_SOURCE)
-}
-
-# pmsi$actes: one row per CCAM procedure act, dated at the act itself (point time).
-# Declared now that act_channel() consumes it (CODEACTE membership). Real redsan table;
-# add a loader when a real run needs one (tests/run_variable take the frame directly).
-ACTE_SOURCE <- source_spec("pmsi actes",
-    cols = list(
-        PATID    = col("PATID",    "chr",  roles = "subject_id"),
-        EVTID    = col("EVTID",    "chr",  roles = "event_id"),
-        ELTID    = col("ELTID",    "chr",  roles = "source_item_id"),
-        CODEACTE = col("CODEACTE", "chr",  roles = "code"),
-        DATEACTE = col("DATEACTE", "date", roles = "point_date")),
-    source_row_id = "pmsi_actes",
-    module = "pmsi",
-    table = "actes",
-    identifiers = c("PATID", "EVTID", "ELTID"),
-    source_time_kind = "point",
-    source_time_start = "DATEACTE",
-    query_date_keys = "DATEACTE",
-    default_batch_key = "DATEACTE",
-    normalizer = "process_pmsi")
-
-# NB: pmsi$main is a real redsan table but has no loader/consumer yet. Declare its
-# source_spec when a variable actually consumes it.
-
-# Registry: channel-facing source name -> source_spec, so run_variable() resolves a
-# channel's roles (which column is `code`, point vs interval time) from the spec
-# instead of hardcoding physical column names in the executor.
 EE_SOURCES <- list(
-    pmsi_diag  = DIAG_SOURCE,
+    pmsi_diag = DIAG_SOURCE,
     pmsi_actes = ACTE_SOURCE,
-    biology    = BIOL_SOURCE,
-    documents  = DOCS_SOURCE)
+    biology = BIOL_SOURCE,
+    documents = DOCS_SOURCE)

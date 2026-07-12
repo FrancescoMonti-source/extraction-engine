@@ -1,5 +1,5 @@
 # =============================================================================
-# concepts-diabetes.R -- the first concrete concept + its baseline template
+# concepts-diabetes.R -- internal example concept and plain variable builder
 # -----------------------------------------------------------------------------
 # diabetes_concept_spec() declares the diabetes signal channels (it does not say
 # whether a patient has diabetes, and activates nothing by default). The text
@@ -56,14 +56,18 @@ diabetes_concept_spec <- function() {
                 linkage = "subject")))
 }
 
-diabetes_baseline_status_template <- function(concept = diabetes_concept_spec()) {
-    variable_template(
-        name = "diabetes_baseline_status_template",
+diabetes_baseline_status <- function(
+        name, anchor, output_one_row_per = "PATID", window = c(-1825, 7),
+        concept = diabetes_concept_spec()) {
+    variable_spec(
+        name = name,
         concept = concept,
-        defaults = list(
-            window = c(-1825, 7),
-            channels = c("pmsi_diag_e10_e14", "text_diabetes_mentions"),
-            text_method = llm_after_lucene(),
-            output = bin_output(),
-            combine_channels = any_positive()))   # build = .default_template_build(concept)
+        output_one_row_per = output_one_row_per,
+        anchor = anchor,
+        window = window,
+        channels = list(
+            pmsi_diag_e10_e14 = use_channel(),
+            text_diabetes_mentions = use_channel(method = llm_after_lucene())),
+        output = bin_output(),
+        combine_channels = any_positive())
 }

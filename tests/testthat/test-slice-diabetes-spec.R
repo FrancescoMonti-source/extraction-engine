@@ -65,7 +65,7 @@ test_that("direct glucose variable_spec reduces the channel with a plain functio
         channels = list(glucose_measurements = use_channel()),
         output = num_output(reduce = function(x) max(x, na.rm = TRUE)))
 
-    expect_null(direct$template)
+    expect_false("template" %in% names(direct))
     expect_setequal(names(direct$channels), "glucose_measurements")
 
     run <- run_variable(direct, spec_tasks, spec_sources)

@@ -41,9 +41,8 @@ rw_fake <- function(prompt, type, system_prompt) {
 }
 
 rw_variable <- function() {
-    variable_spec(
-        template = documented_smoking_status_periop_template(),
-        name = "tabac_statut_periop", output_one_row_per = "PATID", anchor = "anchor_date")
+    documented_smoking_status_periop(
+        name = "tabac_statut_periop", anchor = "anchor_date")
 }
 
 # Why: the spec layer must be a real entry point into retrieval. run_variable()
