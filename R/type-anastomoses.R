@@ -133,7 +133,7 @@ parse_anastomoses <- function(result, snippet_ids) {
 }
 
 anastomoses_definition <- function() {
-    llm_task(
+    .llm_definition(
         name = "anastomoses", system_prompt = ANASTOMOSES_SYSTEM_PROMPT,
         type_builder = type_anastomoses, prompt_builder = prompt_anastomoses,
         parser = parse_anastomoses, summary_field = ANASTOMOSES_SUMMARY,

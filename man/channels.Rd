@@ -55,7 +55,8 @@ to a task by \code{PATID}; including \code{"event"} joins by
 grain determines the task receiving those eligible rows.}
 \item{group_at_level}{Optional identity-spine grouping level.}
 \item{keep_group_when}{A plain function returning one logical per group.}
-\item{extractor}{An explicit LLM task created with \code{llm_task()}.}
+\item{extractor}{An LLM task created with \code{llm_task()}. For ordinary
+categorical extraction it contains only the study-authored prompt.}
 \item{default_method}{An optional default \code{llm_after_lucene()} method.}
 \item{pattern,codes}{Code or analyte values.}
 \item{match}{Exact or regular-expression matching.}

@@ -50,7 +50,8 @@ receives an explicit \pkg{ellmer} Chat override.}
 \item{model_params}{Named list of parameters used when constructing this
 variable's Ollama Chat.}
 \item{method,extractor,selector}{Optional local replacements for an activated
-channel. A selector replaces the complete inherited selector.}
+channel. A selector replaces the complete inherited selector. A text extractor
+is normally a prompt-only \code{llm_task()}.}
 \item{keep_when}{Optional row predicate that extends an inherited analyte
 selector without repeating its analyte codes. Its formal arguments name source
 row columns.}

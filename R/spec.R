@@ -564,11 +564,12 @@ print.ee_variable_spec <- function(x, ...) {
                 candidate_rule, "\n", sep = "")
         }
         if (inherits(channel$extractor, "ee_llm_task")) {
-            instruction <- gsub("\\s+", " ", channel$extractor$system_prompt)
-            cat("    llm task: ", channel$extractor$name, "\n", sep = "")
-            cat("    instruction: ", trimws(instruction), "\n", sep = "")
-            cat("    ellmer type: ",
-                .one_line(channel$extractor$type_builder), "\n", sep = "")
+            prompt <- gsub("\\s+", " ", channel$extractor$prompt)
+            cat("    llm prompt: ", trimws(prompt), "\n", sep = "")
+            cat("    response: categorical value + evidence ids ",
+                "(engine generated)\n", sep = "")
+        } else if (inherits(channel$extractor, "ee_llm_definition")) {
+            cat("    llm definition: internal recipe\n")
         }
     }
     combine <- resolved$combine_rule

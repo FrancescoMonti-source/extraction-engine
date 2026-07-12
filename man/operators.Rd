@@ -46,7 +46,8 @@ reorders one task's Lucene matches. It cannot be combined with
 \code{max_candidates}; using it is part of the authored evidence-selection rule.}
 \item{values_from}{The channel carrying an output payload.}
 \item{reduce}{A plain function reducing payload values to one value.}
-\item{levels}{Allowed categorical values.}
+\item{levels}{Allowed categorical values. For a prompt-only LLM task these
+levels also define the model's generated \pkg{ellmer} value enum.}
 \item{fields}{Names of fields emitted by a structured text definition.}
 }
 \value{A typed operator, method, anchor, or output specification.}

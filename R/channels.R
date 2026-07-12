@@ -7,14 +7,28 @@
     text = "text_candidate",
     doc = "doc_hit")
 
-.check_llm_task <- function(x, what = "extractor") {
+.check_llm_definition <- function(x, what = "extractor") {
     required <- c("system_prompt", "type_builder", "prompt_builder", "parser")
-    if (!is.list(x) || !all(required %in% names(x)) ||
+    if (!inherits(x, "ee_llm_definition") || !all(required %in% names(x)) ||
         !is.function(x$type_builder) || !is.function(x$prompt_builder) ||
         !is.function(x$parser)) {
-        stop(what, " must be created with llm_task().", call. = FALSE)
+        stop(what, " is not a valid internal LLM definition.", call. = FALSE)
     }
     invisible(TRUE)
+}
+
+.check_llm_task <- function(x, what = "extractor") {
+    if (inherits(x, "ee_llm_task")) {
+        if (!is.character(x$prompt) || length(x$prompt) != 1L ||
+            is.na(x$prompt) || !nzchar(trimws(x$prompt))) {
+            stop(what, " must contain one non-empty prompt.", call. = FALSE)
+        }
+        return(invisible(TRUE))
+    }
+    if (inherits(x, "ee_llm_definition")) {
+        return(.check_llm_definition(x, what))
+    }
+    stop(what, " must be created with llm_task().", call. = FALSE)
 }
 
 .check_channel_selector <- function(selector, expected_kind, type) {

@@ -93,100 +93,79 @@ identifier columns.
 
 ## Text models belong to variables
 
-A text variable records the model it needs:
+The concept declares where potentially relevant evidence lives:
 
 ```r
-tabagismo_enum <- variable_spec(
-  name = "tabagismo_enum",
-  concept = tabagismo,
-  output_one_row_per = "EVTID",
+smoking <- concept_spec(
+  name = "smoking",
   channels = list(
-    text_mentions = use_channel(
-      method = llm_after_lucene(),
-      extractor = llm_task(
-        name = "tabagismo_enum",
-        system_prompt = paste(
-          "Classifie uniquement le statut tabagique explicitement documente.",
-          "Ne deduis jamais non_fumeur du silence."
-        ),
-        type_builder = \(evidence_ids) ellmer::type_object(
-          smoking_status = ellmer::type_enum(
-            c("actif", "sevre", "non_fumeur", "indetermine")
-          ),
-          evidence_ids = ellmer::type_array(
-            ellmer::type_enum(evidence_ids)
-          ),
-          decision_note = ellmer::type_string()
-        ),
-        prompt_builder = \(task, candidates) paste(
-          "Extraits numerotes:",
-          paste(
-            sprintf(
-              "%s: %s",
-              candidates$snippet_id,
-              candidates$snippet_text
-            ),
-            collapse = "\n\n"
-          ),
-          sep = "\n"
-        ),
-        parser = \(result, evidence_ids) {
-          levels <- c("actif", "sevre", "non_fumeur", "indetermine")
-          status <- if (length(result$smoking_status) == 1L) {
-            as.character(result$smoking_status)
-          } else {
-            NA_character_
-          }
-          returned_ids <- unique(as.character(unlist(result$evidence_ids)))
-          returned_ids <- returned_ids[
-            !is.na(returned_ids) & nzchar(returned_ids)
-          ]
-          real_ids <- intersect(returned_ids, evidence_ids)
-          invented_ids <- setdiff(returned_ids, evidence_ids)
-          requires_evidence <- status %in% c(
-            "actif", "sevre", "non_fumeur"
-          )
-          valid <- status %in% levels &&
-            (!requires_evidence || length(real_ids) > 0L)
-
-          fields <- tibble::tibble(
-            field = "smoking_status",
-            status = status,
-            normalized_value = status,
-            evidence_ids = list(real_ids),
-            field_validity = if (valid) "valid" else "invalid",
-            validity_reason = if (valid) "" else
-              "invalid status or definitive status without evidence",
-            citation_warning = length(invented_ids) > 0L,
-            citation_warning_reason = if (length(invented_ids)) {
-              "model cited an unsupplied snippet id"
-            } else {
-              NA_character_
-            }
-          )
-          note <- if (length(result$decision_note) == 1L) {
-            as.character(result$decision_note)
-          } else {
-            NA_character_
-          }
-          list(fields = fields, summary = note)
-        }
-      )
+    smoking_mentions = text_channel(
+      source = "documents",
+      selector = lucene_query("taba*"),
+      linkage = "event"
     )
-  ),
-  output = cat_output(c("actif", "sevre", "non_fumeur", "indetermine")),
-  model = "gemma3:4b",
-  model_params = list(temperature = 0, seed = 42)
+  )
 )
 ```
 
-The response schema is plain `ellmer` inside the authored `llm_task()`. The
-evidence enum is built from the snippets actually supplied for each task, so a
-model cannot be instructed to cite arbitrary IDs. The prompt and parser are
-ordinary inline R functions: the parser resolves returned evidence IDs and
-contains the study-owned rule that definitive statuses require evidence while
-`indetermine` may abstain. The engine does not export a smoking concept or decide
-its categories.
+The variable declares what the model must extract:
+
+```r
+smoking_levels <- c(
+  "actif",
+  "sevre",
+  "non_fumeur",
+  "indetermine"
+)
+
+smoking_status <- variable_spec(
+  name = "smoking_status",
+  concept = smoking,
+  output_one_row_per = "EVTID",
+
+  channels = list(
+    smoking_mentions = use_channel(
+      method = llm_after_lucene(),
+
+      extractor = llm_task(
+        prompt = paste(
+          "Determine le statut tabagique explicitement documente",
+          "pour le patient cible dans les extraits fournis.",
+          "",
+          "Valeurs possibles :",
+          "- actif : tabagisme actuel explicitement documente ;",
+          "- sevre : ancien fumeur, arret ou sevrage explicitement documente ;",
+          "- non_fumeur : non-fumeur ou absence de tabagisme explicitement documentee ;",
+          "- indetermine : extraits insuffisants, ambigus ou contradictoires.",
+          "",
+          "Regles :",
+          "- utilise uniquement les extraits fournis ;",
+          "- evalue le patient cible, jamais sa famille ou son entourage ;",
+          "- ne deduis jamais non_fumeur du silence ;",
+          "- choisis une seule valeur ;",
+          "- cite uniquement les identifiants des extraits soutenant la reponse ;",
+          "- n'invente jamais d'identifiant.",
+          sep = "\n"
+        )
+      )
+    )
+  ),
+
+  output = cat_output(smoking_levels),
+
+  model = "gemma3:4b",
+  model_params = list(
+    temperature = 0,
+    seed = 42
+  )
+)
+```
+
+`cat_output()` is the single machine-readable declaration of the allowed values.
+For each task, the engine derives the structured `ellmer` response type, appends
+the numbered Lucene excerpts to the authored prompt, constrains evidence IDs to
+the excerpts actually supplied, and maps the result into values and evidence.
+The engine does not judge the scientific meaning of a returned category.
 
 `llm_after_lucene()` passes every Lucene match. A real operational cap is written
 as `llm_after_lucene(max_candidates = 10)` and is therefore visible in the spec;
@@ -198,10 +177,11 @@ the next model. Passing `chat =` remains an explicit test/debug override.
 
 ## Development
 
-Run package-native tests with:
+Build and check the package with:
 
-```r
-testthat::test_local(".")
+```text
+R CMD build .
+R CMD check extractionengine_0.1.0.tar.gz
 ```
 
 Before adding a model to the package approval list, run

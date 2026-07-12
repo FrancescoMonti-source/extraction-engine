@@ -539,8 +539,9 @@
                 stop("Text channel '", channel_name, "' requires an ellmer Chat.",
                       call. = FALSE)
             }
-            # The answer schema may live on the activation (neutral concept, e.g.
-            # smoking) or default to the channel (concept-owned, e.g. diabetes).
+            # The authored task may live on the activation or default to the
+            # channel. Prompt-only tasks are compiled here against the variable's
+            # declared output; legacy internal definitions are already compiled.
             extractor <- channel_def$extractor
             if (is.null(extractor)) {
                 stop("Text channel '", channel_name,
@@ -556,9 +557,10 @@
             }
             text_inputs <- .resolve_text_inputs(sources[[source]], channel_def,
                                                  variable, tasks, selector)
+            definition <- .compile_llm_task(extractor, variable)
             run_extraction(
                 text_inputs$coverage, text_inputs$candidates,
-                extractor, chat, method$candidates,
+                definition, chat, method$candidates,
                 query = selector$query)
         },
         stop("No experimental executor for channel type: ", channel_def$type,
@@ -841,14 +843,13 @@
     out
 }
 
-# categorical output (combine = NULL): a single text channel whose accepted
-# categorical status becomes the cohort value. Keeps the categorical STRING (not a
-# binary hit), and the three non-positive outcomes distinct:
+# categorical output (combine = NULL): a single text channel whose extracted
+# categorical value becomes the cohort value. Keeps the categorical STRING (not a
+# binary hit):
 #   valid        -> the status; channel_coverage complete
 #   no_candidate -> NA, partial (nothing retrieved; open-world, not absence)
-#   invalid      -> NA, needs_review (e.g. definitive status without grounding)
-# citation_warning (D1 keep-and-flag) rides through as a structured column: a value
-# grounded by >=1 real id is kept even if the model also cited an unsupplied id.
+#   invalid      -> NA, needs_review (the response broke the declared output)
+# Citation warnings report unsupplied IDs; only supplied IDs materialize as evidence.
 .documented_status_variable <- function(variable, tasks, channel_name, result) {
     var_name <- variable$name
     source_name <- .source_name_for_channel(channel_name, variable)

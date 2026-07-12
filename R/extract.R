@@ -1,25 +1,31 @@
 # =============================================================================
 # extract.R — reusable structured extraction core (integrated baseline)
 # -----------------------------------------------------------------------------
-# Generic plumbing only. Each variable supplies a `definition` bundle whose
-# parser OWNS its validity rules (so e.g. smoking `indetermine` may abstain with
-# no evidence, which a single generic validator would wrongly reject). The core
-# does: classified-retry calls, PER-TASK error isolation (one bad task never
-# aborts the batch), FIELD-LEVEL acceptance gating, evidence materialization with
-# the provenance assertion, the four views, and a generic physician review view.
+# Generic plumbing only. A study author supplies a prompt with llm_task(); the
+# engine compiles the declared output into the runtime schema, prompt envelope,
+# result adapter, evidence checks, and provenance records.
 # =============================================================================
 
-# An LLM task bundles everything variable-specific.
-# parser(result, snippet_ids) must return:
-#   list(fields = tibble(field, status, normalized_value, evidence_ids (list-col),
-#                        field_validity in {"valid","invalid"}, validity_reason),
-#        summary = scalar character or NA)
-llm_task <- function(name, system_prompt, type_builder, prompt_builder,
-                     parser, summary_field = NULL, summary_required = FALSE) {
+# Public authoring surface: the study owns the detailed instruction. Candidate
+# formatting, ellmer types, parsing, and evidence materialization are engine work.
+llm_task <- function(prompt) {
+    if (!is.character(prompt) || length(prompt) != 1L || is.na(prompt) ||
+        !nzchar(trimws(prompt))) {
+        stop("llm_task() requires one non-empty prompt.", call. = FALSE)
+    }
+    structure(list(prompt = prompt), class = c("ee_llm_task", "list"))
+}
+
+# Private runtime bundle retained for the executor and older internal recipes.
+# It is deliberately not exported: ordinary variable specs never write these
+# functions themselves.
+.llm_definition <- function(name, system_prompt, type_builder, prompt_builder,
+                            parser, summary_field = NULL,
+                            summary_required = FALSE) {
     if (!is.character(name) || length(name) != 1L || !nzchar(name) ||
         !is.character(system_prompt) || length(system_prompt) != 1L ||
         !nzchar(system_prompt)) {
-        stop("llm_task() requires non-empty name and system_prompt.",
+        stop("Internal LLM definitions require non-empty name and system_prompt.",
              call. = FALSE)
     }
     for (value in list(type_builder = type_builder,
@@ -38,7 +44,7 @@ llm_task <- function(name, system_prompt, type_builder, prompt_builder,
              type_builder = type_builder, prompt_builder = prompt_builder,
              parser = parser, summary_field = summary_field,
              summary_required = summary_required),
-        class = c("ee_llm_task", "list"))
+        class = c("ee_llm_definition", "list"))
 }
 
 scalar_present <- function(x) {
@@ -68,16 +74,8 @@ standard_field_validity <- function(status, normalized_value, evidence_ids) {
          validity_reason = paste(reason, collapse = "; "))
 }
 
-# Shared citation resolution for ALL text parsers (D1 keep-and-flag, owner-ratified).
-# Splits the model's returned evidence ids into those actually supplied (`real_ids` --
-# the only ids that can ground a value or materialize as evidence) and those that were
-# never supplied (`invented_ids`, i.e. hallucinated). An invented citation does NOT
-# invalidate a value already grounded by >=1 real id; it is surfaced as a structured
-# `citation_warning` so the researcher sees it -- rather than the value being silently
-# dropped (binary-presence) or wrongly failed closed (anastomoses, pre-#3). A value
-# grounded ONLY by invented ids has no real grounding and is rejected by each parser's
-# OWN evidence rule (`real_ids` is empty there). Invented ids never materialize as
-# evidence: .materialize_task_evidence joins on the supplied snippet ids only.
+# Shared citation resolution. Only IDs actually supplied to the model may
+# materialize as evidence; unexpected IDs remain visible as an execution warning.
 resolve_cited_ids <- function(evidence_ids, snippet_ids) {
     returned <- unique(as.character(unlist(evidence_ids)))
     returned <- returned[!is.na(returned) & nzchar(returned)]
@@ -87,8 +85,74 @@ resolve_cited_ids <- function(evidence_ids, snippet_ids) {
         invented_ids = invented,
         citation_warning = length(invented) > 0L,
         citation_warning_reason = if (length(invented))
-            "model cited >=1 unsupplied snippet id (value kept, flagged)"
+            "model cited >=1 unsupplied snippet id"
             else NA_character_)
+}
+
+# Compile the ordinary prompt-only task against the variable's categorical
+# output. The value enum comes from cat_output(); the evidence enum is rebuilt for
+# each task from the snippet IDs that the model actually receives.
+.compile_llm_task <- function(task, variable) {
+    if (inherits(task, "ee_llm_definition")) {
+        .check_llm_definition(task)
+        return(task)
+    }
+    .check_llm_task(task)
+    output <- variable$output
+    if (is.null(output) || !identical(output$kind, "categorical") ||
+        is.function(output$reduce)) {
+        stop("llm_task(prompt = ...) currently requires cat_output(levels) ",
+             "without a payload reducer.", call. = FALSE)
+    }
+
+    levels <- output$levels
+    field <- variable$name
+    authored_prompt <- task$prompt
+
+    .llm_definition(
+        name = variable$name,
+        system_prompt = paste(
+            "You are a structured information extraction assistant.",
+            "Use only the supplied excerpts and return the requested structure."),
+        type_builder = function(snippet_ids) {
+            ellmer::type_object(
+                value = ellmer::type_enum(levels),
+                evidence_ids = ellmer::type_array(
+                    ellmer::type_enum(snippet_ids)))
+        },
+        prompt_builder = function(task_row, candidates) {
+            paste(
+                authored_prompt,
+                "",
+                "Extraits numerotes :",
+                format_snippet_block(candidates),
+                sep = "\n")
+        },
+        parser = function(result, snippet_ids) {
+            value <- if (!is.null(result$value) && length(result$value) == 1L) {
+                as.character(result$value)
+            } else {
+                NA_character_
+            }
+            cited <- if (is.null(result$evidence_ids)) {
+                character()
+            } else {
+                result$evidence_ids
+            }
+            citations <- resolve_cited_ids(cited, snippet_ids)
+            valid <- !is.na(value) && value %in% levels
+            fields <- tibble::tibble(
+                field = field,
+                status = if (valid) "extracted" else "invalid",
+                normalized_value = if (valid) value else NA_character_,
+                evidence_ids = list(citations$real_ids),
+                field_validity = if (valid) "valid" else "invalid",
+                validity_reason = if (valid) "" else
+                    "value does not match the declared categorical output",
+                citation_warning = citations$citation_warning,
+                citation_warning_reason = citations$citation_warning_reason)
+            list(fields = fields, summary = NA_character_)
+        })
 }
 
 # Shared binary documented-presence text definition: one evidenced field whose
@@ -119,7 +183,7 @@ binary_presence_text_definition <- function(name, status_key, field, system_prom
             citation_warning_reason = cite$citation_warning_reason)
         list(fields = fields, summary = NA_character_)
     }
-    llm_task(
+    .llm_definition(
         name = name,
         system_prompt = system_prompt,
         type_builder = function(ids) {
@@ -325,7 +389,7 @@ APPROVED_MODELS <- c("gemma3:4b")
 run_extraction <- function(coverage, candidates, definition, chat,
                            candidate_selector, query = NA_character_,
                            sample_n = 0L) {
-    .check_llm_task(definition)
+    .check_llm_definition(definition)
     if (!is.function(candidate_selector)) {
         stop("candidate_selector must be a function.", call. = FALSE)
     }
