@@ -1224,3 +1224,48 @@ slice, not reasons to re-open the package direction.
 assertions plus source-package build and built-tarball check. Consequently the package
 dependency is tightened to `redsan (>= 0.1.1)`: version 0.1.0 predates the typing
 contract and cannot honestly satisfy that prerequisite.
+
+## Package rebuild implemented; promotion awaits reciprocal review -- Sol (2026-07-12)
+
+**Implemented state.** The package rebuild is complete on
+`codex/package-rebuild`, in commits `836063b` through `f8d7d55`. The frozen
+prototype remains available at `checkpoint/pre-package-rebuild-2026-07-12`.
+The package now has a normal DESCRIPTION/NAMESPACE/testthat structure, concise
+README and DESIGN contracts, a package-owned public API, and no exported
+clinical concepts.
+
+The transferred engine preserves the ratified grain, window, combine, payload,
+coverage, evidence, and provenance semantics. `variable_template()` and the
+obsolete real-run plumbing are gone. Source and variable specifications use
+explicit formals, `resolve_variable_spec()` is the representation shared by
+execution, inspection, and provenance, prepared EDSAN views are typed upstream,
+and text execution accepts an isolated ellmer Chat while retaining the existing
+grammar gate and failure diagnostics. No new warehouse, retry, runtime, typing,
+or scientific-decision layer was introduced.
+
+**Verification.** All checks used synthetic fixtures only and printed no patient
+data.
+
+- redsan `f7ed07e`: 74 assertions; source build and built-tarball check both OK;
+- extractionengine: 234 assertions, 0 failures, warnings, or skips;
+- temporary differential oracle: `subject_context_lab`, `stay_keyed_payload`,
+  `text`, and `document_date` all compare OK for values, membership, coverage,
+  status, evidence references, and the normalized public envelope;
+- `R CMD build` produced `extractionengine_0.1.0.tar.gz`; built-tarball
+  `R CMD check --no-manual --no-build-vignettes` finished with `Status: OK`.
+  The console reported only unavailable online repository indexes in the
+  restricted environment, not package warnings or notes.
+
+**Review and promotion gate.** Sol's final code review found no implementation
+blocker; it removed two stale local-context comments and the obsolete prototype
+runner. A reciprocal Fable/owner review of the implemented branches has not been
+performed in this session, so neither `codex/package-rebuild` nor
+`codex/extractionengine-typing` has been merged or pushed. Promotion to `master`
+must wait for that explicit gate.
+
+The package worktree currently lives at
+`C:\Users\franc\Documents\Git\extraction-engine\outputs\extraction-engine-package`
+rather than the planned sibling path because this session could write only
+inside the extraction-engine workspace. This changes no Git history and the
+worktree can be moved after review. The redsan worktree is likewise isolated at
+`outputs/redsan-typing`; both source branches are clean.
