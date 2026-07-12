@@ -7,7 +7,7 @@
     text = "text_candidate",
     doc = "doc_hit")
 
-.check_llm_definition <- function(x, what = "extractor") {
+.check_llm_definition <- function(x, what = "definition") {
     required <- c("system_prompt", "type_builder", "prompt_builder", "parser")
     if (!inherits(x, "ee_llm_definition") || !all(required %in% names(x)) ||
         !is.function(x$type_builder) || !is.function(x$prompt_builder) ||
@@ -15,20 +15,6 @@
         stop(what, " is not a valid internal LLM definition.", call. = FALSE)
     }
     invisible(TRUE)
-}
-
-.check_llm_task <- function(x, what = "extractor") {
-    if (inherits(x, "ee_llm_task")) {
-        if (!is.character(x$prompt) || length(x$prompt) != 1L ||
-            is.na(x$prompt) || !nzchar(trimws(x$prompt))) {
-            stop(what, " must contain one non-empty prompt.", call. = FALSE)
-        }
-        return(invisible(TRUE))
-    }
-    if (inherits(x, "ee_llm_definition")) {
-        return(.check_llm_definition(x, what))
-    }
-    stop(what, " must be created with llm_task().", call. = FALSE)
 }
 
 .check_channel_selector <- function(selector, expected_kind, type) {
@@ -45,8 +31,7 @@
 
 channel <- function(source, selector, type,
                     native_grain = NA_character_, required_roles = character(),
-                    linkage = character(), extractor = NULL,
-                    default_method = NULL, group_at_level = NULL,
+                    evidence_scope = NULL, group_at_level = NULL,
                     keep_group_when = NULL) {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
         stop("source must be one non-empty string.", call. = FALSE)
@@ -69,19 +54,11 @@ channel <- function(source, selector, type,
         any(!nzchar(required_roles))) {
         stop("required_roles must contain non-empty role names.", call. = FALSE)
     }
-    if (!is.character(linkage) || anyNA(linkage) ||
-        any(!linkage %in% c("subject", "event"))) {
-        stop("linkage may contain only 'subject' and 'event'.", call. = FALSE)
-    }
-    if (!is.null(extractor)) {
-        if (!identical(type, "text")) {
-            stop("extractor is valid only for text_channel().", call. = FALSE)
-        }
-        .check_llm_task(extractor)
-    }
-    if (!is.null(default_method) &&
-        !inherits(default_method, "ee_extraction_method")) {
-        stop("default_method must be created with llm_after_lucene().",
+    if (!is.null(evidence_scope) &&
+        (!is.character(evidence_scope) || length(evidence_scope) != 1L ||
+         is.na(evidence_scope) ||
+         !evidence_scope %in% c("patient", "event"))) {
+        stop("evidence_scope must be 'patient', 'event', or NULL.",
              call. = FALSE)
     }
     has_level <- !is.null(group_at_level)
@@ -110,58 +87,63 @@ channel <- function(source, selector, type,
             produces = unname(.channel_produces[[type]]),
             native_grain = native_grain,
             required_roles = unique(required_roles),
-            linkage = unique(linkage),
-            extractor = extractor,
-            default_method = default_method,
+            evidence_scope = evidence_scope,
             group_at_level = group_at_level,
             keep_group_when = keep_group_when),
         "ee_channel")
 }
 
 code_channel <- function(source, selector, native_grain = NA_character_,
-                         required_roles = character(), linkage = character(),
+                         required_roles = character(), evidence_scope = NULL,
                          group_at_level = NULL, keep_group_when = NULL) {
     .check_channel_selector(selector, "code", "code")
-    channel(source, selector, "code", native_grain, required_roles, linkage,
+    channel(source, selector, "code", native_grain, required_roles,
+            evidence_scope,
             group_at_level = group_at_level,
             keep_group_when = keep_group_when)
 }
 
 act_channel <- function(source, selector, native_grain = NA_character_,
-                        required_roles = character(), linkage = character(),
+                        required_roles = character(), evidence_scope = NULL,
                         group_at_level = NULL, keep_group_when = NULL) {
     .check_channel_selector(selector, "code", "act")
-    channel(source, selector, "act", native_grain, required_roles, linkage,
+    channel(source, selector, "act", native_grain, required_roles,
+            evidence_scope,
             group_at_level = group_at_level,
             keep_group_when = keep_group_when)
 }
 
 lab_channel <- function(source, selector, native_grain = NA_character_,
-                        required_roles = character(), linkage = character(),
+                        required_roles = character(), evidence_scope = NULL,
                         group_at_level = NULL, keep_group_when = NULL) {
     .check_channel_selector(selector, "analyte", "lab")
-    channel(source, selector, "lab", native_grain, required_roles, linkage,
+    channel(source, selector, "lab", native_grain, required_roles,
+            evidence_scope,
             group_at_level = group_at_level,
             keep_group_when = keep_group_when)
 }
 
-text_channel <- function(source, selector, extractor = NULL,
-                         default_method = NULL,
+text_channel <- function(selector, evidence_scope, source = "documents",
                          native_grain = NA_character_,
-                         required_roles = character(), linkage = character(),
+                         required_roles = character(),
                          group_at_level = NULL, keep_group_when = NULL) {
+    if (missing(evidence_scope)) {
+        stop("text_channel() requires evidence_scope = 'patient' or 'event'.",
+             call. = FALSE)
+    }
     .check_channel_selector(selector, "lucene_query", "text")
-    channel(source, selector, "text", native_grain, required_roles, linkage,
-            extractor = extractor, default_method = default_method,
+    channel(source, selector, "text", native_grain, required_roles,
+            evidence_scope,
             group_at_level = group_at_level,
             keep_group_when = keep_group_when)
 }
 
 doc_channel <- function(source, selector, native_grain = NA_character_,
-                        required_roles = character(), linkage = character(),
+                        required_roles = character(), evidence_scope = NULL,
                         group_at_level = NULL, keep_group_when = NULL) {
     .check_channel_selector(selector, "doc_meta", "doc")
-    channel(source, selector, "doc", native_grain, required_roles, linkage,
+    channel(source, selector, "doc", native_grain, required_roles,
+            evidence_scope,
             group_at_level = group_at_level,
             keep_group_when = keep_group_when)
 }

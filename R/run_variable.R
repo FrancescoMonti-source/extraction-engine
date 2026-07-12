@@ -155,10 +155,10 @@
          "{corpus, docs_index}.", call. = FALSE)
 }
 
-# Real retrieval from raw documents (corpus + docs_index). Relational linkage
-# (subject, optionally event) is resolved first; an authored temporal window is
-# then intersected with that eligible set. With no window, subject linkage sees
-# the whole record and event linkage sees the whole event.
+# Real retrieval from raw documents (corpus + docs_index). The declared evidence
+# scope is resolved first; an authored temporal window is then intersected with
+# that eligible set. With no window, patient scope sees the whole record and event
+# scope sees the whole event.
 # Then the existing retrieve() runs the channel's Lucene query and assembles
 # candidates + coverage. Eligibility keeps the document's EVTID when docs_index
 # carries it, so a text hit stays attributable to its stay (combine_at_level, §7).
@@ -168,15 +168,14 @@
 }
 
 .retrieve_text_channel <- function(channel_def, variable, tasks, src, selector) {
-    linkage <- channel_def$linkage
-    event_linked <- "event" %in% linkage
-    if (event_linked) {
+    event_scoped <- identical(channel_def$evidence_scope, "event")
+    if (event_scoped) {
         if (!all(c("PATID", "EVTID") %in% names(tasks))) {
             stop("Event-scoped text retrieval requires tasks with PATID + EVTID.",
                  call. = FALSE)
         }
     }
-    join_keys <- if (event_linked) c("PATID", "EVTID") else "PATID"
+    join_keys <- if (event_scoped) c("PATID", "EVTID") else "PATID"
     task_columns <- c("task_id", join_keys,
                       if (!is.null(variable$anchor)) "anchor_date")
     keys <- tasks %>% select(all_of(task_columns)) %>% distinct()
@@ -194,6 +193,27 @@
     }
     eligibility <- .text_eligibility_cols(eligibility)
     retrieve(src$corpus, tasks, eligibility, query = selector$query)
+}
+
+# Deterministic text presence: a Lucene match is the measured signal. No prompt,
+# schema, parser, or Chat participates in this path.
+.run_lucene_presence <- function(text_inputs) {
+    coverage <- text_inputs$coverage %>%
+        mutate(processing_state = case_when(
+            coverage_state == "no_eligible_document" ~ "no_eligible_document",
+            coverage_state == "no_candidate" ~ "no_candidate",
+            coverage_state == "candidate" ~ "measured",
+            TRUE ~ "processing_error"))
+    values <- text_inputs$candidates %>%
+        distinct(task_id) %>%
+        transmute(task_id = as.character(task_id), accepted_value = "present")
+    list(
+        coverage = coverage,
+        values = values,
+        evidence = text_inputs$candidates,
+        attempts = tibble::tibble(),
+        candidates = text_inputs$candidates,
+        model_candidates = text_inputs$candidates[0, , drop = FALSE])
 }
 
 # Resolve a coded channel's PHYSICAL columns from its source's roles (registry):
@@ -237,7 +257,7 @@
 
 # Grain guard: the OUTPUT GRAIN (variable$output_one_row_per) is carried by the task
 # universe -- one task row per grain unit. This checks the tasks frame actually is at
-# the declared grain and returns the linkage keys the structured executors scope by:
+# the declared grain and returns the identity keys the structured executors scope by:
 # unique(c("PATID", output_one_row_per)) -- "PATID" alone at patient grain, c("PATID",
 # "EVTID") at stay grain. DESIGN §7: the variable_spec decides the unit; the engine
 # checks the tasks can be mechanically linked to it.
@@ -408,16 +428,16 @@
 }
 
 .channel_scope_keys <- function(channel_def, variable, tasks, grain_keys) {
-    if ("event" %in% channel_def$linkage) {
+    if (identical(channel_def$evidence_scope, "event")) {
         required <- c("PATID", "EVTID")
         missing <- setdiff(required, names(tasks))
         if (length(missing)) {
-            stop("Event-linked channel '", channel_def$name,
+            stop("Event-scoped channel '", channel_def$name,
                  "' requires task column(s): ", paste(missing, collapse = ", "),
                  ".", call. = FALSE)
         }
         if (anyNA(tasks$EVTID) || any(!nzchar(as.character(tasks$EVTID)))) {
-            stop("Event-linked tasks require non-missing EVTID values.",
+            stop("Event-scoped tasks require non-missing EVTID values.",
                  call. = FALSE)
         }
         return(required)
@@ -431,10 +451,8 @@
     channel_def <- .channel_def(variable, channel_name)
     # Activation may locally override the concept's baseline selector (DESIGN §14.3):
     # use_channel(selector = ...) replaces the inherited selector for THIS variable
-    # without mutating the concept -- the same activation-overrides-concept pattern
-    # used for `extractor` below. Resolved ONCE and used by every branch (and threaded
-    # into text retrieval) so the override is uniform: a half-applied selector would
-    # retrieve on one query and match/extract on another.
+    # without mutating the concept. It is resolved ONCE and used by every branch
+    # (and threaded into text retrieval) so the override is uniform.
     selector <- channel_def$selector
     source <- channel_def$source
     if (!source %in% names(sources)) {
@@ -535,33 +553,27 @@
                 field = variable$name, source = source)
         },
         text = {
-            if (is.null(chat)) {
-                stop("Text channel '", channel_name, "' requires an ellmer Chat.",
-                      call. = FALSE)
-            }
-            # The authored task may live on the activation or default to the
-            # channel. Prompt-only tasks are compiled here against the variable's
-            # declared output; legacy internal definitions are already compiled.
-            extractor <- channel_def$extractor
-            if (is.null(extractor)) {
-                stop("Text channel '", channel_name,
-                     "' has no extractor (activation or concept).", call. = FALSE)
-            }
             method <- channel_def$method
-            if (!inherits(method, "ee_extraction_method") ||
-                !identical(method$kind, "llm_after_lucene") ||
-                !is.function(method$candidates)) {
-                stop("Text channel '", channel_name,
-                     "' requires llm_after_lucene().",
-                     call. = FALSE)
-            }
             text_inputs <- .resolve_text_inputs(sources[[source]], channel_def,
                                                  variable, tasks, selector)
-            definition <- .compile_llm_task(extractor, variable)
-            run_extraction(
-                text_inputs$coverage, text_inputs$candidates,
-                definition, chat, method$candidates,
-                query = selector$query)
+            if (identical(method, "lucene")) {
+                .run_lucene_presence(text_inputs)
+            } else if (identical(method, "lucene_llm")) {
+                if (is.null(chat)) {
+                    stop("Text channel '", channel_name,
+                         "' with method = 'lucene_llm' requires an ellmer Chat.",
+                         call. = FALSE)
+                }
+                definition <- .compile_llm_channel(channel_def, variable)
+                run_extraction(
+                    text_inputs$coverage, text_inputs$candidates,
+                    definition, chat,
+                    .candidate_selector(channel_def$max_candidates),
+                    query = selector$query)
+            } else {
+                stop("Unsupported text method for channel '", channel_name,
+                     "': ", method, ".", call. = FALSE)
+            }
         },
         stop("No experimental executor for channel type: ", channel_def$type,
              call. = FALSE))
@@ -590,6 +602,16 @@
         TRUE                 ~ "unknown")
 }
 
+.no_candidate_status <- function(channel_name, variable) {
+    channel <- .channel_def(variable, channel_name)
+    if (identical(channel$type, "text") &&
+        identical(channel$method, "lucene_llm")) {
+        "unavailable"
+    } else {
+        "complete"
+    }
+}
+
 # Single-channel binary membership (combine = NULL + binary output): the value IS
 # the channel's observed hit, as OBSERVED set algebra -- a task is a member iff
 # hit == TRUE, so both FALSE and NA give 0 and the value is always 0/1 (a degenerate
@@ -602,7 +624,7 @@
     source_name <- .source_name_for_channel(channel_name, variable)
     is_text <- identical(.channel_type(channel_name, variable), "text")
     id_col <- if (is_text) "hit_ref" else "source_row_id"
-    no_candidate <- if (is_text) "unavailable" else "complete"
+    no_candidate <- .no_candidate_status(channel_name, variable)
     task_ids <- as.character(tasks$task_id)
     reduced <- .reduce_channel_result(result, task_ids, id_col, no_candidate)
 
@@ -1098,7 +1120,7 @@
     reduced <- lapply(declared, function(ch) {
         is_text <- identical(.channel_type(ch, variable), "text")
         id_col <- if (is_text) "hit_ref" else "source_row_id"
-        no_candidate <- if (is_text) "unavailable" else "complete"
+        no_candidate <- .no_candidate_status(ch, variable)
         .reduce_channel_result(channel_results[[ch]], task_ids, id_col, no_candidate)
     })
     names(reduced) <- declared
@@ -1267,21 +1289,15 @@
                 list(text = "snippet_text", evidence_ref = "hit_ref")
             } else NULL,
             required_roles = ch$required_roles,
-            linkage = ch$linkage,
+            evidence_scope = ch$evidence_scope,
             selector = .provenance_selector(ch$selector),
             selector_source = ch$selector_source,
-            method_source = ch$method_source,
-            extractor_source = ch$extractor_source,
-            method = if (inherits(ch$method, "ee_extraction_method")) {
-                list(
-                    kind = ch$method$kind,
-                    candidate_policy = ch$method$candidate_policy,
-                    max_candidates = ch$method$max_candidates,
-                    select_candidates = if (identical(
-                        ch$method$candidate_policy, "custom")) {
-                        paste(deparse(ch$method$candidates), collapse = " ")
-                    } else NULL)
+            method = ch$method,
+            prompt = ch$prompt,
+            system_prompt = if (identical(ch$method, "lucene_llm")) {
+                ch$system_prompt %||% DEFAULT_LLM_SYSTEM_PROMPT
             } else NULL,
+            max_candidates = ch$max_candidates,
             # Aggregate membership predicate (§16.7): the executed group rule,
             # serializable -- level + deparsed closure, like the output's reduce.
             group_at_level = ch$group_at_level,
@@ -1456,7 +1472,7 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
     # next model can be selected. Per-task Chat clones isolate conversation state;
     # they keep the same provider/model and do not reconfigure Ollama.
     chat <- .resolve_variable_chat(variable, chat)
-    # Scoping rule (DESIGN §7): an explicit event linkage always constrains rows
+    # Scoping rule (DESIGN §7): an explicit event evidence scope constrains rows
     # to PATID + EVTID. Otherwise a declared window gathers per subject inside
     # each task's anchored window; with no window, the output grain is the scope.
     channel_results <- lapply(names(variable$channels), function(channel_name) {

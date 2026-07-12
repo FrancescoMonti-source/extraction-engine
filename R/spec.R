@@ -273,20 +273,51 @@ concept_spec <- function(name, channels) {
 }
 
 # use_channel() is the per-channel activation record placed inside a variable_spec.
-#   method    -> variable-owned extraction strategy (e.g. llm_after_lucene())
-#   extractor -> optional override of the concept-owned answer definition
-use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
+# Text methods are ordinary strings; the study-owned prompt stays directly beside
+# the method that consumes it. Ellmer schemas and parsing remain engine work.
+use_channel <- function(method = NULL, prompt = NULL, system_prompt = NULL,
+                        max_candidates = NULL, selector = NULL,
                         keep_when = NULL, reducer = NULL) {
     if (!is.null(reducer)) {
         stop("use_channel() no longer takes reducer: reduction lives on the ",
               "output -- num_output(values_from =, reduce =) / ",
               "cat_output(levels, values_from =, reduce =).", call. = FALSE)
     }
-    if (!is.null(method) && !inherits(method, "ee_extraction_method")) {
-        stop("use_channel() method must be created with llm_after_lucene().",
+    if (!is.null(method) &&
+        (!is.character(method) || length(method) != 1L || is.na(method) ||
+         !method %in% c("lucene", "lucene_llm"))) {
+        stop("use_channel() method must be 'lucene', 'lucene_llm', or NULL.",
              call. = FALSE)
     }
-    if (!is.null(extractor)) .check_llm_task(extractor)
+    for (field in c("prompt", "system_prompt")) {
+        value <- get(field)
+        if (!is.null(value) &&
+            (!is.character(value) || length(value) != 1L || is.na(value) ||
+             !nzchar(trimws(value)))) {
+            stop("use_channel() ", field, " must be one non-empty string or NULL.",
+                 call. = FALSE)
+        }
+    }
+    if (!is.null(max_candidates)) {
+        if (!is.numeric(max_candidates) || length(max_candidates) != 1L ||
+            is.na(max_candidates) || !is.finite(max_candidates) ||
+            max_candidates < 1 || max_candidates != floor(max_candidates) ||
+            max_candidates > .Machine$integer.max) {
+            stop("use_channel() max_candidates must be one positive integer or NULL.",
+                 call. = FALSE)
+        }
+        max_candidates <- as.integer(max_candidates)
+    }
+    llm_args <- !is.null(prompt) || !is.null(system_prompt) ||
+        !is.null(max_candidates)
+    if (!identical(method, "lucene_llm") && llm_args) {
+        stop("prompt, system_prompt, and max_candidates are valid only with ",
+             "method = 'lucene_llm'.", call. = FALSE)
+    }
+    if (identical(method, "lucene_llm") && is.null(prompt)) {
+        stop("method = 'lucene_llm' requires prompt = <non-empty string>.",
+             call. = FALSE)
+    }
     if (!is.null(selector) && !inherits(selector, "ee_selector")) {
         stop("use_channel() selector must be created with a selector constructor.",
              call. = FALSE)
@@ -303,30 +334,40 @@ use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
         }
     }
     .new_spec(
-        list(method = method, extractor = extractor, selector = selector,
+        list(method = method, prompt = prompt, system_prompt = system_prompt,
+             max_candidates = max_candidates, selector = selector,
              keep_when = keep_when),
         "ee_channel_use")
 }
 
-# Turn a builder's declared channel selection into per-channel use_channel()
-# records. Generic: a text-type channel receives the template's text method and,
-# when the concept is neutral (no answer schema on the channel), the template's
-# text_extractor -- so "which documented status" is a template/activation choice,
-# not baked into the concept. Other channels are activated with defaults. If the
-# caller already supplied a named list of use_channel() (a direct override), it is
-# returned unchanged.
-.activate_channels <- function(concept, channels, text_method = NULL,
-                               text_extractor = NULL) {
-    if (is.list(channels) && !is.null(names(channels))) return(channels)
-    channel_names <- as.character(channels)
-    uses <- lapply(channel_names, function(nm) {
-        if (identical(concept$channels[[nm]]$type, "text")) {
-            use_channel(method = text_method, extractor = text_extractor)
-        } else {
-            use_channel()
+# Text execution has two deliberately narrow public modes. Retrieval-only Lucene
+# produces binary membership; Lucene + LLM produces one grammar-gated category.
+.check_text_channel_uses <- function(channels, catalog, output) {
+    text_names <- names(channels)[vapply(
+        names(channels),
+        function(name) identical(catalog[[name]]$type, "text"),
+        logical(1))]
+    for (name in text_names) {
+        method <- channels[[name]]$method
+        if (is.null(method)) {
+            stop("Text channel '", name, "' requires use_channel(method = ",
+                 "'lucene' or 'lucene_llm').", call. = FALSE)
         }
-    })
-    stats::setNames(uses, channel_names)
+        if (identical(method, "lucene") &&
+            !identical(output$kind, "binary")) {
+            stop("Text method 'lucene' produces presence and requires bin_output().",
+                 call. = FALSE)
+        }
+        if (identical(method, "lucene_llm") &&
+            (!identical(output$kind, "categorical") ||
+             is.function(output$reduce))) {
+            stop("Text method 'lucene_llm' requires cat_output(levels) without ",
+                 "a payload reducer.", call. = FALSE)
+        }
+    }
+    any(vapply(text_names, function(name) {
+        identical(channels[[name]]$method, "lucene_llm")
+    }, logical(1)))
 }
 
 # A variable_spec is the concrete executable definition of one analytical variable.
@@ -394,12 +435,10 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
              paste(unknown, collapse = ", "), call. = FALSE)
     }
     catalog <- c(concept$channels, inline_channels)
-    has_text_channel <- any(vapply(
-        names(channels),
-        function(channel_name) identical(catalog[[channel_name]]$type, "text"),
-        logical(1)))
-    if (!is.null(model) && !has_text_channel) {
-        stop("variable_spec() model has no effect without a selected text channel.",
+    needs_chat <- .check_text_channel_uses(channels, catalog, output)
+    if (!is.null(model) && !needs_chat) {
+        stop("variable_spec() model has no effect without a selected ",
+             "method = 'lucene_llm' channel.",
              call. = FALSE)
     }
 
@@ -457,9 +496,7 @@ inspect.ee_channel <- function(x, ...) {
              selector = x$selector,
              native_grain = x$native_grain,
              required_roles = x$required_roles,
-              linkage = x$linkage,
-              extractor = x$extractor,
-              default_method = x$default_method,
+              evidence_scope = x$evidence_scope,
               group_at_level = x$group_at_level,
               keep_group_when = x$keep_group_when),
         "ee_channel_inspection")
@@ -502,9 +539,9 @@ inspect.default <- function(x, ...) {
     invisible(NULL)
 }
 
-.print_linkage <- function(linkage, indent = "    ") {
-    if (!length(linkage)) return(invisible(NULL))
-    scope <- if ("event" %in% linkage) {
+.print_evidence_scope <- function(evidence_scope, indent = "    ") {
+    if (is.null(evidence_scope)) return(invisible(NULL))
+    scope <- if (identical(evidence_scope, "event")) {
         "same PATID + EVTID"
     } else {
         "same PATID"
@@ -522,7 +559,7 @@ print.ee_concept_spec <- function(x, ...) {
         cat("    type: ", channel$type, "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
-        .print_linkage(channel$linkage)
+        .print_evidence_scope(channel$evidence_scope)
     }
     invisible(x)
 }
@@ -550,26 +587,24 @@ print.ee_variable_spec <- function(x, ...) {
         cat("  ", name, "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
-        .print_linkage(channel$linkage)
-        if (inherits(channel$method, "ee_extraction_method")) {
-            candidate_rule <- switch(
-                channel$method$candidate_policy,
-                all = "all matches",
-                first_n = paste("first", channel$method$max_candidates,
-                                "matches"),
-                custom = paste("custom selector:",
-                               .one_line(channel$method$candidates)),
-                "unknown policy")
-            cat("    candidates after Lucene: ",
-                candidate_rule, "\n", sep = "")
+        .print_evidence_scope(channel$evidence_scope)
+        if (!is.null(channel$method)) {
+            cat("    method: ", channel$method, "\n", sep = "")
         }
-        if (inherits(channel$extractor, "ee_llm_task")) {
-            prompt <- gsub("\\s+", " ", channel$extractor$prompt)
+        if (identical(channel$method, "lucene_llm")) {
+            candidate_rule <- if (is.null(channel$max_candidates)) {
+                "all matches"
+            } else {
+                paste("first", channel$max_candidates, "matches")
+            }
+            cat("    candidates after Lucene: ", candidate_rule, "\n", sep = "")
+            prompt <- gsub("\\s+", " ", channel$prompt)
             cat("    llm prompt: ", trimws(prompt), "\n", sep = "")
+            cat("    system prompt: ",
+                if (is.null(channel$system_prompt)) "package default" else "override",
+                "\n", sep = "")
             cat("    response: categorical value + evidence ids ",
                 "(engine generated)\n", sep = "")
-        } else if (inherits(channel$extractor, "ee_llm_definition")) {
-            cat("    llm definition: internal recipe\n")
         }
     }
     combine <- resolved$combine_rule
@@ -644,9 +679,6 @@ print.ee_variable_spec <- function(x, ...) {
     if (is.null(channel_def)) {
         stop("Cannot resolve unknown channel: ", name, call. = FALSE)
     }
-    method <- .inherit_from_activation(channel_def, channel_use, "method",
-                                       "default_method")
-    extractor <- .inherit_from_activation(channel_def, channel_use, "extractor")
     # The selector inherits like every other activation field (DESIGN section 14.3): a
     # use_channel(selector = ...) override IS the executed definition, so the
     # resolved view -- and the provenance built from it -- must record it, not the
@@ -667,14 +699,14 @@ print.ee_variable_spec <- function(x, ...) {
             selector_source = selector$source,
             native_grain = channel_def$native_grain,
             required_roles = channel_def$required_roles,
-            linkage = channel_def$linkage,
+            evidence_scope = channel_def$evidence_scope,
             produces = channel_def$produces,
             group_at_level = channel_def$group_at_level,
             keep_group_when = channel_def$keep_group_when,
-            method = method$value,
-            method_source = method$source,
-            extractor = extractor$value,
-            extractor_source = extractor$source),
+            method = channel_use$method,
+            prompt = channel_use$prompt,
+            system_prompt = channel_use$system_prompt,
+            max_candidates = channel_use$max_candidates),
         "ee_resolved_channel")
 }
 
