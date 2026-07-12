@@ -64,7 +64,7 @@ smoking_periop <- function() {
 # no_candidate (nothing retrieved) and invalid (definitive without grounding) are not.
 test_that("categorical output returns the status and distinct absence states", {
     run <- run_variable(smoking_periop(), sm_tasks, sm_sources,
-                        caller = sm_fake, model_name = "fake")
+                        chat = fake_chat(sm_fake))
 
     value <- setNames(run$values$value, run$values$grain_id)
     cov <- setNames(run$values$channel_coverage, run$values$grain_id)
@@ -86,7 +86,7 @@ test_that("categorical output returns the status and distinct absence states", {
 # invented id never materializes as evidence.
 test_that("D1: invented citation is kept-and-flagged, not fail-closed", {
     run <- run_variable(smoking_periop(), sm_tasks, sm_sources,
-                        caller = sm_fake, model_name = "fake")
+                        chat = fake_chat(sm_fake))
     value <- setNames(run$values$value, run$values$grain_id)
     cw <- setNames(run$values$citation_warning, run$values$grain_id)
     nr <- setNames(run$values$needs_review, run$values$grain_id)

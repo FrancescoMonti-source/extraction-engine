@@ -16,9 +16,25 @@
 #        summary = scalar character or NA)
 new_task_definition <- function(name, system_prompt, type_builder, prompt_builder,
                                 parser, summary_field = NULL, summary_required = FALSE) {
-    list(name = name, system_prompt = system_prompt, type_builder = type_builder,
-         prompt_builder = prompt_builder, parser = parser,
-         summary_field = summary_field, summary_required = summary_required)
+    if (!is.character(name) || length(name) != 1L || !nzchar(name) ||
+        !is.character(system_prompt) || length(system_prompt) != 1L ||
+        !nzchar(system_prompt)) {
+        stop("new_task_definition() requires non-empty name and system_prompt.",
+             call. = FALSE)
+    }
+    for (value in list(type_builder = type_builder,
+                       prompt_builder = prompt_builder, parser = parser)) {
+        if (!is.function(value)) {
+            stop("type_builder, prompt_builder, and parser must be functions.",
+                 call. = FALSE)
+        }
+    }
+    structure(
+        list(name = name, system_prompt = system_prompt,
+             type_builder = type_builder, prompt_builder = prompt_builder,
+             parser = parser, summary_field = summary_field,
+             summary_required = isTRUE(summary_required)),
+        class = c("ee_task_definition", "list"))
 }
 
 scalar_present <- function(x) {
@@ -128,71 +144,134 @@ binary_presence_text_definition <- function(name, status_key, field, system_prom
         parser = parser, summary_field = NULL, summary_required = FALSE)
 }
 
-make_ollama_caller <- function(model = "gemma3:4b", seed = 20260621L, max_tokens = 1024L) {
-    force(model); force(seed); force(max_tokens)
-    function(prompt, type, system_prompt) {
-        chat <- ellmer::chat_ollama(
-            model = model, system_prompt = system_prompt,
-            params = ellmer::params(temperature = 0, seed = seed, max_tokens = max_tokens),
-            echo = "none")
-        tryCatch(
-            chat$chat_structured(prompt, type = type),
-            error = function(e) {
-                # The error itself carries no body, but the chat retains the partial
-                # output; capture it here (chat is local) so a truncation is
-                # diagnosable from artifacts. output >= max_tokens => length-truncation.
-                partial <- tryCatch(
-                    paste(vapply(chat$last_turn()@contents,
-                                 function(co) tryCatch(co@string, error = function(...) ""),
-                                 character(1)), collapse = ""),
-                    error = function(...) NA_character_)
-                out_tok <- tryCatch({
-                    tk <- utils::tail(chat$get_tokens(), 1L)
-                    if (nrow(tk)) as.numeric(tk$output[[1]]) else NA_real_
-                }, error = function(...) NA_real_)
-                rlang::abort(
-                    conditionMessage(e), class = "engine_call_error", parent = e,
-                    partial_response = partial, output_tokens = out_tok,
-                    inferred_finish_reason =
-                        if (!is.na(out_tok) && out_tok >= max_tokens) "length" else NA_character_)
-            })
+APPROVED_MODELS <- c("gemma3:4b")
+
+.chat_metadata <- function(chat) {
+    if (is.null(chat)) {
+        return(list(provider = NA_character_, model = NA_character_, params = list(),
+                    temperature = NA_real_, seed = NA_integer_,
+                    max_tokens = NA_real_))
     }
+    if (!inherits(chat, "Chat") || !is.function(chat$chat_structured) ||
+        !is.function(chat$clone) || !is.function(chat$get_provider)) {
+        stop("chat must be an ellmer Chat object.", call. = FALSE)
+    }
+    provider <- chat$get_provider()
+    params <- tryCatch(provider@params, error = function(...) list())
+    if (is.null(params)) params <- list()
+    model <- as.character(chat$get_model())
+    if (length(model) != 1L || is.na(model) || !nzchar(model)) {
+        stop("The ellmer Chat must expose one non-empty model name.",
+             call. = FALSE)
+    }
+    scalar_num <- function(name) {
+        value <- params[[name]]
+        if (is.null(value) || length(value) != 1L) NA_real_ else as.numeric(value)
+    }
+    list(
+        provider = tryCatch(as.character(provider@name),
+                            error = function(...) NA_character_),
+        model = model,
+        params = params,
+        temperature = scalar_num("temperature"),
+        seed = as.integer(scalar_num("seed")),
+        max_tokens = scalar_num("max_tokens"))
 }
 
-# Retry only TRANSIENT provider failures (crash/timeout/connection). Permanent
-# errors (schema/parse/config) are deterministic under temp=0+seed -> no retry.
-# NB: a "premature EOF" is a deterministic truncated-JSON / max-token failure, not
-# a transport disconnect, so it is deliberately NOT treated as transient.
-.is_transient <- function(msg) {
-    grepl("HTTP 5|timeout|timed out|connection|terminated|CUDA|reset|socket",
-          msg, ignore.case = TRUE)
+.require_gated_chat <- function(metadata) {
+    if (identical(tolower(metadata$provider), "test")) return(invisible(TRUE))
+    if (!metadata$model %in% APPROVED_MODELS &&
+        !nzchar(Sys.getenv("ALLOW_UNGATED_MODEL"))) {
+        stop("Model '", metadata$model,
+             "' has not passed the structured-output grammar gate. Approved: ",
+             paste(APPROVED_MODELS, collapse = ", "),
+             ". Set ALLOW_UNGATED_MODEL=1 to override.", call. = FALSE)
+    }
+    invisible(TRUE)
 }
 
-call_with_retry <- function(caller, prompt, type, system_prompt, max_tries = 3L) {
-    started <- Sys.time(); errors <- character(); out <- NULL
-    for (k in seq_len(max_tries)) {
-        out <- tryCatch(
-            list(status = "completed", result = caller(prompt, type, system_prompt),
-                 error = NA_character_, n_tries = k),
-            error = function(e) list(status = "error", result = NULL,
-                                     error = conditionMessage(e), n_tries = k,
-                                     partial_response = e$partial_response,
-                                     output_tokens = e$output_tokens,
-                                     inferred_finish_reason = e$inferred_finish_reason))
-        if (identical(out$status, "completed")) break
-        errors <- c(errors, out$error)
-        if (k < max_tries && .is_transient(out$error)) Sys.sleep(min(5L * k, 15L)) else break
-    }
-    out$errors <- errors
+.chat_partial_response <- function(chat) {
+    if (is.null(chat)) return(NA_character_)
+    tryCatch(
+        paste(vapply(chat$last_turn()@contents,
+                     function(content) tryCatch(content@string,
+                                                  error = function(...) ""),
+                     character(1)), collapse = ""),
+        error = function(...) NA_character_)
+}
+
+.chat_output_tokens <- function(chat) {
+    if (is.null(chat)) return(NA_real_)
+    tryCatch({
+        tokens <- utils::tail(chat$get_tokens(), 1L)
+        if (nrow(tokens)) as.numeric(tokens$output[[1]]) else NA_real_
+    }, error = function(...) NA_real_)
+}
+
+.condition_value <- function(error, name, default) {
+    value <- tryCatch(error[[name]], error = function(...) NULL)
+    if (is.null(value) || length(value) != 1L) default else value
+}
+
+.call_chat <- function(chat, prompt, type, system_prompt, metadata) {
+    started <- Sys.time()
+    task_chat <- NULL
+    out <- tryCatch({
+        task_chat <- chat$clone(deep = TRUE)
+        task_chat$set_turns(list())
+        task_chat$set_system_prompt(system_prompt)
+        list(status = "completed",
+             result = task_chat$chat_structured(prompt, type = type),
+             error = NA_character_)
+    }, error = function(error) {
+        output_tokens <- as.numeric(.condition_value(
+            error, "output_tokens", .chat_output_tokens(task_chat)))
+        finish_reason <- as.character(.condition_value(
+            error, "inferred_finish_reason", NA_character_))
+        if (is.na(finish_reason) && !is.na(output_tokens) &&
+            !is.na(metadata$max_tokens) && output_tokens >= metadata$max_tokens) {
+            finish_reason <- "length"
+        }
+        list(
+            status = "error", result = NULL, error = conditionMessage(error),
+            partial_response = as.character(.condition_value(
+                error, "partial_response", .chat_partial_response(task_chat))),
+            output_tokens = output_tokens,
+            inferred_finish_reason = finish_reason)
+    })
+    out$n_tries <- 1L
+    out$errors <- if (identical(out$status, "error")) out$error else character()
     out$started_at <- started
     out$latency_ms <- as.numeric(difftime(Sys.time(), started, units = "secs")) * 1000
-    # observability fields are absent on completed calls and plain-stop fakes
     if (is.null(out$partial_response)) out$partial_response <- NA_character_
-    if (is.null(out$output_tokens))   out$output_tokens   <- NA_real_
+    if (is.null(out$output_tokens)) out$output_tokens <- NA_real_
     if (is.null(out$inferred_finish_reason)) {
         out$inferred_finish_reason <- NA_character_
     }
     out
+}
+
+.select_task_candidates <- function(selector, rows, task_id) {
+    selected <- selector(rows)
+    if (!is.data.frame(selected) || !all(c("task_id", "snippet_id") %in% names(selected))) {
+        stop("llm_after_lucene() candidates must return candidate rows.",
+             call. = FALSE)
+    }
+    if (!nrow(selected)) {
+        stop("llm_after_lucene() candidates selected no row for task '", task_id,
+             "'.", call. = FALSE)
+    }
+    ids <- as.character(selected$snippet_id)
+    if (anyNA(ids) || anyDuplicated(ids)) {
+        stop("llm_after_lucene() candidates returned missing or duplicate snippet ids.",
+             call. = FALSE)
+    }
+    index <- match(ids, as.character(rows$snippet_id))
+    if (anyNA(index) || any(as.character(selected$task_id) != task_id)) {
+        stop("llm_after_lucene() candidates may only select/reorder supplied rows.",
+             call. = FALSE)
+    }
+    rows[index, , drop = FALSE]
 }
 
 # Materialize one task's evidence; asserts every cited ID resolves to exactly one
@@ -215,21 +294,31 @@ call_with_retry <- function(caller, prompt, type, system_prompt, max_tries = 3L)
                            "RECTYPE")))
 }
 
-run_extraction <- function(coverage, candidates, definition, caller, model_name,
-                           provider = "local", seed = NA_integer_, query = NA_character_,
-                           sample_n = 0L, max_tries = 3L) {
+run_extraction <- function(coverage, candidates, definition, chat,
+                           candidate_selector, query = NA_character_,
+                           sample_n = 0L) {
+    .check_task_definition(definition)
+    if (!is.function(candidate_selector)) {
+        stop("candidate_selector must be a function.", call. = FALSE)
+    }
+    metadata <- .chat_metadata(chat)
+    .require_gated_chat(metadata)
     task_ids <- coverage$task_id[coverage$coverage_state == "candidate"]
     if (sample_n > 0L) task_ids <- head(task_ids, sample_n)
 
     query_hash <- substr(rlang::hash(query), 1L, 12L)   # audit: retrieval-query fingerprint
     values_l <- list(); evidence_l <- list(); attempts_l <- list()
+    selected_l <- list()
 
     for (tid in task_ids) {
         ts <- candidates[candidates$task_id == tid, , drop = FALSE]
+        ts <- .select_task_candidates(candidate_selector, ts, tid)
+        ts$model_candidate_rank <- seq_len(nrow(ts))
+        selected_l[[length(selected_l) + 1L]] <- ts
         task_row <- coverage[coverage$task_id == tid, , drop = FALSE]
         prompt <- definition$prompt_builder(task_row, ts)
         type   <- definition$type_builder(ts$snippet_id)
-        call <- call_with_retry(caller, prompt, type, definition$system_prompt, max_tries)
+        call <- .call_chat(chat, prompt, type, definition$system_prompt, metadata)
         prompt_hash <- substr(rlang::hash(prompt), 1L, 12L)
         schema_hash <- substr(rlang::hash(type), 1L, 12L)
         proc <- NA_character_; tvalid <- NA_character_; err <- paste(call$errors, collapse = " || ")
@@ -248,7 +337,7 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
                 f$accepted_value <- ifelse(f$field_validity == "valid", f$normalized_value, NA_character_)
                 f$task_id <- tid; f$task_validity <- tv; f$task_validity_reason <- treason
                 f$task_summary <- if (scalar_present(parsed$summary)) as.character(parsed$summary[[1]]) else NA_character_
-                f$model <- model_name
+                f$model <- metadata$model
                 ev <- .materialize_task_evidence(f, ts, definition$summary_field)
                 if (nrow(ev)) ev$task_id <- tid
                 list(values = f, evidence = ev, task_validity = tv)
@@ -265,7 +354,9 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
         }
 
         attempts_l[[length(attempts_l) + 1L]] <- tibble::tibble(
-            task_id = tid, provider = provider, model = model_name, seed = seed,
+            task_id = tid, provider = metadata$provider, model = metadata$model,
+            temperature = metadata$temperature, seed = metadata$seed,
+            max_tokens = metadata$max_tokens, params = list(metadata$params),
             definition = definition$name, attempt_status = call$status,
             processing_status = proc, n_tries = call$n_tries,
             started_at = call$started_at, latency_ms = round(call$latency_ms),
@@ -279,8 +370,10 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
 
     values   <- if (length(values_l))   bind_rows(values_l)   else tibble::tibble()
     evidence <- if (length(evidence_l)) bind_rows(evidence_l) else tibble::tibble()
+    model_candidates <- if (length(selected_l)) bind_rows(selected_l) else candidates[0, ]
     attempts <- if (length(attempts_l)) bind_rows(attempts_l) else tibble::tibble(
-        task_id = character(), provider = character(), model = character(), seed = integer(),
+        task_id = character(), provider = character(), model = character(),
+        temperature = double(), seed = integer(), max_tokens = double(), params = list(),
         definition = character(), attempt_status = character(), processing_status = character(),
         n_tries = integer(), started_at = as.POSIXct(character()), latency_ms = double(),
         prompt_hash = character(), schema_hash = character(), query_hash = character(),
@@ -302,5 +395,6 @@ run_extraction <- function(coverage, candidates, definition, caller, model_name,
         select(-attempt_status, -processing_status, -task_validity)
 
     list(coverage = final_coverage, values = values, evidence = evidence,
-         attempts = attempts, candidates = candidates)
+         attempts = attempts, candidates = candidates,
+         model_candidates = model_candidates)
 }

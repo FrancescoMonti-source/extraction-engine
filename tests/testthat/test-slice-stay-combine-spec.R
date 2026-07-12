@@ -85,6 +85,7 @@ sc_ssi_concept <- concept_spec(
                 system_prompt = paste(
                     "Identify only an explicitly documented surgical site",
                     "infection. Do not infer absence from silence.")),
+            default_method = llm_after_lucene(function(x) x),
             linkage = "subject"),
         cim10_ssi = code_channel(
             source = "pmsi_diag",
@@ -111,7 +112,7 @@ sc_ssi_var <- function(..., output_one_row_per = "PATID") {
 test_that("stay-level combine: same-stay co-occurrence, exists-lifted to patient", {
     run <- run_variable(sc_ssi_var(combine_at_level = "EVTID"),
                         sc_tasks, sc_sources,
-                        caller = sc_ssi_fake, model_name = "fake")
+                        chat = fake_chat(sc_ssi_fake))
     value <- setNames(run$values$value, run$values$grain_id)
 
     expect_equal(value[["P1::t"]], 0L)   # THE TRAP: text in S1A, act in S1B
@@ -184,6 +185,7 @@ sc_anemia_concept <- concept_spec(
                 system_prompt = paste(
                     "Identify only explicitly documented anaemia.",
                     "Do not infer absence from silence.")),
+            default_method = llm_after_lucene(function(x) x),
             linkage = "subject"),
         hb_low = lab_channel(
             source = "biology",
@@ -216,7 +218,7 @@ sc_anemia_var <- function(values_from) {
 test_that("gated payload reads only the qualifying stays' rows (values_from key-scoped)", {
     run <- run_variable(sc_anemia_var(values_from = "hb_all"),
                         sc_an_tasks, sc_an_sources,
-                        caller = sc_an_fake, model_name = "fake")
+                        chat = fake_chat(sc_an_fake))
     value <- setNames(run$values$value, run$values$grain_id)
     n_rows <- setNames(run$values$n_payload_rows, run$values$grain_id)
 

@@ -61,7 +61,8 @@ dialysis_status <- function(
         channels = list(
             pmsi_diag_dialysis = use_channel(),
             text_dialysis_mentions = use_channel(
-                method = llm_after_lucene(), extractor = dialysis_text_definition())),
+                method = llm_after_lucene(function(x) x),
+                extractor = dialysis_text_definition())),
         output = bin_output(),
         combine_channels = any_positive())
 }

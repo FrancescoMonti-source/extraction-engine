@@ -50,7 +50,7 @@ rw_variable <- function() {
 # final categorical values -- no pre-built coverage/candidates.
 test_that("run_variable executes a text variable from raw documents via retrieval", {
     run <- run_variable(rw_variable(), rw_tasks, rw_sources,
-                        caller = rw_fake, model_name = "fake")
+                        chat = fake_chat(rw_fake))
 
     value <- setNames(run$values$value, run$values$grain_id)
 

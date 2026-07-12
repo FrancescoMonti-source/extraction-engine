@@ -138,13 +138,14 @@ hit_set_difference <- function(include, exclude = character()) {
 }
 
 # --- text extraction methods --------------------------------------------------
-# No candidate-selection knob: the slice's text source is pre-retrieved, so
-# run_extraction applies no arrange/limit rule. When retrieval runs in-engine, add it
-# as candidates = <plain closure over the standardized candidate table> INSIDE the
-# method (DESIGN §9/§16 -- no wrapper ctor, invariant 33); an unread knob is not
-# carried in the meantime.
-llm_after_lucene <- function() {
-    .new_spec(list(kind = "llm_after_lucene"),
+# Candidate choice is a plain R function over one task's standardized candidate
+# rows. It must be explicit because ordering/limiting is part of the executed rule.
+llm_after_lucene <- function(candidates = NULL) {
+    if (!is.function(candidates)) {
+        stop("llm_after_lucene() requires candidates = <plain function>.",
+             call. = FALSE)
+    }
+    .new_spec(list(kind = "llm_after_lucene", candidates = candidates),
                        "ee_extraction_method")
 }
 

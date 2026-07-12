@@ -44,6 +44,7 @@ recipient_anastomoses <- function(
         anchor = anchor,
         window = NULL,
         channels = list(text_operative_report = use_channel(
-            method = llm_after_lucene(), extractor = anastomoses_definition())),
+            method = llm_after_lucene(function(x) x),
+            extractor = anastomoses_definition())),
         output = struct_output(names(ANASTOMOSES_FIELDS)))
 }

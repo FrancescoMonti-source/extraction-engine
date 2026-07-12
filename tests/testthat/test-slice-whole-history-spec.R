@@ -84,7 +84,7 @@ wht_variable <- function() {
         concept = diabetes_concept_spec(),
         output_one_row_per = "PATID", anchor = NULL, window = NULL,   # whole history
         channels = list(text_diabetes_mentions =
-                            use_channel(method = llm_after_lucene())),
+                            use_channel(method = llm_after_lucene(function(x) x))),
         output = bin_output())                            # single channel -> membership
 }
 
@@ -94,7 +94,7 @@ wht_variable <- function() {
 # grounding: binary presence is invalid without a resolved evidence id.)
 test_that("no-window subject text retrieves a document any window would exclude", {
     run <- run_variable(wht_variable(), wht_tasks, wht_sources,
-                        caller = wht_fake, model_name = "fake")
+                        chat = fake_chat(wht_fake))
     value <- setNames(run$values$value, run$values$grain_id)
     expect_equal(value[["Q4"]], 1L)
 })

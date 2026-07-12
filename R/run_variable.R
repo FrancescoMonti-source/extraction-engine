@@ -333,7 +333,7 @@
 
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
 .run_selected_channel <- function(variable, channel_name, tasks, sources,
-                                  caller, model_name, grain_keys = "PATID") {
+                                  chat, grain_keys = "PATID") {
     channel_def <- .channel_def(variable, channel_name)
     # Activation may locally override the concept's baseline selector (DESIGN §14.3):
     # use_channel(selector = ...) replaces the inherited selector for THIS variable
@@ -441,9 +441,9 @@
                 field = variable$name, source = source)
         },
         text = {
-            if (is.null(caller)) {
-                stop("Text channel '", channel_name, "' requires a caller.",
-                     call. = FALSE)
+            if (is.null(chat)) {
+                stop("Text channel '", channel_name, "' requires an ellmer Chat.",
+                      call. = FALSE)
             }
             # The answer schema may live on the activation (neutral concept, e.g.
             # smoking) or default to the channel (concept-owned, e.g. diabetes).
@@ -452,11 +452,19 @@
                 stop("Text channel '", channel_name,
                      "' has no extractor (activation or concept).", call. = FALSE)
             }
+            method <- channel_def$method
+            if (!inherits(method, "ee_extraction_method") ||
+                !identical(method$kind, "llm_after_lucene") ||
+                !is.function(method$candidates)) {
+                stop("Text channel '", channel_name,
+                     "' requires llm_after_lucene(candidates = <function>).",
+                     call. = FALSE)
+            }
             text_inputs <- .resolve_text_inputs(sources[[source]], channel_def,
-                                                variable, tasks, selector)
+                                                 variable, tasks, selector)
             run_extraction(
                 text_inputs$coverage, text_inputs$candidates,
-                extractor, caller, model_name,
+                extractor, chat, method$candidates,
                 query = selector$query)
         },
         stop("No experimental executor for channel type: ", channel_def$type,
@@ -1091,7 +1099,8 @@
     list(kind = "task_column", column = as.character(anchor))
 }
 
-.build_provenance <- function(variable, model_name) {
+.build_provenance <- function(variable, chat) {
+    metadata <- .chat_metadata(chat)
     channels <- lapply(variable$channels, function(ch) {
         spec <- if (ch$source %in% names(EE_SOURCES)) EE_SOURCES[[ch$source]]
                 else NULL
@@ -1103,6 +1112,11 @@
             selector_source = ch$selector_source,
             method_source = ch$method_source,
             extractor_source = ch$extractor_source,
+            method = if (inherits(ch$method, "ee_extraction_method")) {
+                list(
+                    kind = ch$method$kind,
+                    candidates = paste(deparse(ch$method$candidates), collapse = " "))
+            } else NULL,
             # Aggregate membership predicate (§16.7): the executed group rule,
             # serializable -- level + deparsed closure, like the output's reduce.
             group_at_level = ch$group_at_level,
@@ -1145,7 +1159,9 @@
             } else NULL,
             output = output,
             channels = channels,
-            model = model_name,
+            provider = metadata$provider,
+            model = metadata$model,
+            model_params = metadata$params,
             executed_at = Sys.time()),
         class = c("ee_provenance", "list"))
 }
@@ -1233,8 +1249,7 @@ cohort_from_sources <- function(sources) {
     tibble::tibble(PATID = ids)
 }
 
-run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
-                          model_name = "fake") {
+run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
     if (!inherits(variable, "ee_variable_spec")) {
         stop("run_variable() requires a variable_spec().", call. = FALSE)
     }
@@ -1261,8 +1276,7 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
         variable = variable,
         tasks = tasks,
         sources = sources,
-        caller = caller,
-        model_name = model_name,
+        chat = chat,
         grain_keys = scope_keys)
     names(channel_results) <- names(variable$channels)
 
@@ -1341,8 +1355,8 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
     combine_rule <- if (inherits(combine, "ee_combiner")) combine$expr else NA_character_
     .publish_grain_id(
         c(list(spec = variable, selected_channels = selected,
-               combine_rule = combine_rule,
-               provenance = .build_provenance(variable, model_name),
+                combine_rule = combine_rule,
+               provenance = .build_provenance(variable, chat),
                channel_results = channel_results), out))
 }
 
@@ -1350,15 +1364,10 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, caller = NULL,
 # down with the data (sources$cohort), so all outputs share the denominator by
 # construction. Today a thin orchestrator; study-level duties (shared channel
 # caching, one combined output table, study provenance bundle) wait for their
-# consumers. Renamed from run_variables (owner pick, 2026-07-05).
+# consumers.
 run_protocol <- function(variables, cohort = NULL, sources = NULL,
-                         caller = NULL, model_name = "fake") {
+                          chat = NULL) {
     .require_named_list(variables, "variables")
     lapply(variables, run_variable, cohort = cohort, sources = sources,
-           caller = caller, model_name = model_name)
-}
-
-run_variables <- function(...) {
-    stop("run_variables() was renamed: use run_protocol(variables, cohort = ",
-         "NULL, sources = ...) -- same signature.", call. = FALSE)
+           chat = chat)
 }

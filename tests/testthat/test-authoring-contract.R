@@ -3,6 +3,7 @@ test_that("authoring constructors reject unread arguments", {
 
     expect_error(use_channel(prompt = "ignored"), "unused argument")
     expect_error(use_channel(method = 42), "llm_after_lucene")
+    expect_error(llm_after_lucene(), "requires candidates")
     expect_error(
         code_channel("pmsi_diag", selector, prompt = "ignored"),
         "unused argument")

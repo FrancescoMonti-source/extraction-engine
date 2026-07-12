@@ -160,6 +160,6 @@ test_that("a text channel with a group predicate is rejected loudly at run time"
         run_variable(spec, am_tasks,
                      list(documents = list(coverage = tibble::tibble(),
                                            candidates = tibble::tibble())),
-                     caller = function(...) NULL, model_name = "fake"),
+                     chat = fake_chat(function(...) NULL)),
         "text")
 })

@@ -83,7 +83,9 @@ test_that("provenance records the RESOLVED definition: the overridden selector, 
 test_that("provenance carries execution facts and the resolved source-role mappings", {
     prov <- pv_run$provenance
 
-    expect_equal(prov$model, "fake")
+    expect_true(is.na(prov$provider))
+    expect_true(is.na(prov$model))
+    expect_identical(prov$model_params, list())
     expect_s3_class(prov$executed_at, "POSIXct")
 
     # Resolved source mapping: which physical column played each role.

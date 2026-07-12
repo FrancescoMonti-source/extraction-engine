@@ -60,7 +60,7 @@ anastomoses_var <- function() {
 # task is still flagged for review.
 test_that("struct output keeps valid fields and flags the task on an invalid sibling", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
-                        caller = ana_fake, model_name = "fake")
+                        chat = fake_chat(ana_fake))
 
     a1 <- run$values[run$values$grain_id == "A1::t", ]
     val <- setNames(a1$value, a1$field)
@@ -87,7 +87,7 @@ test_that("struct output keeps valid fields and flags the task on an invalid sib
 # a failed task must be flagged for review (not silently absent).
 test_that("struct output distinguishes no_candidate and a failed call", {
     run <- run_variable(anastomoses_var(), ana_tasks, ana_sources,
-                        caller = ana_fake, model_name = "fake")
+                        chat = fake_chat(ana_fake))
 
     ss <- run$channel_status
     a2 <- ss[ss$grain_id == "A2::t", ]
