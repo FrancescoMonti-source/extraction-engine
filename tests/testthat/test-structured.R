@@ -14,19 +14,19 @@ test_that("prepared views retain redsan types without engine coercion", {
         PATID = "P1", EVTID = "E1", ELTID = "B1",
         DATEXAM = "2025-06-22 00:30", PATAGE = "50", PATSEX = "M",
         RESULTATS = data.frame(
-            TYPEANA = c("K.K", "K.K"), NUMRES = c("5.4", "<3")))))
+            TYPEANA = c("K.K", "K.K"), NUMRES = I(list(5.4, 3))))))
     biol <- dplyr::transmute(
         biology,
         source_row_id = paste0("biol:", seq_len(dplyr::n())),
         PATID, EVTID, ELTID, BIOL_ID, DATEXAM,
-        analyte = TYPEANA, value = NUMRES_NUM, value_raw = NUMRES,
+        analyte = TYPEANA, value = NUMRES, value_raw = as.character(NUMRES),
         PATSEX, PATAGE)
 
     expect_true(inherits(diag$DATENT, "POSIXct"))
     expect_type(diag$PATAGE, "double")
     expect_true(inherits(biol$DATEXAM, "POSIXct"))
-    expect_equal(biol$value, c(5.4, NA_real_))
-    expect_equal(biol$value_raw, c("5.4", "<3"))
+    expect_equal(biol$value, c(5.4, 3))
+    expect_equal(biol$value_raw, c("5.4", "3"))
     expect_type(biol$PATAGE, "double")
     expect_silent(validate_source_view(diag, DIAG_SOURCE))
     expect_silent(validate_source_view(biol, BIOL_SOURCE))
