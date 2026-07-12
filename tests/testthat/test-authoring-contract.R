@@ -9,6 +9,14 @@ test_that("authoring constructors reject unread arguments", {
         "unused argument")
 })
 
+test_that("output constructors require unique explicit contracts", {
+    # Authoring contract: duplicate/empty levels or fields cannot be interpreted
+    # as a meaningful output schema later in execution.
+    expect_error(cat_output(c("a", "a")), "unique non-empty levels")
+    expect_error(struct_output(character()), "unique non-empty fields")
+    expect_error(struct_output(c("field", "field")), "unique non-empty fields")
+})
+
 test_that("one compiled spec drives inspection and retains combine level", {
     concept <- concept_spec("two signals", list(
         first = code_channel("pmsi_diag", icd10("^E10")),

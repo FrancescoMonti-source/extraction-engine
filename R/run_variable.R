@@ -810,6 +810,14 @@
         cw <- isTRUE(nrow(vrow) > 0L && "citation_warning" %in% names(vrow) &&
                      isTRUE(vrow$citation_warning[[1]]))
         reason <- if (nrow(vrow)) as.character(vrow$validity_reason[[1]]) else NA_character_
+        outside_contract <- identical(state, "valid") &&
+            (nrow(vrow) != 1L || is.na(status_val) ||
+             !status_val %in% variable$output$levels)
+        if (outside_contract) {
+            state <- "processing_error"
+            status_val <- NA_character_
+            reason <- "categorical value does not match the declared levels"
+        }
         needs_review <- state %in% c("invalid", "model_error", "processing_error")
         tibble::tibble(
             task_id = tid,
@@ -854,6 +862,20 @@
     cov <- result$coverage; vals <- result$values; ev <- result$evidence
     task_ids <- as.character(tasks$task_id)
 
+    if (nrow(vals)) {
+        contract_vals <- vals[as.character(vals$task_id) %in% task_ids, , drop = FALSE]
+        observed <- split(as.character(contract_vals$field),
+                          as.character(contract_vals$task_id))
+        bad <- vapply(observed, function(fields) {
+            anyNA(fields) || any(!nzchar(fields)) || anyDuplicated(fields) ||
+                !setequal(fields, variable$output$fields)
+        }, logical(1))
+        if (any(bad)) {
+            stop("struct output fields do not match the declared field set for ",
+                 sum(bad), " processed task(s).", call. = FALSE)
+        }
+    }
+
     values <- if (nrow(vals)) {
         vals %>%
             filter(task_id %in% task_ids) %>%
@@ -894,7 +916,8 @@
                 processing_state %in% c("no_candidate", "no_eligible_document",
                                         "not_called") ~ "unavailable",
                 TRUE ~ "complete"),       # valid OR invalid task: the call produced fields
-            needs_review = status == "error" | n_invalid > 0L) %>%
+            needs_review = status == "error" | processing_state == "invalid" |
+                n_invalid > 0L) %>%
         transmute(task_id, variable = var_name, channel = channel_name,
                   source = source_name, status, n_fields, n_valid, n_invalid,
                   citation_warning, needs_review)

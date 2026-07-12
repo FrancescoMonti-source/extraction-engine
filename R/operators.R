@@ -191,8 +191,9 @@ num_output <- function(values_from = NULL, reduce = NULL) {
 # smoking statuses) the level is a text channel's accepted documented status.
 cat_output <- function(levels, values_from = NULL, reduce = NULL) {
     levels <- as.character(levels)
-    if (!length(levels) || anyNA(levels) || any(!nzchar(levels))) {
-        stop("cat_output() needs >=1 non-empty level.", call. = FALSE)
+    if (!length(levels) || anyNA(levels) || any(!nzchar(levels)) ||
+        anyDuplicated(levels)) {
+        stop("cat_output() needs unique non-empty levels.", call. = FALSE)
     }
     .check_payload_args("cat_output()", values_from, reduce,
                         reduce_required = FALSE)
@@ -224,6 +225,10 @@ date_output <- function(values_from = NULL, reduce = NULL) {
 # anastomosis durations / types / locations from one operative report). The output
 # contract belongs to the task, not to one scalar column.
 struct_output <- function(fields) {
-    .new_spec(list(kind = "fields", fields = as.character(fields)),
-                       "ee_output_type")
+    fields <- as.character(fields)
+    if (!length(fields) || anyNA(fields) || any(!nzchar(fields)) ||
+        anyDuplicated(fields)) {
+        stop("struct_output() needs unique non-empty fields.", call. = FALSE)
+    }
+    .new_spec(list(kind = "fields", fields = fields), "ee_output_type")
 }

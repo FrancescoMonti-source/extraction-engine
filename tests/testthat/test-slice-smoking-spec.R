@@ -106,3 +106,24 @@ test_that("D1: invented citation is kept-and-flagged, not fail-closed", {
     expect_true(nr[["T6::t"]])
     expect_equal(nrow(run$evidence[run$evidence$grain_id == "T6::t", ]), 0L)
 })
+
+test_that("categorical assembly rejects a valid value outside declared levels", {
+    # Output contract: even a parser-valid value cannot escape a variable's
+    # narrower declared level set as a valid cohort value.
+    narrow <- variable_spec(
+        name = "narrow_status",
+        concept = smoking_concept_spec(),
+        anchor = "anchor_date", window = c(-365, 7),
+        channels = list(text_smoking_mentions = use_channel(
+            method = llm_after_lucene(function(x) x),
+            extractor = smoking_definition())),
+        output = cat_output("sevre"))
+
+    run <- run_variable(narrow, sm_tasks, sm_sources, chat = fake_chat(sm_fake))
+    t1 <- run$values[run$values$grain_id == "T1::t", ]
+    status <- run$channel_status[run$channel_status$grain_id == "T1::t", ]
+
+    expect_true(is.na(t1$value))
+    expect_true(t1$needs_review)
+    expect_equal(status$status, "error")
+})

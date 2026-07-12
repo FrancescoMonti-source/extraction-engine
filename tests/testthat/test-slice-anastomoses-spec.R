@@ -98,3 +98,44 @@ test_that("struct output distinguishes no_candidate and a failed call", {
     expect_equal(a3$status, "error")              # model errored
     expect_true(a3$needs_review)
 })
+
+test_that("struct assembly rejects fields outside the declared set", {
+    # Output contract: the parser/output boundary must fail before publishing an
+    # undeclared field, even if an upstream schema was expected to prevent it.
+    variable <- resolve_variable_spec(anastomoses_var())
+    bad <- list(
+        coverage = tibble::tibble(task_id = "task", processing_state = "valid"),
+        values = tibble::tibble(
+            task_id = "task", field = "undeclared_field",
+            accepted_value = "x", field_validity = "valid",
+            citation_warning = FALSE, validity_reason = "",
+            task_summary = NA_character_),
+        evidence = tibble::tibble())
+
+    expect_error(
+        .multi_field_variable(
+            variable, tibble::tibble(task_id = "task"),
+            "text_operative_report", bad),
+        "do not match the declared field set")
+})
+
+test_that("a missing required summary remains visible for review", {
+    # Failure-observability contract: task-level invalidity must not disappear
+    # merely because every individual field parsed as valid.
+    variable <- resolve_variable_spec(anastomoses_var())
+    fields <- names(ANASTOMOSES_FIELDS)
+    result <- list(
+        coverage = tibble::tibble(task_id = "task", processing_state = "invalid"),
+        values = tibble::tibble(
+            task_id = rep("task", length(fields)), field = fields,
+            accepted_value = NA_character_, field_validity = "valid",
+            citation_warning = FALSE, validity_reason = "",
+            task_summary = NA_character_),
+        evidence = tibble::tibble())
+
+    out <- .multi_field_variable(
+        variable, tibble::tibble(task_id = "task"),
+        "text_operative_report", result)
+
+    expect_true(out$channel_status$needs_review)
+})
