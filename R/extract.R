@@ -57,23 +57,6 @@ format_snippet_block <- function(task_snippets) {
           collapse = "\n\n")
 }
 
-# Shared helper parsers may call for the standard {documented/not_documented/
-# unusable} shape. Smoking deliberately does NOT use this (its enum abstains).
-standard_field_validity <- function(status, normalized_value, evidence_ids) {
-    ids <- evidence_ids[!is.na(evidence_ids) & nzchar(evidence_ids)]
-    reason <- character()
-    if (!status %in% c("documented", "not_documented", "unusable")) {
-        reason <- c(reason, "invalid status")
-    } else if (identical(status, "documented") &&
-               (!scalar_present(normalized_value) || !length(ids))) {
-        reason <- c(reason, "documented without value or evidence")
-    } else if (identical(status, "unusable") && !length(ids)) {
-        reason <- c(reason, "unusable without evidence")
-    }
-    list(field_validity = if (length(reason)) "invalid" else "valid",
-         validity_reason = paste(reason, collapse = "; "))
-}
-
 # Shared citation resolution. Only IDs actually supplied to the model may
 # materialize as evidence; unexpected IDs remain visible as an execution warning.
 resolve_cited_ids <- function(evidence_ids, snippet_ids) {
@@ -153,63 +136,6 @@ resolve_cited_ids <- function(evidence_ids, snippet_ids) {
                 citation_warning_reason = citations$citation_warning_reason)
             list(fields = fields, summary = NA_character_)
         })
-}
-
-# Shared binary documented-presence text definition: one evidenced field whose
-# model output is {documented, not_documented}, normalized to present/absent.
-# Concept-specific text definitions (diabetes, dialysis, ...) are thin wrappers
-# that supply only the model's status key, the engine field name, and the
-# concept-specific system prompt. This factors the schema + parser pattern without
-# adding any new semantics: behaviour is identical to the hand-written definitions.
-binary_presence_text_definition <- function(name, status_key, field, system_prompt,
-                                            evidence_max_items = 5L) {
-    parser <- function(result, snippet_ids) {
-        status <- if (length(result[[status_key]]) == 1L)
-            as.character(result[[status_key]]) else NA_character_
-        cite <- resolve_cited_ids(result$evidence_ids, snippet_ids)
-        ids <- cite$real_ids
-        nv <- dplyr::case_when(identical(status, "documented") ~ "present",
-                               identical(status, "not_documented") ~ "absent",
-                               TRUE ~ NA_character_)
-        v <- standard_field_validity(status, nv, ids)
-        # D1 keep-and-flag (owner-ratified): an invented citation is surfaced via
-        # citation_warning, not silently dropped. A value grounded only by invented
-        # ids has empty real ids, so standard_field_validity already rejects it.
-        fields <- tibble::tibble(
-            field = field, status = status, normalized_value = nv,
-            evidence_ids = list(ids), field_validity = v$field_validity,
-            validity_reason = v$validity_reason,
-            citation_warning = cite$citation_warning,
-            citation_warning_reason = cite$citation_warning_reason)
-        list(fields = fields, summary = NA_character_)
-    }
-    .llm_definition(
-        name = name,
-        system_prompt = system_prompt,
-        type_builder = function(ids) {
-            schema <- list(
-                type = "object",
-                additionalProperties = FALSE,
-                required = as.list(c(status_key, "evidence_ids")),
-                properties = stats::setNames(
-                    list(
-                        list(type = "string",
-                             enum = as.list(c("documented", "not_documented"))),
-                        list(type = "array",
-                             maxItems = evidence_max_items,
-                             items = list(type = "string", enum = as.list(ids)))),
-                    c(status_key, "evidence_ids")))
-            ellmer::type_from_schema(
-                text = jsonlite::toJSON(schema, auto_unbox = TRUE))
-        },
-        prompt_builder = function(task, cands) {
-            paste(
-                paste0("Input row: ", task$task_id[[1]]),
-                "Snippets:",
-                format_snippet_block(cands),
-                sep = "\n")
-        },
-        parser = parser, summary_field = NULL, summary_required = FALSE)
 }
 
 APPROVED_MODELS <- c("gemma3:4b")

@@ -4,9 +4,9 @@
 # Thin list/S3 constructors for the package architecture:
 #   source_spec -> concept_spec -> channels -> variable_spec -> run_variable.
 # Companion files: channels.R (channel + selector ctors), operators.R (windows /
-# reducers / combiners / outputs / absence), run_variable.R (the execution spine),
-# concepts-diabetes.R (the first concrete concept). Keep the API experimental: we
-# are validating object boundaries and execution flow, not freezing syntax.
+# reducers / combiners / outputs / absence), run_variable.R (the execution spine).
+# Keep the API experimental: we are validating object boundaries and execution
+# flow, not freezing syntax.
 # =============================================================================
 
 # Internal constructor used by every authored and compiled record.
