@@ -20,7 +20,8 @@ variable_spec(
   combine_at_level = NULL
 )
 
-use_channel(method = NULL, extractor = NULL, selector = NULL, reducer = NULL)
+use_channel(method = NULL, extractor = NULL, selector = NULL,
+  keep_when = NULL, reducer = NULL)
 
 resolve_variable_spec(variable)
 
@@ -42,7 +43,10 @@ anchor.}
 \item{combine_at_level}{Optional identity-spine key at which to evaluate a
 multi-channel expression.}
 \item{method,extractor,selector}{Optional local replacements for an activated
-channel.}
+channel. A selector replaces the complete inherited selector.}
+\item{keep_when}{Optional row predicate that extends an inherited analyte
+selector without repeating its analyte codes. Its formal arguments name source
+row columns.}
 \item{reducer}{Retired argument; reduction belongs to the output and is rejected.}
 \item{variable}{An authored or compiled variable specification.}
 \item{x}{An object with an \code{inspect()} method.}

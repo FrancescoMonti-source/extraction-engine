@@ -276,7 +276,7 @@ concept_spec <- function(name, channels) {
 #   method    -> variable-owned extraction strategy (e.g. llm_after_lucene())
 #   extractor -> optional override of the concept-owned answer definition
 use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
-                        reducer = NULL) {
+                        keep_when = NULL, reducer = NULL) {
     if (!is.null(reducer)) {
         stop("use_channel() no longer takes reducer: reduction lives on the ",
               "output -- num_output(values_from =, reduce =) / ",
@@ -291,8 +291,20 @@ use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
         stop("use_channel() selector must be created with a selector constructor.",
              call. = FALSE)
     }
+    if (!is.null(keep_when)) {
+        if (!is.function(keep_when) || !length(formals(keep_when))) {
+            stop("use_channel() keep_when must be a function naming the source ",
+                 "row columns it reads.", call. = FALSE)
+        }
+        if (!is.null(selector)) {
+            stop("use_channel() takes either selector or keep_when, not both; ",
+                 "keep_when extends the inherited analyte selector.",
+                 call. = FALSE)
+        }
+    }
     .new_spec(
-        list(method = method, extractor = extractor, selector = selector),
+        list(method = method, extractor = extractor, selector = selector,
+             keep_when = keep_when),
         "ee_channel_use")
 }
 
@@ -430,6 +442,75 @@ inspect.default <- function(x, ...) {
          paste(class(x), collapse = ", "), call. = FALSE)
 }
 
+.one_line <- function(x) paste(deparse(x, width.cutoff = 500L), collapse = " ")
+
+.print_selector <- function(selector, indent = "    ") {
+    if (is.null(selector)) return(invisible(NULL))
+    if (identical(selector$kind, "analyte")) {
+        cat(indent, "analyte: ", paste(selector$codes, collapse = ", "), "\n",
+            sep = "")
+        if (!is.null(selector$keep_when)) {
+            cat(indent, "rule: ", .one_line(selector$keep_when), "\n", sep = "")
+        } else if (!is.null(selector$gt) || !is.null(selector$lt)) {
+            bounds <- c(
+                if (!is.null(selector$gt)) paste0("value > ", selector$gt),
+                if (!is.null(selector$lt)) paste0("value < ", selector$lt))
+            cat(indent, "rule: ", paste(bounds, collapse = " and "), "\n", sep = "")
+        }
+    } else if (identical(selector$kind, "code")) {
+        cat(indent, "codes: ", paste(selector$codes, collapse = ", "),
+            " (", selector$match, ")\n", sep = "")
+    } else if (identical(selector$kind, "lucene_query")) {
+        cat(indent, "query: ", selector$query, "\n", sep = "")
+    } else if (identical(selector$kind, "doc_meta")) {
+        filters <- paste(names(selector$filters), selector$filters,
+                         sep = "=", collapse = ", ")
+        cat(indent, "filters: ", filters, "\n", sep = "")
+    }
+    invisible(NULL)
+}
+
+print.ee_concept_spec <- function(x, ...) {
+    cat("Concept: ", x$name, "\n", sep = "")
+    cat("Channels:\n")
+    for (name in names(x$channels)) {
+        channel <- x$channels[[name]]
+        cat("  ", name, "\n", sep = "")
+        cat("    type: ", channel$type, "\n", sep = "")
+        cat("    source: ", channel$source, "\n", sep = "")
+        .print_selector(channel$selector)
+    }
+    invisible(x)
+}
+
+print.ee_variable_spec <- function(x, ...) {
+    resolved <- resolve_variable_spec(x)
+    cat("Study variable: ", resolved$name, "\n", sep = "")
+    cat("Concept: ", resolved$concept, "\n", sep = "")
+    cat("Output: ", resolved$output$kind, ", one row per ",
+        resolved$output_one_row_per, "\n", sep = "")
+    if (is.null(resolved$window)) {
+        cat("Window: whole available history at the declared grain\n")
+    } else {
+        cat("Window: ", resolved$window$from_days, " to ",
+            resolved$window$to_days, " days from ",
+            if (is.character(resolved$anchor)) resolved$anchor else "index event",
+            "\n", sep = "")
+    }
+    cat("\nChannels:\n")
+    for (name in names(resolved$channels)) {
+        channel <- resolved$channels[[name]]
+        cat("  ", name, "\n", sep = "")
+        cat("    source: ", channel$source, "\n", sep = "")
+        .print_selector(channel$selector)
+    }
+    combine <- resolved$combine_rule
+    if (length(combine) == 1L && !is.na(combine)) {
+        cat("\nCombine: ", combine, "\n", sep = "")
+    }
+    invisible(x)
+}
+
 .inherit_from_activation <- function(channel_def, channel_use, field,
                                      channel_field = field) {
     value <- channel_use[[field]]
@@ -443,6 +524,26 @@ inspect.default <- function(x, ...) {
         source <- "none"
     }
     list(value = value, source = source)
+}
+
+.extend_analyte_selector <- function(selector, keep_when, channel_name) {
+    if (is.null(keep_when)) return(selector)
+    if (is.null(selector) || !identical(selector$kind, "analyte")) {
+        stop("Channel '", channel_name,
+             "': use_channel(keep_when =) can extend only an inherited analyte ",
+             "selector.", call. = FALSE)
+    }
+    if (!is.null(selector$gt) || !is.null(selector$lt) ||
+        !is.null(selector$keep_when)) {
+        stop("Channel '", channel_name,
+             "' already carries a value rule; keep_when cannot silently replace ",
+             "it.", call. = FALSE)
+    }
+    selector$gt <- NULL
+    selector$lt <- NULL
+    selector$unit <- selector$unit %||% NULL
+    selector$keep_when <- keep_when
+    selector
 }
 
 .check_channel_required_roles <- function(channel) {
@@ -483,6 +584,11 @@ inspect.default <- function(x, ...) {
     # resolved view -- and the provenance built from it -- must record it, not the
     # concept baseline.
     selector <- .inherit_from_activation(channel_def, channel_use, "selector")
+    selector$value <- .extend_analyte_selector(
+        selector$value, channel_use$keep_when, name)
+    if (!is.null(channel_use$keep_when)) {
+        selector$source <- "channel + activation keep_when"
+    }
 
     .new_spec(
         list(

@@ -13,10 +13,13 @@ cohort_from_sources(sources)
 \arguments{
 \item{variable}{One authored variable specification.}
 \item{variables}{A uniquely named list of variable specifications.}
-\item{cohort}{An explicit task frame or patient-ID vector. If omitted,
-\code{sources$cohort} is required.}
-\item{sources}{Named prepared EDSAN views and, for text retrieval, document
-candidate inputs.}
+\item{cohort}{The requested study-unit table or a patient-ID vector. If omitted,
+\code{sources$cohort} is required. A table may carry \code{PATID + EVTID}; the
+variable's \code{output_one_row_per} declaration projects it to patient or stay
+grain before internal extraction tasks are derived.}
+\item{sources}{Named EDSAN views and, for text retrieval, document candidate
+inputs. Logical package source names are connected to caller objects here, for
+example \code{list(biology = bio)}.}
 \item{chat}{An optional \pkg{ellmer} Chat. It is required by text channels and is
 deep-cloned and cleared for every task.}
 }

@@ -58,8 +58,26 @@ test_that("an explicit cohort narrows past sources$cohort (inclusion chaining)",
     expect_equal(run$values$grain_id, "C1")
 })
 
+test_that("the variable projects one PATID-EVTID cohort to its declared output grain", {
+    cohort <- tibble::tibble(
+        PATID = c("C1", "C1", "C2"),
+        EVTID = c("V1", "V2", "V3"))
+
+    patient_run <- run_variable(
+        cu_spec, cohort = cohort, sources = list(pmsi_actes = cu_acts))
+    expect_equal(patient_run$values$grain_id, c("C1", "C2"))
+
+    stay_spec <- variable_spec(
+        name = "dialysis_act_by_stay", concept = cu_concept,
+        output_one_row_per = "EVTID",
+        channels = "dialysis_act", output = bin_output())
+    stay_run <- run_variable(
+        stay_spec, cohort = cohort, sources = list(pmsi_actes = cu_acts))
+    expect_equal(stay_run$values$grain_id,
+                 c("C1::V1", "C1::V2", "C2::V3"))
+})
+
 test_that("no cohort anywhere is a loud error, never a data-derived universe", {
     expect_error(run_variable(cu_spec, sources = list(pmsi_actes = cu_acts)),
                  "No cohort")
 })
-

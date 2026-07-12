@@ -129,6 +129,77 @@ validate_source_view <- function(data, spec) {
     invisible(data)
 }
 
+# Adapt normalized redsan frames to the stable execution view used internally.
+# This is deliberately an execution-boundary projection, not a second public
+# normalization step: redsan owns parsing/typing; the engine supplies only its
+# run-local evidence coordinate and the historical role aliases consumed by the
+# structured executor.
+.source_row_ids <- function(source, rows) {
+    sprintf("%s:%08d", source, as.integer(rows))
+}
+
+.prepare_biology_view <- function(data) {
+    canonical <- c("BIOL_ID", "DATEXAM", "analyte", "value", "value_raw")
+    if (!all(canonical %in% names(data))) {
+        raw_value <- if (is.data.frame(data) && "NUMRES" %in% names(data)) {
+            as.character(data$NUMRES)
+        } else {
+            NULL
+        }
+        data <- redsan::process_biol(data)
+
+        if (!"BIOL_ID" %in% names(data) && "biol_ID" %in% names(data)) {
+            data$BIOL_ID <- as.character(data$biol_ID)
+        }
+        if (!"analyte" %in% names(data) && "TYPEANA" %in% names(data)) {
+            data$analyte <- as.character(data$TYPEANA)
+        }
+        if (!"value" %in% names(data) && "NUMRES" %in% names(data)) {
+            data$value <- data$NUMRES
+        }
+        if (!"value_raw" %in% names(data) && "NUMRES" %in% names(data)) {
+            data$value_raw <- raw_value %||% as.character(data$NUMRES)
+        }
+    }
+    data
+}
+
+.prepare_execution_sources <- function(sources, cohort) {
+    if (is.null(sources)) return(sources)
+    if (!is.list(sources) || is.null(names(sources))) {
+        stop("sources must be a named list.", call. = FALSE)
+    }
+
+    cohort_patids <- unique(as.character(cohort$PATID))
+    cohort_patids <- cohort_patids[!is.na(cohort_patids) & nzchar(cohort_patids)]
+    structured <- intersect(names(sources), c("pmsi_diag", "pmsi_actes", "biology"))
+    for (source in structured) {
+        data <- sources[[source]]
+        if (!is.data.frame(data)) next
+        # Restrict the expensive normalization/projection to declared cohort
+        # subjects. PATID is the conservative early key: event- and window-level
+        # scope is applied later by each channel, after anchors are resolved.
+        # Keep original row positions so generated evidence coordinates continue
+        # to resolve against the caller's complete source snapshot.
+        source_rows <- seq_len(nrow(data))
+        if (length(cohort_patids) && "PATID" %in% names(data)) {
+            keep <- !is.na(data$PATID) &
+                as.character(data$PATID) %in% cohort_patids
+            source_rows <- source_rows[keep]
+            data <- data[which(keep), , drop = FALSE]
+        }
+        if (identical(source, "biology")) data <- .prepare_biology_view(data)
+        if (!"source_row_id" %in% names(data)) {
+            data <- tibble::add_column(
+                data,
+                source_row_id = .source_row_ids(source, source_rows),
+                .before = 1L)
+        }
+        sources[[source]] <- data
+    }
+    sources
+}
+
 DOCS_SOURCE <- source_spec(
     name = "documents", module = "doceds", table = "documents",
     roles = list(

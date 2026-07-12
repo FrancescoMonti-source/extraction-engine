@@ -1352,6 +1352,27 @@
         stop("cohort must be a non-empty data frame (one row per output unit) ",
              "or a character vector of PATIDs.", call. = FALSE)
     }
+    # A cohort may be laid down at stay grain (PATID + EVTID) and reused by
+    # variables with different output grains. The variable owns that choice:
+    # project to its declared grain before deriving the public row identifier.
+    # A caller-supplied anchor column remains part of the row declaration; if it
+    # supplies several anchor values for one output unit, the grain guard below
+    # rejects the ambiguity instead of silently choosing one.
+    explicit_id <- any(c("grain_id", "task_id") %in% names(cohort))
+    if (!explicit_id) {
+        grain <- variable$output_one_row_per %||% "PATID"
+        grain_keys <- unique(c("PATID", grain))
+        missing_keys <- setdiff(grain_keys, names(cohort))
+        if (length(missing_keys)) {
+            stop("output_one_row_per = '", grain,
+                 "' needs cohort column(s): ",
+                 paste(missing_keys, collapse = ", "), ".", call. = FALSE)
+        }
+        anchor_column <- if (is.character(variable$anchor)) variable$anchor else NULL
+        keep <- unique(c(grain_keys, anchor_column))
+        keep <- intersect(keep, names(cohort))
+        cohort <- dplyr::distinct(tibble::as_tibble(cohort)[keep])
+    }
     # The row identifier is grain_id publicly (owner pick 2026-07-05: the id of
     # one grain unit -- patient, stay, index event); the engine's internals keep
     # task_id (there it names extraction tasks). Normalize on the way in; the
@@ -1417,6 +1438,7 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
         stop("variable_spec has no selected channels.", call. = FALSE)
     }
     tasks <- .resolve_cohort(variable, cohort, sources)
+    sources <- .prepare_execution_sources(sources, tasks)
     # Anchor first: a select_event closure may EMIT tasks (one per selected
     # event), and the grain guard must see the emitted universe, not the
     # pre-anchor one -- select_event = identity with output_one_row_per =
