@@ -1294,3 +1294,43 @@ The corrected state passes 75 redsan assertions, 234 extractionengine
 assertions, both built-tarball checks with `Status: OK`, and all four
 old/new differential cases. The temporary profiling scripts were deleted. The
 reciprocal-review gate before promotion remains unchanged.
+
+## Reciprocal review closed; promotion gate passed -- Sol + independent Sol (2026-07-12)
+
+The reciprocal review initially found execution-contract blockers rather than
+scientific disagreements: the declared anchor was not consistently authoritative,
+event linkage and windows could fail to compose, declared roles and output shapes
+could fail open, PMSI procedure timestamps were not fully typed, and some text paths
+could escape the declared cohort/event scope or expose identifiers in errors. No
+clinical selector or scientific rule was added to address them.
+
+The fixes are deliberately split into small commits:
+
+- redsan `ab6fb02` types `DATEACTE` and `HEURE_DATEACTE` while preserving source
+  columns and output shape;
+- extractionengine `e5a5cb9` enforces compiled anchor, role, linkage, and provenance
+  contracts;
+- extractionengine `c17b69e` enforces declared categorical levels and structured
+  fields;
+- extractionengine `5abe857` bounds raw and pre-retrieved text execution to the
+  declared cohort/event scope and redacts identifiers from errors;
+- extractionengine `535381a` composes event linkage with windows, ignores incidental
+  anchors, validates pre-retrieved candidates before Chat, preserves per-task
+  isolation for malformed structured outputs, and validates `summary_required`.
+
+Final verification used only synthetic fixtures and fake Chats:
+
+- redsan: 77 assertions; `R CMD build` and built-tarball `R CMD check` finish with
+  `Status: OK`;
+- extractionengine: 275 assertions, 0 failures, warnings, or skips; `R CMD build`
+  and built-tarball `R CMD check` finish with `Status: OK`;
+- the temporary old/new oracle reports `OK` for `subject_context_lab`,
+  `stay_keyed_payload`, `text`, and `document_date`;
+- `git diff --check` is clean for both branches.
+
+The same independent reviewer then reran the original and residual repro matrix,
+the complete suites, and an offline package check. It found no P1 or P2 in scope and
+declared no blocker to promotion for extractionengine `535381a` or redsan `ab6fb02`.
+The pre-existing experimental API residue was unchanged and was judged non-blocking;
+cleaning it remains outside this migration. No patient data, real model call, network
+download, clinical concept, or scientific correctness judgment entered the work.
