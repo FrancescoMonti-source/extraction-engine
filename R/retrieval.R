@@ -118,8 +118,23 @@ retrieve <- function(corpus, tasks, eligibility, query,
 
     candidates <- elig %>%
         filter(in_corpus) %>%
-        inner_join(snippets, by = "ELTID", relationship = "many-to-many") %>%
-        mutate(days_from_anchor = as.numeric(RECDATE - anchor_date)) %>%
+        inner_join(snippets, by = "ELTID", relationship = "many-to-many")
+    if ("anchor_date" %in% names(candidates)) {
+        recdate <- if (inherits(candidates$RECDATE, "POSIXt")) {
+            as.Date(candidates$RECDATE, tz = "Europe/Paris")
+        } else {
+            as.Date(candidates$RECDATE)
+        }
+        anchor <- if (inherits(candidates$anchor_date, "POSIXt")) {
+            as.Date(candidates$anchor_date, tz = "Europe/Paris")
+        } else {
+            as.Date(candidates$anchor_date)
+        }
+        candidates$days_from_anchor <- as.numeric(recdate - anchor)
+    } else {
+        candidates$days_from_anchor <- NA_real_
+    }
+    candidates <- candidates %>%
         .deduplicate() %>%
         group_by(task_id) %>%
         mutate(snippet_id = sprintf("S%03d", row_number())) %>%

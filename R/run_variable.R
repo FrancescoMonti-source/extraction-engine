@@ -67,8 +67,33 @@
             }
             d
         }
-        return(list(coverage = internal(src$coverage),
-                    candidates = internal(src$candidates)))
+        coverage <- internal(src$coverage)
+        candidates <- internal(src$candidates)
+        if (!is.data.frame(coverage) || !is.data.frame(candidates)) {
+            stop("Pre-retrieved text coverage and candidates must be data frames.",
+                 call. = FALSE)
+        }
+        if (!"task_id" %in% names(coverage)) {
+            stop("Pre-retrieved text coverage must contain task_id.",
+                 call. = FALSE)
+        }
+        if (!"task_id" %in% names(candidates)) {
+            if (nrow(candidates)) {
+                stop("Pre-retrieved text candidates must contain task_id.",
+                     call. = FALSE)
+            }
+            candidates$task_id <- character()
+        }
+        declared <- as.character(tasks$task_id)
+        supplied <- unique(c(as.character(coverage$task_id),
+                             as.character(candidates$task_id)))
+        supplied <- supplied[!is.na(supplied)]
+        unknown <- setdiff(supplied, declared)
+        if (length(unknown)) {
+            stop("Pre-retrieved text inputs reference ", length(unknown),
+                 " task(s) outside the declared cohort.", call. = FALSE)
+        }
+        return(list(coverage = coverage, candidates = candidates))
     }
     if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
         validate_source_view(src$docs_index, DOCS_SOURCE)
@@ -101,8 +126,11 @@
             stop("Event-scoped text retrieval requires tasks with PATID + EVTID.",
                  call. = FALSE)
         }
+        keys <- tasks %>%
+            select(any_of(c("task_id", "PATID", "EVTID", "anchor_date"))) %>%
+            distinct()
         eligibility <- src$docs_index %>%
-            inner_join(distinct(tasks, task_id, PATID, EVTID, anchor_date),
+            inner_join(keys,
                        by = c("PATID", "EVTID"), relationship = "many-to-many") %>%
             .text_eligibility_cols()
         return(retrieve(src$corpus, tasks, eligibility,
@@ -115,7 +143,7 @@
         keys <- if ("anchor_date" %in% names(tasks)) {
             distinct(tasks, task_id, PATID, anchor_date)
         } else {
-            distinct(tasks, task_id, PATID) %>% mutate(anchor_date = as.Date(NA))
+            distinct(tasks, task_id, PATID)
         }
         eligibility <- src$docs_index %>%
             inner_join(keys, by = "PATID", relationship = "many-to-many") %>%
@@ -282,9 +310,8 @@
     select_event <- anchor$select_event
     dup <- matched %>% count(PATID) %>% filter(n > 1L)
     if (nrow(dup) && is.null(select_event)) {
-        stop("index_event matched multiple events for subject(s): ",
-             paste(dup$PATID, collapse = ", "),
-             " -- supply select_event = <closure over the matched rows> ",
+        stop("index_event matched multiple events for ", nrow(dup),
+             " subject(s) -- supply select_event = <closure over the matched rows> ",
              "(the engine never picks).", call. = FALSE)
     }
     if (!is.null(select_event) && nrow(matched)) {
@@ -306,10 +333,11 @@
         if (!nrow(selected) ||
             length(missing_sel <- setdiff(unique(matched$PATID),
                                           unique(selected$PATID)))) {
-            stop("select_event selected no event for subject(s): ",
-                 paste(if (nrow(selected)) missing_sel
-                       else unique(matched$PATID), collapse = ", "),
-                 " -- every unit needs its index event.", call. = FALSE)
+            n_missing <- if (nrow(selected)) length(missing_sel) else
+                dplyr::n_distinct(matched$PATID)
+            stop("select_event selected no event for ", n_missing,
+                 " subject(s) -- every unit needs its index event.",
+                 call. = FALSE)
         }
         matched <- selected %>%
             transmute(PATID = as.character(PATID),
@@ -326,9 +354,8 @@
     per_event <- !identical(variable$output_one_row_per, "PATID")
     multi <- anchors %>% count(PATID) %>% filter(n > 1L)
     if (nrow(multi) && !per_event) {
-        stop("select_event kept several events for subject(s): ",
-             paste(multi$PATID, collapse = ", "),
-             " -- output_one_row_per = 'PATID' allows one task per patient; ",
+        stop("select_event kept several events for ", nrow(multi),
+             " subject(s) -- output_one_row_per = 'PATID' allows one task per patient; ",
              "select one event or declare the event-grain output (one row ",
              "per index event).", call. = FALSE)
     }
@@ -339,9 +366,9 @@
                   relationship = if (per_event) "many-to-many" else "many-to-one")
     unresolved <- unique(tasks$PATID[is.na(tasks$anchor_date)])
     if (length(unresolved)) {
-        stop("index_event found no matching event for subject(s): ",
-             paste(unresolved, collapse = ", "),
-             " -- every unit needs its index event.", call. = FALSE)
+        stop("index_event found no matching event for ", length(unresolved),
+             " subject(s) -- every unit needs its index event.",
+             call. = FALSE)
     }
     if (per_event) {
         tasks$task_id <- paste(tasks$task_id, tasks$EVTID, sep = "::")

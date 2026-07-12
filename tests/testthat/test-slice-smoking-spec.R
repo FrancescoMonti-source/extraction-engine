@@ -127,3 +127,27 @@ test_that("categorical assembly rejects a valid value outside declared levels", 
     expect_true(t1$needs_review)
     expect_equal(status$status, "error")
 })
+
+test_that("pre-retrieved text rejects tasks outside the declared cohort", {
+    # Cohort-boundary contract: an extra task must fail before any model call,
+    # not silently enlarge the execution universe.
+    bad_docs <- list(
+        coverage = dplyr::bind_rows(
+            sm_docs$coverage,
+            tibble::tibble(grain_id = "OUTSIDE", coverage_state = "candidate")),
+        candidates = dplyr::bind_rows(
+            sm_docs$candidates,
+            dplyr::mutate(sm_docs$candidates[1, ], grain_id = "OUTSIDE")))
+    n_calls <- 0L
+    responder <- function(...) {
+        n_calls <<- n_calls + 1L
+        sm_fake(...)
+    }
+
+    expect_error(
+        run_variable(
+            smoking_periop(), sm_tasks, list(documents = bad_docs),
+            chat = fake_chat(responder)),
+        "outside the declared cohort")
+    expect_equal(n_calls, 0L)
+})

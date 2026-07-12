@@ -258,8 +258,8 @@ APPROVED_MODELS <- c("gemma3:4b")
              call. = FALSE)
     }
     if (!nrow(selected)) {
-        stop("llm_after_lucene() candidates selected no row for task '", task_id,
-             "'.", call. = FALSE)
+        stop("llm_after_lucene() candidates selected no row for the current task.",
+             call. = FALSE)
     }
     ids <- as.character(selected$snippet_id)
     if (anyNA(ids) || anyDuplicated(ids)) {

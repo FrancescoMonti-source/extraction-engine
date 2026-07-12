@@ -63,3 +63,39 @@ test_that("run_variable executes a text variable from raw documents via retrieva
     expect_equal(nrow(ev1), 1L)
     expect_match(ev1$evidence_ref, "^E1::")
 })
+
+test_that("raw event-linked text retrieval does not require an anchor", {
+    # Relational-scope contract: same-event attachment is sufficient; an
+    # unrelated temporal anchor must not be invented as an input requirement.
+    definition <- binary_presence_text_definition(
+        name = "event mention", status_key = "mention_status",
+        field = "event_mention", system_prompt = "Extract documented presence.")
+    concept <- concept_spec("event text", list(
+        event_text = text_channel(
+            source = "documents", selector = lucene_query("anastomose"),
+            required_roles = c("subject_id", "event_id", "point_date", "text",
+                               "source_item_id"),
+            linkage = c("subject", "event"), extractor = definition,
+            default_method = llm_after_lucene(function(x) x))))
+    variable <- variable_spec(
+        "event mention", concept, output_one_row_per = "PATID",
+        anchor = NULL, window = NULL,
+        channels = list(event_text = use_channel()), output = bin_output())
+    tasks <- tibble::tibble(
+        grain_id = "event-task", PATID = "subject", EVTID = "event")
+    index <- tibble::tibble(
+        ELTID = "event-doc", PATID = "subject", EVTID = "event",
+        RECDATE = as.POSIXct("2025-01-01", tz = "Europe/Paris"),
+        RECTYPE = "note")
+    source <- list(
+        documents = list(
+            corpus = rw_make_corpus("event-doc", "Anastomose documentee."),
+            docs_index = index))
+    responder <- function(...) {
+        list(mention_status = "documented", evidence_ids = list("S001"))
+    }
+
+    run <- run_variable(variable, tasks, source, chat = fake_chat(responder))
+
+    expect_equal(run$values$value, 1L)
+})
