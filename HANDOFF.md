@@ -1269,3 +1269,28 @@ rather than the planned sibling path because this session could write only
 inside the extraction-engine workspace. This changes no Git history and the
 worktree can be moved after review. The redsan worktree is likewise isolated at
 `outputs/redsan-typing`; both source branches are clean.
+
+## Real-data correction to the NUMRES contract -- owner + Sol (2026-07-12)
+
+The owner challenged the unverified `"<3"` test fixture behind the
+`NUMRES_NUM` companion. A privacy-preserving profile then inspected only storage
+types and format counts in the available D0740 biology extract and the D0840
+prepared/raw biology pair; no identifiers, rows, or result values were printed
+or retained.
+
+The observed contract is simpler: prepared `NUMRES` is numeric, raw D0840
+stores numeric scalars in list form, and no decimal-comma, comparator, or text
+shape occurs in `NUMRES`. Qualitative results remain in `STRRES`. Running
+`process_biol()` over the real D0840 raw object reproduced the prepared numeric
+vector exactly, including missingness.
+
+Consequently redsan commit `5e287e7` normalizes `NUMRES` in place and leaves
+`STRRES` untouched; it removes the speculative `NUMRES_NUM` field and the
+unsupported `"<3"` fixture. Package commit `51dc11d` updates only the boundary
+test to consume typed `NUMRES`. No locale parser or qualified-result semantics
+were added.
+
+The corrected state passes 75 redsan assertions, 234 extractionengine
+assertions, both built-tarball checks with `Status: OK`, and all four
+old/new differential cases. The temporary profiling scripts were deleted. The
+reciprocal-review gate before promotion remains unchanged.
