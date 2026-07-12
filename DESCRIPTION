@@ -20,7 +20,6 @@ Imports:
     corpustools,
     dplyr,
     ellmer (>= 0.4.1),
-    jsonlite,
     redsan (>= 0.1.1),
     rlang,
     stringr,
