@@ -1112,3 +1112,115 @@ them; only a predicate that reads `PATSEX` can -- that is the invariant the test
 
 **Open (unchanged, still deferred §16):** source-kind registry resolution (a channel
 omitting `source=`) -- owner agrees it "può probabilmente continuare a marcire dov'è".
+
+## Package-first promotion ratified; redsan typing is the prerequisite -- Claude Fable + Sol review (2026-07-12)
+
+**Goal & acceptance criteria.** Promote the successful prototype into the internal R
+package `extractionengine` without preserving the experimental API or re-running the
+same architectural exploration. The package must carry every capability implemented
+and ratified at `444b0cb`, leave §16-only deferrals deferred, make the authored spec the
+single executable/audited definition, and pass package-native tests plus built-tarball
+check. Scientific correctness remains the researcher's responsibility; the package
+executes and audits the declared rule.
+
+**Ratified direction (owner, after Codex proposal + Fable counter-review).**
+
+- Same repository, isolated branch/worktree: `codex/package-rebuild` at
+  `C:\Users\franc\Documents\Git\extraction-engine-package`. The prototype is frozen
+  under annotated tag `checkpoint/pre-package-rebuild-2026-07-12`; `master` remains
+  frozen until promotion. This knowingly leaves the currently identified fail-open
+  authoring bugs on the prototype branch; there are no consumers, so no compatibility
+  patch is required there.
+- Internal, rigorously designed package named `extractionengine`; no backward
+  compatibility, no CRAN/public-release contract, internal-use license. DESCRIPTION
+  uses the owner's real name (not the GitHub handle) with the configured noreply email.
+- `variable_template()` is removed. Reusable recipes are plain R builders/snippets
+  returning `variable_spec()`. Constructors have explicit formals: an argument is read
+  and validated or rejected; no open `...` bags.
+- `resolve_variable_spec()` becomes the one executable representation consumed by the
+  runner, `inspect()`, and provenance. This structurally removes the current
+  template-`combine_at_level`, ignored-argument, and incomplete-inspection failures.
+- The product thesis leads README and the concise replacement DESIGN contract:
+  **the engine is the auditable executor of a study's operational definitions, not
+  the author of those definitions.** The prototype DESIGN remains available through
+  the tag/history rather than being carried as the new package contract.
+
+**Amendment 1 -- redsan owns typing (prerequisite slice, owner-ratified).** The live
+`redsan::edsan_sources()` registry is real and is the source of EDSAN identifiers,
+grain, and point/interval time mechanics. It does not currently supply semantic payload
+bindings or column types. Current `process_pmsi()` / `process_biol()` parse their date
+fields but leave `PATAGE` and biology result payloads character; doceds has no processor,
+so `RECDATE` is not normalized there. Today extraction-engine's `col()` layer performs
+those coercions. Dropping it before moving typing upstream would make numeric predicates
+silently compare strings.
+
+Before the package source slice, a separate reviewed `redsan` slice must therefore:
+
+- return numeric `PATAGE` in the normalized PMSI and biology tables;
+- preserve the raw biology result while adding a stable numeric companion (non-numeric
+  values such as inequality strings remain visible in the raw field and become missing
+  in the numeric field, never silently rewritten);
+- normalize doceds `RECDATE` through an explicit doceds processing path;
+- protect each rule with source-/process-contract tests and pass `test_local`, build,
+  and built-tarball check.
+
+Only after that slice may `extractionengine` remove `col()`/date parsing and trust
+prepared inputs. It imports `redsan (>= 0.1.0)` and uses its live registry rather than
+copying source mechanics. Engine-side `source_spec()` retains only payload-role binding
+and prepared-view declarations. Exact biology companion-column names and the public
+doceds processor spelling must be ratified in the redsan slice before implementation;
+they must not be guessed downstream.
+
+**Amendment 2 -- the ellmer boundary is a relocation, not a replacement.** Fable's
+code check corrected the premise: `make_ollama_caller()` already creates an ellmer Chat
+and calls `chat_structured()`. The package rebuild moves Chat construction to the caller,
+accepts the Chat directly, and deep-clones/clears it per task; it does not change the
+structured-output mechanism. The text slice must retain the existing approved-model /
+grammar-gate regression, record the Chat's provider/model **and params** (temperature,
+seed, max tokens), and preserve partial-response/output-token/length-truncation
+diagnostics inside `model_error` when the DIY retry wrapper is removed. No conversation
+state may cross tasks and the supplied Chat must remain unchanged.
+
+**Amendment 3 -- new surface is not new capability (owner ruling).** Prepared-view
+`source_spec`, mandatory candidate-selection closure, direct Chat injection, and a live
+redsan runtime dependency are new API/plumbing surfaces implementing responsibilities
+already ratified. They do not add a new study/measurement capability, so the capability
+freeze stands. Because surface mistakes caused the current fail-open bugs, each new
+surface must nevertheless be listed explicitly, reviewed, and tested fail-closed.
+
+**Amendment 4 -- differential oracle at promotion.** The prototype tag is not enough
+as a prose oracle because the APIs intentionally differ. The promotion gate must execute
+the same synthetic cases through the tagged prototype and the package, normalize the
+public envelopes, and compare them mechanically. The minimum matrix is:
+
+1. structured subject-context lab membership;
+2. stay-level combine with key-scoped payload;
+3. text categorical extraction including citation warning / invalid sibling handling;
+4. document-date output with anchor/window behavior.
+
+Compare values, membership, channel coverage/status, and resolvable evidence links; do
+not compare incidental internal layouts. Any intentional behavioral difference needs an
+owner-ratified DESIGN/HANDOFF decision before promotion.
+
+**Execution/review gates.** (1) redsan typing contract; (2) package shell + concise
+contract; (3) source/spec compiler; (4) structured runtime; (5) text/ellmer; (6) audit,
+docs, differential runs, package build/check; (7) owner promotion. Each slice is a small
+commit reviewed mutually by Claude and Codex, with disagreements and tradeoffs recorded
+here. No clinical data or patient-derived artifact enters either repository.
+
+**Files changed.** `HANDOFF.md` only. No code, tag, branch, worktree, or package files
+were changed by this ratification entry.
+
+**Open questions / uncertainties.** The product decisions are closed. The redsan slice
+must still name and validate its typed biology companion columns and decide whether the
+doceds normalization is exposed as `process_doceds()` or an equivalent package-owned
+processor. Those are upstream interface decisions to settle before the package source
+slice, not reasons to re-open the package direction.
+
+**Execution update -- Sol (2026-07-12).** The upstream names are now resolved as
+`NUMRES_NUM` (numeric companion; `NUMRES` remains unchanged) and
+`process_doceds()`. The focused implementation is commit `f7ed07e` on redsan branch
+`codex/extractionengine-typing`, versioned as `redsan 0.1.1`. It passes 74 local test
+assertions plus source-package build and built-tarball check. Consequently the package
+dependency is tightened to `redsan (>= 0.1.1)`: version 0.1.0 predates the typing
+contract and cannot honestly satisfy that prerequisite.
