@@ -22,6 +22,7 @@ ana_docs <- list(
         snippet_id = "S001",
         hit_ref = c("OP1::2", "OP3::2"),
         ELTID = c("OP1", "OP3"),
+        EVTID = ana_tasks$EVTID[c(1, 3)],
         sentence = 2L,
         hit_text = "Anastomose arterielle termino-laterale.",
         snippet_text = c("CASE_A1_MULTI", "CASE_A3_ERROR"),
@@ -99,24 +100,45 @@ test_that("struct output distinguishes no_candidate and a failed call", {
     expect_true(a3$needs_review)
 })
 
-test_that("struct assembly rejects fields outside the declared set", {
-    # Output contract: the parser/output boundary must fail before publishing an
-    # undeclared field, even if an upstream schema was expected to prevent it.
+test_that("struct field-contract failures are isolated per task", {
+    # Output contract + failure isolation: extra and missing field sets become
+    # processing errors without aborting or discarding a valid sibling task.
     variable <- resolve_variable_spec(anastomoses_var())
-    bad <- list(
-        coverage = tibble::tibble(task_id = "task", processing_state = "valid"),
-        values = tibble::tibble(
-            task_id = "task", field = "undeclared_field",
-            accepted_value = "x", field_validity = "valid",
-            citation_warning = FALSE, validity_reason = "",
-            task_summary = NA_character_),
+    fields <- names(ANASTOMOSES_FIELDS)
+    result <- list(
+        coverage = tibble::tibble(
+            task_id = c("bad_field", "empty", "good"),
+            processing_state = "valid"),
+        values = dplyr::bind_rows(
+            tibble::tibble(
+                task_id = "bad_field", field = "undeclared_field",
+                accepted_value = "x", field_validity = "valid",
+                citation_warning = FALSE, validity_reason = "",
+                task_summary = NA_character_),
+            tibble::tibble(
+                task_id = "good", field = fields,
+                accepted_value = NA_character_, field_validity = "valid",
+                citation_warning = FALSE, validity_reason = "",
+                task_summary = NA_character_)),
         evidence = tibble::tibble())
+    tasks <- tibble::tibble(task_id = c("bad_field", "empty", "good"))
 
-    expect_error(
-        .multi_field_variable(
-            variable, tibble::tibble(task_id = "task"),
-            "text_operative_report", bad),
-        "do not match the declared field set")
+    corrected <- .enforce_struct_output_contract(variable, tasks, result)
+    state <- setNames(corrected$coverage$processing_state,
+                      corrected$coverage$task_id)
+
+    expect_equal(state[["bad_field"]], "processing_error")
+    expect_equal(state[["empty"]], "processing_error")
+    expect_equal(state[["good"]], "valid")
+    expect_equal(unique(corrected$values$task_id), "good")
+
+    out <- .multi_field_variable(
+        variable, tasks, "text_operative_report", corrected)
+    status <- setNames(out$channel_status$status, out$channel_status$task_id)
+    expect_equal(status[["bad_field"]], "error")
+    expect_equal(status[["empty"]], "error")
+    expect_equal(status[["good"]], "complete")
+    expect_equal(nrow(out$values), length(fields))
 })
 
 test_that("a missing required summary remains visible for review", {
@@ -133,6 +155,8 @@ test_that("a missing required summary remains visible for review", {
             task_summary = NA_character_),
         evidence = tibble::tibble())
 
+    result <- .enforce_struct_output_contract(
+        variable, tibble::tibble(task_id = "task"), result)
     out <- .multi_field_variable(
         variable, tibble::tibble(task_id = "task"),
         "text_operative_report", result)

@@ -29,11 +29,15 @@ new_task_definition <- function(name, system_prompt, type_builder, prompt_builde
                  call. = FALSE)
         }
     }
+    if (!is.logical(summary_required) || length(summary_required) != 1L ||
+        is.na(summary_required)) {
+        stop("summary_required must be TRUE or FALSE.", call. = FALSE)
+    }
     structure(
         list(name = name, system_prompt = system_prompt,
              type_builder = type_builder, prompt_builder = prompt_builder,
              parser = parser, summary_field = summary_field,
-             summary_required = isTRUE(summary_required)),
+             summary_required = summary_required),
         class = c("ee_task_definition", "list"))
 }
 

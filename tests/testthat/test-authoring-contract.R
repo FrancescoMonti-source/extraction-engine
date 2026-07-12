@@ -15,6 +15,11 @@ test_that("output constructors require unique explicit contracts", {
     expect_error(cat_output(c("a", "a")), "unique non-empty levels")
     expect_error(struct_output(character()), "unique non-empty fields")
     expect_error(struct_output(c("field", "field")), "unique non-empty fields")
+    expect_error(
+        new_task_definition(
+            "probe", "system", function(...) NULL, function(...) "prompt",
+            function(...) NULL, summary_required = 1),
+        "summary_required must be TRUE or FALSE")
 })
 
 test_that("one compiled spec drives inspection and retains combine level", {

@@ -52,6 +52,56 @@
     selector[[field]]
 }
 
+.validate_pre_retrieved_text <- function(coverage, candidates, tasks,
+                                         required_roles) {
+    if (!"coverage_state" %in% names(coverage)) {
+        stop("Pre-retrieved text coverage must contain coverage_state.",
+             call. = FALSE)
+    }
+    if ("subject_id" %in% required_roles &&
+        (!"PATID" %in% names(tasks) || anyNA(tasks$PATID) ||
+         any(!nzchar(as.character(tasks$PATID))))) {
+        stop("Pre-retrieved text tasks do not satisfy required role subject_id.",
+             call. = FALSE)
+    }
+    candidate_tasks <- unique(as.character(
+        coverage$task_id[coverage$coverage_state == "candidate"]))
+    candidate_tasks <- candidate_tasks[!is.na(candidate_tasks)]
+    if (!length(candidate_tasks)) return(invisible(TRUE))
+
+    role_columns <- c(
+        event_id = "EVTID", point_date = "RECDATE", text = "snippet_text",
+        source_item_id = "ELTID", document_type = "RECTYPE")
+    required_columns <- unique(c(
+        "task_id", "snippet_id", "hit_ref",
+        unname(role_columns[intersect(required_roles, names(role_columns))])))
+    missing <- setdiff(required_columns, names(candidates))
+    if (length(missing)) {
+        stop("Pre-retrieved text candidates are missing required column(s): ",
+             paste(missing, collapse = ", "), ".", call. = FALSE)
+    }
+    relevant <- candidates[as.character(candidates$task_id) %in% candidate_tasks,
+                           , drop = FALSE]
+    missing_tasks <- setdiff(candidate_tasks, as.character(relevant$task_id))
+    if (length(missing_tasks)) {
+        stop("Pre-retrieved text coverage declares ", length(missing_tasks),
+             " candidate task(s) without candidate rows.", call. = FALSE)
+    }
+    for (column in setdiff(required_columns, "task_id")) {
+        value <- relevant[[column]]
+        if (anyNA(value) || any(!nzchar(as.character(value)))) {
+            stop("Pre-retrieved text candidate column '", column,
+                 "' contains missing values.", call. = FALSE)
+        }
+    }
+    if ("point_date" %in% required_roles &&
+        !inherits(relevant$RECDATE, c("Date", "POSIXt"))) {
+        stop("Pre-retrieved text point_date must be Date or POSIXt.",
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 # A text channel's {coverage, candidates} either come PRE-RETRIEVED (fixtures, for
 # tests/debugging) or are produced by REAL retrieval from raw documents
 # (corpus + docs_index). This is the seam that makes run_variable() a real entry
@@ -93,6 +143,8 @@
             stop("Pre-retrieved text inputs reference ", length(unknown),
                  " task(s) outside the declared cohort.", call. = FALSE)
         }
+        .validate_pre_retrieved_text(
+            coverage, candidates, tasks, channel_def$required_roles)
         return(list(coverage = coverage, candidates = candidates))
     }
     if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
@@ -103,14 +155,10 @@
          "{corpus, docs_index}.", call. = FALSE)
 }
 
-# Real retrieval from raw documents (corpus + docs_index). Eligibility is resolved
-# by the channel's LINKAGE, so the spine stays concept-agnostic:
-#   - event linkage           -> the subject's documents from the SAME event (PATID +
-#                                EVTID), no date window (e.g. an operative report);
-#   - subject linkage + window -> the subject's documents inside the variable's window;
-#   - subject linkage, no window -> the subject's ENTIRE document record (whole
-#                                history / "ever"), no date filter -- the text mirror of
-#                                the whole-history structured code path.
+# Real retrieval from raw documents (corpus + docs_index). Relational linkage
+# (subject, optionally event) is resolved first; an authored temporal window is
+# then intersected with that eligible set. With no window, subject linkage sees
+# the whole record and event linkage sees the whole event.
 # Then the existing retrieve() runs the channel's Lucene query and assembles
 # candidates + coverage. Eligibility keeps the document's EVTID when docs_index
 # carries it, so a text hit stays attributable to its stay (combine_at_level, §7).
@@ -121,47 +169,30 @@
 
 .retrieve_text_channel <- function(channel_def, variable, tasks, src, selector) {
     linkage <- channel_def$linkage
-    if (!is.null(linkage) && "event" %in% linkage) {
+    event_linked <- "event" %in% linkage
+    if (event_linked) {
         if (!all(c("PATID", "EVTID") %in% names(tasks))) {
             stop("Event-scoped text retrieval requires tasks with PATID + EVTID.",
                  call. = FALSE)
         }
-        keys <- tasks %>%
-            select(any_of(c("task_id", "PATID", "EVTID", "anchor_date"))) %>%
-            distinct()
-        eligibility <- src$docs_index %>%
-            inner_join(keys,
-                       by = c("PATID", "EVTID"), relationship = "many-to-many") %>%
-            .text_eligibility_cols()
-        return(retrieve(src$corpus, tasks, eligibility,
-                        query = selector$query))
     }
-    # Whole-history subject text: no window -> the subject's entire record, no date
-    # filter. Whole-history tasks carry no anchor_date, so none is joined (it rides
-    # through retrieve() as an NA days_from_anchor ranking column, meaningless here).
-    if (is.null(variable$window)) {
-        keys <- if ("anchor_date" %in% names(tasks)) {
-            distinct(tasks, task_id, PATID, anchor_date)
-        } else {
-            distinct(tasks, task_id, PATID)
-        }
-        eligibility <- src$docs_index %>%
-            inner_join(keys, by = "PATID", relationship = "many-to-many") %>%
-            .text_eligibility_cols()
-        return(retrieve(src$corpus, tasks, eligibility,
-                        query = selector$query))
-    }
-    if (!inherits(variable$window, "ee_window")) {
-        stop("Real retrieval needs a date window (subject linkage) or an event ",
-             "linkage; supply pre-retrieved fixtures otherwise.", call. = FALSE)
-    }
-    w <- .window_days(variable)
+    join_keys <- if (event_linked) c("PATID", "EVTID") else "PATID"
+    task_columns <- c("task_id", join_keys,
+                      if (!is.null(variable$anchor)) "anchor_date")
+    keys <- tasks %>% select(all_of(task_columns)) %>% distinct()
     eligibility <- src$docs_index %>%
-        inner_join(distinct(tasks, task_id, PATID, anchor_date),
-                   by = "PATID", relationship = "many-to-many") %>%
-        filter(RECDATE >= anchor_date + w[["from_days"]],
-               RECDATE <= anchor_date + w[["to_days"]]) %>%
-        .text_eligibility_cols()
+        inner_join(keys, by = join_keys, relationship = "many-to-many")
+    if (!is.null(variable$window)) {
+        if (!inherits(variable$window, "ee_window")) {
+            stop("Real retrieval requires a compiled relative window.",
+                 call. = FALSE)
+        }
+        w <- .window_days(variable)
+        eligibility <- eligibility %>%
+            filter(RECDATE >= anchor_date + w[["from_days"]],
+                   RECDATE <= anchor_date + w[["to_days"]])
+    }
+    eligibility <- .text_eligibility_cols(eligibility)
     retrieve(src$corpus, tasks, eligibility, query = selector$query)
 }
 
@@ -878,6 +909,57 @@
     list(values = values, channel_status = channel_status, evidence = evidence)
 }
 
+# Validate the parser/output field-set contract per task. A malformed task is
+# converted to processing_error and removed from publishable values/evidence;
+# valid siblings continue through the batch.
+.enforce_struct_output_contract <- function(variable, tasks, result) {
+    task_ids <- as.character(tasks$task_id)
+    coverage <- result$coverage
+    checked <- as.character(coverage$task_id)[
+        as.character(coverage$task_id) %in% task_ids &
+            coverage$processing_state %in% c("valid", "invalid")]
+    if (!length(checked)) return(result)
+
+    bad <- vapply(checked, function(task_id) {
+        fields <- if (is.data.frame(result$values) &&
+                      all(c("task_id", "field") %in% names(result$values))) {
+            as.character(result$values$field[
+                as.character(result$values$task_id) == task_id])
+        } else character()
+        !length(fields) || anyNA(fields) || any(!nzchar(fields)) ||
+            anyDuplicated(fields) || !setequal(fields, variable$output$fields)
+    }, logical(1))
+    bad_tasks <- checked[bad]
+    if (!length(bad_tasks)) return(result)
+
+    failed <- as.character(result$coverage$task_id) %in% bad_tasks
+    result$coverage$processing_state[failed] <- "processing_error"
+    for (component in c("values", "evidence")) {
+        frame <- result[[component]]
+        if (is.data.frame(frame) && "task_id" %in% names(frame)) {
+            result[[component]] <- frame[
+                !as.character(frame$task_id) %in% bad_tasks, , drop = FALSE]
+        }
+    }
+    if (is.data.frame(result$attempts) && "task_id" %in% names(result$attempts)) {
+        failed_attempt <- as.character(result$attempts$task_id) %in% bad_tasks
+        if ("processing_status" %in% names(result$attempts)) {
+            result$attempts$processing_status[failed_attempt] <- "processing_error"
+        }
+        if ("task_validity" %in% names(result$attempts)) {
+            result$attempts$task_validity[failed_attempt] <- "invalid"
+        }
+        if ("error" %in% names(result$attempts)) {
+            reason <- "struct output fields do not match the declared field set"
+            previous <- as.character(result$attempts$error[failed_attempt])
+            result$attempts$error[failed_attempt] <- ifelse(
+                is.na(previous) | !nzchar(previous), reason,
+                paste(previous, reason, sep = " || "))
+        }
+    }
+    result
+}
+
 # fields output (combine = NULL): one text task -> several fields. Emits one value
 # row per task x field (the field's accepted value -- already NA for invalid fields, so a
 # valid grounded field survives an invalid sibling), a per-task channel status with
@@ -888,20 +970,6 @@
     source_name <- .source_name_for_channel(channel_name, variable)
     cov <- result$coverage; vals <- result$values; ev <- result$evidence
     task_ids <- as.character(tasks$task_id)
-
-    if (nrow(vals)) {
-        contract_vals <- vals[as.character(vals$task_id) %in% task_ids, , drop = FALSE]
-        observed <- split(as.character(contract_vals$field),
-                          as.character(contract_vals$task_id))
-        bad <- vapply(observed, function(fields) {
-            anyNA(fields) || any(!nzchar(fields)) || anyDuplicated(fields) ||
-                !setequal(fields, variable$output$fields)
-        }, logical(1))
-        if (any(bad)) {
-            stop("struct output fields do not match the declared field set for ",
-                 sum(bad), " processed task(s).", call. = FALSE)
-        }
-    }
 
     values <- if (nrow(vals)) {
         vals %>%
@@ -1194,6 +1262,9 @@
             type = ch$type,
             source = ch$source,
             source_roles = if (is.null(spec)) NULL else source_roles(spec),
+            runtime_roles = if (identical(ch$type, "text")) {
+                list(text = "snippet_text", evidence_ref = "hit_ref")
+            } else NULL,
             required_roles = ch$required_roles,
             linkage = ch$linkage,
             selector = .provenance_selector(ch$selector),
@@ -1424,6 +1495,8 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
                     stop("fields output currently requires a text channel.",
                          call. = FALSE)
                 }
+                channel_results[[1]] <- .enforce_struct_output_contract(
+                    variable, tasks, channel_results[[1]])
                 .multi_field_variable(variable, tasks, ch, channel_results[[1]])
             },
             stop("Unsupported single-channel output: ", output_kind,

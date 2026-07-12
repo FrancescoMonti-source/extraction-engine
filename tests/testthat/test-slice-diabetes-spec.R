@@ -25,6 +25,7 @@ spec_docs <- list(
         snippet_id = "S001",
         hit_ref = "DOC1::3",
         ELTID = "DOC1",
+        EVTID = "EV1",
         sentence = 3L,
         hit_text = "Patient diabetique.",
         snippet_text = "Patient diabetique sous metformine.",

@@ -45,6 +45,30 @@ rw_variable <- function() {
         name = "tabac_statut_periop", anchor = "anchor_date")
 }
 
+rw_event_concept <- function() {
+    definition <- binary_presence_text_definition(
+        name = "event mention", status_key = "mention_status",
+        field = "event_mention", system_prompt = "Extract documented presence.")
+    concept_spec("event text", list(
+        event_text = text_channel(
+            source = "documents", selector = lucene_query("anastomose"),
+            required_roles = c("subject_id", "event_id", "point_date", "text",
+                               "source_item_id"),
+            linkage = c("subject", "event"), extractor = definition,
+            default_method = llm_after_lucene(function(x) x))))
+}
+
+rw_event_variable <- function(anchor = NULL, window = NULL) {
+    variable_spec(
+        "event mention", rw_event_concept(), output_one_row_per = "PATID",
+        anchor = anchor, window = window,
+        channels = list(event_text = use_channel()), output = bin_output())
+}
+
+rw_event_fake <- function(...) {
+    list(mention_status = "documented", evidence_ids = list("S001"))
+}
+
 # Why: the spec layer must be a real entry point into retrieval. run_variable()
 # executes from raw documents through Lucene retrieval + eligibility windowing to
 # final categorical values -- no pre-built coverage/candidates.
@@ -67,20 +91,7 @@ test_that("run_variable executes a text variable from raw documents via retrieva
 test_that("raw event-linked text retrieval does not require an anchor", {
     # Relational-scope contract: same-event attachment is sufficient; an
     # unrelated temporal anchor must not be invented as an input requirement.
-    definition <- binary_presence_text_definition(
-        name = "event mention", status_key = "mention_status",
-        field = "event_mention", system_prompt = "Extract documented presence.")
-    concept <- concept_spec("event text", list(
-        event_text = text_channel(
-            source = "documents", selector = lucene_query("anastomose"),
-            required_roles = c("subject_id", "event_id", "point_date", "text",
-                               "source_item_id"),
-            linkage = c("subject", "event"), extractor = definition,
-            default_method = llm_after_lucene(function(x) x))))
-    variable <- variable_spec(
-        "event mention", concept, output_one_row_per = "PATID",
-        anchor = NULL, window = NULL,
-        channels = list(event_text = use_channel()), output = bin_output())
+    variable <- rw_event_variable()
     tasks <- tibble::tibble(
         grain_id = "event-task", PATID = "subject", EVTID = "event")
     index <- tibble::tibble(
@@ -91,11 +102,48 @@ test_that("raw event-linked text retrieval does not require an anchor", {
         documents = list(
             corpus = rw_make_corpus("event-doc", "Anastomose documentee."),
             docs_index = index))
+    n_calls <- 0L
     responder <- function(...) {
-        list(mention_status = "documented", evidence_ids = list("S001"))
+        n_calls <<- n_calls + 1L
+        rw_event_fake(...)
     }
 
     run <- run_variable(variable, tasks, source, chat = fake_chat(responder))
 
     expect_equal(run$values$value, 1L)
+    expect_equal(n_calls, 1L)
+
+    windowed <- rw_event_variable(anchor = "index_date", window = c(-1, 1))
+    distant_tasks <- dplyr::mutate(tasks, index_date = as.Date("2026-01-01"))
+    distant <- run_variable(
+        windowed, distant_tasks, source, chat = fake_chat(responder))
+
+    expect_equal(distant$values$value, 0L)
+    expect_equal(n_calls, 1L)
+})
+
+test_that("an undeclared anchor column cannot change event-text evidence", {
+    # Executable-definition contract: an incidental task column must not enter
+    # ranking or deduplication when anchor = NULL.
+    variable <- rw_event_variable()
+    index <- tibble::tibble(
+        ELTID = c("event-old", "event-new"), PATID = "subject", EVTID = "event",
+        RECDATE = as.POSIXct(c("2024-01-01", "2025-01-01"),
+                            tz = "Europe/Paris"),
+        RECTYPE = "note")
+    source <- list(documents = list(
+        corpus = rw_make_corpus(
+            c("event-old", "event-new"),
+            rep("Anastomose documentee.", 2)),
+        docs_index = index))
+    tasks <- tibble::tibble(
+        grain_id = "event-task", PATID = "subject", EVTID = "event")
+
+    plain <- run_variable(variable, tasks, source, chat = fake_chat(rw_event_fake))
+    decoy <- run_variable(
+        variable, dplyr::mutate(tasks, anchor_date = as.Date("2025-01-01")),
+        source, chat = fake_chat(rw_event_fake))
+
+    expect_equal(decoy$evidence$evidence_ref, plain$evidence$evidence_ref)
+    expect_match(plain$evidence$evidence_ref, "^event-old::")
 })

@@ -20,6 +20,7 @@ sm_docs <- list(
         snippet_id = "S001",
         hit_ref = c("D1::3", "D2::3", "D4::3", "D5::3", "D6::3"),
         ELTID = c("D1", "D2", "D4", "D5", "D6"),
+        EVTID = c("E1", "E2", "E4", "E5", "E6"),
         sentence = 3L,
         hit_text = "Tabac.",
         snippet_text = c("CASE_ACTIF", "CASE_INDET", "CASE_SEVRE_NOEV",
@@ -77,6 +78,9 @@ test_that("categorical output returns the status and distinct absence states", {
     expect_equal(cov[["T3::t"]], "partial")
     expect_true(is.na(value[["T4::t"]]))            # definitive without evidence -> invalid
     expect_true(nr[["T4::t"]])
+    expect_equal(
+        run$provenance$channels$text_smoking_mentions$runtime_roles$text,
+        "snippet_text")
 })
 
 # Why: D1 keep-and-flag (owner-ratified). A status grounded by >=1 real id is kept
@@ -149,5 +153,14 @@ test_that("pre-retrieved text rejects tasks outside the declared cohort", {
             smoking_periop(), sm_tasks, list(documents = bad_docs),
             chat = fake_chat(responder)),
         "outside the declared cohort")
+    expect_equal(n_calls, 0L)
+
+    missing_text <- sm_docs
+    missing_text$candidates$snippet_text <- NULL
+    expect_error(
+        run_variable(
+            smoking_periop(), sm_tasks, list(documents = missing_text),
+            chat = fake_chat(responder)),
+        "missing required column.*snippet_text")
     expect_equal(n_calls, 0L)
 })
