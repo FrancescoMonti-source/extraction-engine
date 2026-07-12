@@ -39,7 +39,7 @@ smoking_concept_spec <- function() {
                 linkage = "subject")))
 }
 
-# Peri-operative documented smoking status (the D0840 `tabac_statut` shape):
+# Peri-operative documented smoking status:
 # the status documented in [anchor - 365d, anchor + 7d]. Concept-specific
 # quickstart -- "documented status" lives here (extractor + categorical output;
 # single channel, so combine_channels = NULL), not in the neutral concept.

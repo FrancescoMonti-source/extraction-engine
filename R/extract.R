@@ -364,7 +364,7 @@ run_extraction <- function(coverage, candidates, definition, chat,
             task_validity = tvalid, error = ifelse(nzchar(err), err, NA_character_),
             output_tokens = call$output_tokens,
             inferred_finish_reason = call$inferred_finish_reason,
-            partial_response = call$partial_response,   # PHI-ish: run.rds only, not the workbook
+            partial_response = call$partial_response,
             raw_response = list(if (identical(call$status, "completed")) call$result else NULL))
     }
 
