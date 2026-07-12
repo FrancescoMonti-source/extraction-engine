@@ -23,6 +23,9 @@ Run package-native tests with:
 testthat::test_local(".")
 ```
 
+Before adding a model to the package approval list, run
+`Rscript scripts/check_grammar_enforcement.R` against that model.
+
 The concise package contract is in [DESIGN.md](DESIGN.md). The pre-package
 prototype is preserved at tag
 `checkpoint/pre-package-rebuild-2026-07-12`.
