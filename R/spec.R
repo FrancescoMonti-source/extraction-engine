@@ -361,6 +361,10 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
     }
 
     window <- .as_window(window)
+    if (!is.null(window) && is.null(anchor)) {
+        stop("A relative window requires an explicit anchor task column or ",
+             "index_event().", call. = FALSE)
+    }
 
     combine <- .as_combiner(combine_channels)   # bare string -> hit_set_expr()
     combine <- .resolve_variable_combine(combine, names(channels), output)
@@ -441,6 +445,28 @@ inspect.default <- function(x, ...) {
     list(value = value, source = source)
 }
 
+.check_channel_required_roles <- function(channel) {
+    required <- channel$required_roles
+    if (!length(required)) return(invisible(TRUE))
+    spec <- EE_SOURCES[[channel$source]]
+    if (is.null(spec)) {
+        stop("Cannot validate required_roles for unregistered prepared source '",
+             channel$source, "'.", call. = FALSE)
+    }
+    available <- names(source_roles(spec))
+    # Text content lives in the corpus/pre-retrieved candidate payload rather
+    # than the typed docs_index. It is the one channel-runtime role not bound by
+    # the prepared source_spec itself.
+    if (identical(channel$type, "text")) available <- c(available, "text")
+    missing <- setdiff(required, available)
+    if (length(missing)) {
+        stop("Channel '", channel$name, "' requires source role(s) not bound by '",
+             channel$source, "': ", paste(missing, collapse = ", "), ".",
+             call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
 # `catalog` is the variable's full channel catalog: concept channels plus any
 # variable-local inline definitions (they resolve identically; an inline definer
 # binds wherever it appears, DESIGN section 5).
@@ -489,6 +515,7 @@ resolve_variable_spec <- function(variable) {
         function(name) .resolve_channel_activation(
             name, catalog, variable$channels[[name]]))
     names(resolved_channels) <- names(variable$channels)
+    invisible(lapply(resolved_channels, .check_channel_required_roles))
 
     combine_rule <- if (inherits(variable$combine, "ee_combiner") &&
                         !is.null(variable$combine$expr)) {

@@ -33,8 +33,10 @@ inspect(x, ...)
 \item{concept}{A concept specification that supplies channel definitions.}
 \item{output_one_row_per}{The output-grain column, usually \code{"PATID"} or
 \code{"EVTID"}.}
-\item{anchor}{\code{NULL}, a task date column, or an \code{index_event()}.}
-\item{window}{\code{NULL} or \code{c(from_days, to_days)} relative to the anchor.}
+\item{anchor}{\code{NULL}, a typed task date column, or an \code{index_event()}.
+A named task column is normalized to the internal execution clock.}
+\item{window}{\code{NULL} or \code{c(from_days, to_days)} relative to an explicit
+anchor.}
 \item{output}{An output constructor result.}
 \item{combine_channels}{A hit-set expression string or combiner.}
 \item{combine_at_level}{Optional identity-spine key at which to evaluate a

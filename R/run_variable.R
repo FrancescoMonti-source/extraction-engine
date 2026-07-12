@@ -211,11 +211,29 @@
 # Derived-anchor PASS: when variable$anchor is an index_event(), compute a per-subject
 # anchor_date BEFORE windowing -- find each subject's event matching the selector in the
 # named source and take its date at role `at`. This is a resolution pass producing
-# (PATID, anchor_date), NOT an inter-channel dependency. A string/NULL anchor means the
-# caller already supplied tasks$anchor_date, so tasks pass through unchanged.
+# (PATID, anchor_date), NOT an inter-channel dependency. A string anchor names the
+# caller-supplied task column that is normalized to the internal anchor_date clock.
 .resolve_anchor <- function(variable, tasks, sources) {
     anchor <- variable$anchor
-    if (!inherits(anchor, "ee_index_event")) return(tasks)
+    if (is.null(anchor)) {
+        if (!is.null(variable$window)) {
+            stop("A relative window cannot execute without a declared anchor.",
+                 call. = FALSE)
+        }
+        return(tasks)
+    }
+    if (is.character(anchor)) {
+        if (!anchor %in% names(tasks)) {
+            stop("The declared anchor task column is missing: '", anchor, "'.",
+                 call. = FALSE)
+        }
+        tasks$anchor_date <- .clinical_date(tasks[[anchor]])
+        if (anyNA(tasks$anchor_date)) {
+            stop("The declared anchor task column contains missing values.",
+                 call. = FALSE)
+        }
+        return(tasks)
+    }
 
     src <- sources[[anchor$source]]
     if (is.null(src)) {
@@ -329,6 +347,24 @@
         tasks$task_id <- paste(tasks$task_id, tasks$EVTID, sep = "::")
     }
     tasks
+}
+
+.channel_scope_keys <- function(channel_def, variable, tasks, grain_keys) {
+    if ("event" %in% channel_def$linkage) {
+        required <- c("PATID", "EVTID")
+        missing <- setdiff(required, names(tasks))
+        if (length(missing)) {
+            stop("Event-linked channel '", channel_def$name,
+                 "' requires task column(s): ", paste(missing, collapse = ", "),
+                 ".", call. = FALSE)
+        }
+        if (anyNA(tasks$EVTID) || any(!nzchar(as.character(tasks$EVTID)))) {
+            stop("Event-linked tasks require non-missing EVTID values.",
+                 call. = FALSE)
+        }
+        return(required)
+    }
+    if (is.null(variable$window)) grain_keys else "PATID"
 }
 
 # Dispatch by channel TYPE. Each branch wraps an existing tested executor.
@@ -1108,6 +1144,8 @@
             type = ch$type,
             source = ch$source,
             source_roles = if (is.null(spec)) NULL else source_roles(spec),
+            required_roles = ch$required_roles,
+            linkage = ch$linkage,
             selector = .provenance_selector(ch$selector),
             selector_source = ch$selector_source,
             method_source = ch$method_source,
@@ -1264,20 +1302,16 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
     # "PATID" must fail loudly (DESIGN §7).
     tasks <- .resolve_anchor(variable, tasks, sources)
     grain_keys <- .check_output_grain(variable, tasks)
-    # Scoping rule (DESIGN §7): a declared WINDOW is the scope -- rows gather
-    # per subject inside each task's anchored window (a per-event task's EVTID
-    # is the task's IDENTITY, not a row filter: forward complications live in
-    # later stays). With no window, the grain unit itself is the scope (the
-    # windowless stay-grain "during this stay" consumers).
-    scope_keys <- if (is.null(variable$window)) grain_keys else "PATID"
-    channel_results <- lapply(
-        names(variable$channels),
-        .run_selected_channel,
-        variable = variable,
-        tasks = tasks,
-        sources = sources,
-        chat = chat,
-        grain_keys = scope_keys)
+    # Scoping rule (DESIGN §7): an explicit event linkage always constrains rows
+    # to PATID + EVTID. Otherwise a declared window gathers per subject inside
+    # each task's anchored window; with no window, the output grain is the scope.
+    channel_results <- lapply(names(variable$channels), function(channel_name) {
+        scope_keys <- .channel_scope_keys(
+            .channel_def(variable, channel_name), variable, tasks, grain_keys)
+        .run_selected_channel(
+            variable, channel_name, tasks, sources, chat,
+            grain_keys = scope_keys)
+    })
     names(channel_results) <- names(variable$channels)
 
     channel_names <- names(variable$channels)
