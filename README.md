@@ -91,24 +91,29 @@ execution. Biology typing is delegated to `redsan` automatically at this
 boundary; callers do not manufacture engine-specific `analyte`, `value`, or row
 identifier columns.
 
-## Text models belong to variables
+## Text evidence and text variables
 
-The concept declares where potentially relevant evidence lives:
+The concept declares every place where potentially relevant evidence can be
+found. It does not say what to do with that evidence. Text channels use the
+logical source `"documents"` by default, while `evidence_scope` explicitly says
+whether eligible documents come from the same patient or the same stay.
 
 ```r
 smoking <- concept_spec(
   name = "smoking",
   channels = list(
     smoking_mentions = text_channel(
-      source = "documents",
       selector = lucene_query("taba*"),
-      linkage = "event"
+      evidence_scope = "event"
     )
   )
 )
 ```
 
-The variable declares what the model must extract:
+The same channel can support a deterministic presence variable with
+`method = "lucene"` and `bin_output()`, or a structured extraction with
+`method = "lucene_llm"`. The latter keeps the detailed study instruction in a
+plain prompt owned by the researcher:
 
 ```r
 smoking_levels <- c(
@@ -118,6 +123,26 @@ smoking_levels <- c(
   "indetermine"
 )
 
+smoking_prompt <- paste(
+  "Détermine le statut tabagique explicitement documenté",
+  "pour le patient cible dans les extraits fournis.",
+  "",
+  "Valeurs possibles :",
+  "- actif : tabagisme actuel explicitement documenté ;",
+  "- sevre : ancien fumeur, arrêt ou sevrage explicitement documenté ;",
+  "- non_fumeur : non-fumeur ou absence de tabagisme explicitement documentée ;",
+  "- indetermine : extraits insuffisants, ambigus ou contradictoires.",
+  "",
+  "Règles :",
+  "- utilise uniquement les extraits fournis ;",
+  "- évalue le patient cible, jamais sa famille ou son entourage ;",
+  "- ne déduis jamais non_fumeur du silence ;",
+  "- choisis une seule valeur ;",
+  "- cite uniquement les identifiants des extraits soutenant la réponse ;",
+  "- n’invente jamais d’identifiant.",
+  sep = "\n"
+)
+
 smoking_status <- variable_spec(
   name = "smoking_status",
   concept = smoking,
@@ -125,29 +150,8 @@ smoking_status <- variable_spec(
 
   channels = list(
     smoking_mentions = use_channel(
-      method = llm_after_lucene(),
-
-      extractor = llm_task(
-        prompt = paste(
-          "Determine le statut tabagique explicitement documente",
-          "pour le patient cible dans les extraits fournis.",
-          "",
-          "Valeurs possibles :",
-          "- actif : tabagisme actuel explicitement documente ;",
-          "- sevre : ancien fumeur, arret ou sevrage explicitement documente ;",
-          "- non_fumeur : non-fumeur ou absence de tabagisme explicitement documentee ;",
-          "- indetermine : extraits insuffisants, ambigus ou contradictoires.",
-          "",
-          "Regles :",
-          "- utilise uniquement les extraits fournis ;",
-          "- evalue le patient cible, jamais sa famille ou son entourage ;",
-          "- ne deduis jamais non_fumeur du silence ;",
-          "- choisis une seule valeur ;",
-          "- cite uniquement les identifiants des extraits soutenant la reponse ;",
-          "- n'invente jamais d'identifiant.",
-          sep = "\n"
-        )
-      )
+      method = "lucene_llm",
+      prompt = smoking_prompt
     )
   ),
 
@@ -159,21 +163,39 @@ smoking_status <- variable_spec(
     seed = 42
   )
 )
+
+result_smoking <- run_variable(
+  smoking_status,
+  cohort = cohorte,
+  sources = list(documents = documents)
+)
 ```
 
-`cat_output()` is the single machine-readable declaration of the allowed values.
-For each task, the engine derives the structured `ellmer` response type, appends
-the numbered Lucene excerpts to the authored prompt, constrains evidence IDs to
-the excerpts actually supplied, and maps the result into values and evidence.
-The engine does not judge the scientific meaning of a returned category.
+Here `documents` is the caller-owned document source, normally a list containing
+the persisted `corpus` and its typed `docs_index`. As with biology, the binding is
+made only at execution: `sources = list(documents = documents)` connects that
+object to the logical source name used by `text_channel()`.
 
-`llm_after_lucene()` passes every Lucene match. A real operational cap is written
-as `llm_after_lucene(max_candidates = 10)` and is therefore visible in the spec;
-advanced custom selection must be named explicitly with `select_candidates =`.
+`cat_output()` is the single machine-readable declaration of the allowed values.
+For each cohort row, the engine derives the structured `ellmer` response type,
+appends the numbered Lucene excerpts to the authored prompt, constrains the value
+to those levels, and constrains evidence IDs to the excerpts actually supplied.
+The model may select the wrong allowed category, but it cannot return a category
+outside the declared vocabulary. The engine does not judge the scientific meaning
+of the selected category.
+
+By default every Lucene match is passed to the model. A real operational cap is
+written explicitly as `max_candidates = 10` inside `use_channel()`. The optional
+`system_prompt` lives in the same place; when omitted, the package supplies a
+French structured-extraction default that treats excerpts as data, requires the
+declared schema, and forbids invented information or evidence identifiers.
 
 `run_variable()` creates the Ollama Chat automatically. `run_protocol()` runs
 variables in list order and completes all rows of one variable before moving to
-the next model. Passing `chat =` remains an explicit test/debug override.
+the next model. One base Chat is created per `lucene_llm` variable and cloned for
+its cohort rows; the Ollama model is not rebuilt for every row. Passing `chat =`
+remains an explicit test/debug override. A `method = "lucene"` variable never
+creates a Chat.
 
 ## Development
 

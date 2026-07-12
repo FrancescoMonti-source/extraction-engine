@@ -13,23 +13,23 @@
 \title{Declare source channels and selectors}
 \usage{
 code_channel(source, selector, native_grain = NA_character_,
-  required_roles = character(), linkage = character(),
+  required_roles = character(), evidence_scope = NULL,
   group_at_level = NULL, keep_group_when = NULL)
 
 act_channel(source, selector, native_grain = NA_character_,
-  required_roles = character(), linkage = character(),
+  required_roles = character(), evidence_scope = NULL,
   group_at_level = NULL, keep_group_when = NULL)
 
 lab_channel(source, selector, native_grain = NA_character_,
-  required_roles = character(), linkage = character(),
+  required_roles = character(), evidence_scope = NULL,
   group_at_level = NULL, keep_group_when = NULL)
 
-text_channel(source, selector, extractor = NULL, default_method = NULL,
+text_channel(selector, evidence_scope, source = "documents",
   native_grain = NA_character_, required_roles = character(),
-  linkage = character(), group_at_level = NULL, keep_group_when = NULL)
+  group_at_level = NULL, keep_group_when = NULL)
 
 doc_channel(source, selector, native_grain = NA_character_,
-  required_roles = character(), linkage = character(),
+  required_roles = character(), evidence_scope = NULL,
   group_at_level = NULL, keep_group_when = NULL)
 
 icd10(pattern, match = c("regex", "exact"))
@@ -45,19 +45,18 @@ analyte(codes)
 analyte_value(codes, gt = NULL, lt = NULL, unit = NULL, keep_when = NULL)
 }
 \arguments{
-\item{source}{A name from \code{edsan_source_specs()}.}
+\item{source}{A name from \code{edsan_source_specs()}. Text channels default to
+the logical source \code{"documents"}; caller objects are bound to logical source
+names through \code{run_variable(sources =)}.}
 \item{selector}{A selector compatible with the typed channel.}
 \item{native_grain}{Optional descriptive native grain.}
 \item{required_roles}{Source roles the authored definition expects.}
-\item{linkage}{Relational eligibility scope. \code{"subject"} joins source rows
-to a task by \code{PATID}; including \code{"event"} joins by
-\code{PATID + EVTID}. It does not itself group snippets: the variable's output
-grain determines the task receiving those eligible rows.}
+\item{evidence_scope}{Relational eligibility scope. \code{"patient"} joins
+source rows by \code{PATID}; \code{"event"} joins by \code{PATID + EVTID}.
+It is mandatory for \code{text_channel()} so patient-history and same-stay
+evidence cannot be confused implicitly. It does not determine output grain.}
 \item{group_at_level}{Optional identity-spine grouping level.}
 \item{keep_group_when}{A plain function returning one logical per group.}
-\item{extractor}{An LLM task created with \code{llm_task()}. For ordinary
-categorical extraction it contains only the study-authored prompt.}
-\item{default_method}{An optional default \code{llm_after_lucene()} method.}
 \item{pattern,codes}{Code or analyte values.}
 \item{match}{Exact or regular-expression matching.}
 \item{query}{One Lucene query.}

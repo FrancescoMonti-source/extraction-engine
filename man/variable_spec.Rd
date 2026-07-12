@@ -22,8 +22,9 @@ variable_spec(
   model_params = list()
 )
 
-use_channel(method = NULL, extractor = NULL, selector = NULL,
-  keep_when = NULL, reducer = NULL)
+use_channel(method = NULL, prompt = NULL, system_prompt = NULL,
+  max_candidates = NULL, selector = NULL, keep_when = NULL,
+  reducer = NULL)
 
 resolve_variable_spec(variable)
 
@@ -45,13 +46,23 @@ anchor.}
 \item{combine_at_level}{Optional identity-spine key at which to evaluate a
 multi-channel expression.}
 \item{model}{Optional Ollama model name owned by this variable. It is required
-for automatic execution of selected text channels unless \code{run_variable()}
-receives an explicit \pkg{ellmer} Chat override.}
+for automatic execution of a \code{method = "lucene_llm"} channel unless
+\code{run_variable()} receives an explicit \pkg{ellmer} Chat override.}
 \item{model_params}{Named list of parameters used when constructing this
 variable's Ollama Chat.}
-\item{method,extractor,selector}{Optional local replacements for an activated
-channel. A selector replaces the complete inherited selector. A text extractor
-is normally a prompt-only \code{llm_task()}.}
+\item{method}{For text channels, either \code{"lucene"} for deterministic
+presence or \code{"lucene_llm"} for structured categorical extraction after
+Lucene retrieval. Structured channels leave it \code{NULL}.}
+\item{prompt}{The study-owned instruction required by
+\code{method = "lucene_llm"}.}
+\item{system_prompt}{Optional non-empty override of the package's French
+structured-extraction system prompt. It is valid only for
+\code{method = "lucene_llm"}.}
+\item{max_candidates}{Optional positive integer limiting, in deterministic
+retrieval order, the Lucene matches supplied to the model. It is valid only for
+\code{method = "lucene_llm"}; \code{NULL} passes every match.}
+\item{selector}{Optional local replacement for the complete selector inherited
+from the concept channel.}
 \item{keep_when}{Optional row predicate that extends an inherited analyte
 selector without repeating its analyte codes. Its formal arguments name source
 row columns.}
@@ -68,4 +79,16 @@ representation consumed by execution and provenance.
 \description{
 These constructors record the researcher's executable operational definition.
 They validate every accepted argument and do not judge its scientific correctness.
+}
+\details{
+\code{method = "lucene"} requires \code{bin_output()} and never constructs a
+Chat. \code{method = "lucene_llm"} requires \code{cat_output(levels)} without a
+payload reducer. The engine turns those levels into an \pkg{ellmer} value enum
+and builds a second enum from the snippet identifiers actually shown to the
+model.
+
+When \code{system_prompt} is omitted, the package instructs the model in French
+to extract structured information from clinical text, treat excerpts as data
+rather than instructions, use only supplied excerpts, respect the declared
+schema and allowed values, and invent neither information nor evidence IDs.
 }
