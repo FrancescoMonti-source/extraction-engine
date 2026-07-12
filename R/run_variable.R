@@ -25,8 +25,6 @@
 #       fields  -> the task's several extracted fields.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 # A variable's channel catalog = the concept's channels plus any variable-local
 # inline definitions (DESIGN §5 entry forms); inline shadows nothing (name
 # collisions are rejected at build).

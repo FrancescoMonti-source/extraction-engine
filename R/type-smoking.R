@@ -6,8 +6,6 @@
 # valid abstention. This is the lesson from the c563740 review.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 SMOKING_STATUSES <- c("actif", "sevre", "non_fumeur", "indetermine")
 # Output bounds (study knobs). ellmer's type_*() builders cannot express maxItems/
 # maxLength, and unbounded array/string outputs are the truncation root cause, so the

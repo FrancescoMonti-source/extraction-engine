@@ -5,8 +5,6 @@
 # relation the engine consumes; the engine stays clinical-agnostic.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 # Recipient-only tasks; reads ONLY the three non-identifier columns.
 anastomoses_load_tasks <- function(chirurgie_path) {
     ch <- read_workbook_columns(

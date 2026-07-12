@@ -22,8 +22,6 @@
 # test-slice-diabetes-spec.R / test-slice-dialysis-spec.R.)
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 # Map an engine processing_state (text OR structured vocabulary) + the channel's
 # accepted value into the {status, hit} the assemblers expect. These mappings are
 # RECIPE decisions, surfaced deliberately rather than hidden:

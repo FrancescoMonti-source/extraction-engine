@@ -9,11 +9,6 @@
 # the provenance assertion, the four views, and a generic physician review view.
 # =============================================================================
 
-suppressWarnings(suppressMessages({
-    library(dplyr)
-    stopifnot(requireNamespace("ellmer", quietly = TRUE))
-}))
-
 # A task definition bundles everything variable-specific.
 # parser(result, snippet_ids) must return:
 #   list(fields = tibble(field, status, normalized_value, evidence_ids (list-col),

@@ -1,0 +1,9 @@
+^\.git$
+^\.agents$
+^\.claude$
+^\.codex$
+^\.Rhistory$
+^config$
+^outputs$
+^scripts$
+^HANDOFF.*$

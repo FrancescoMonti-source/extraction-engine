@@ -4,8 +4,6 @@
 # standard_field_validity helper and returns the engine's fields/summary contract.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 ANASTOMOSES_FIELDS <- c(
     transplantation_duree_anastomose_arterielle        = "integer",
     transplantation_type_anastomose_arterielle         = "string",

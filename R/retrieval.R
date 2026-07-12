@@ -10,12 +10,6 @@
 # nothing clinical.
 # =============================================================================
 
-suppressWarnings(suppressMessages({
-    library(dplyr)
-    library(stringr)
-    library(corpustools)
-}))
-
 # Deterministic normalized untokenizer (single tested punctuation policy).
 untokenize <- function(tokens) {
     s <- paste(tokens, collapse = " ")

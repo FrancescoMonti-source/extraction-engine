@@ -1,34 +1,28 @@
-# extraction-engine (placeholder name)
+# extractionengine
 
-Auditable, local-first extraction framework for turning stable hospital data
-warehouse sources into protocol-specific analytical variables.
+> `extractionengine` is the auditable executor of a study's operational
+> definitions, not the author of those definitions.
 
-Project data preparation remains upstream: the files supplied in `/data` already define
-the study population and outer protocol period. The engine only constructs variables
-within that supplied study universe.
+The package executes explicit study-variable specifications over prepared EDSAN
+views. It returns the value together with source coverage, resolvable evidence,
+and execution provenance. The researcher owns the clinical definition, the
+scientific validity of the rule, and interpretation of the result.
 
-The engine is HDW-aware and protocol-agnostic. It exposes source-backed signal
-channels, executes concrete `variable_spec`s, and returns values with traceable
-coverage, evidence, and provenance. Researchers remain responsible for clinical and
-scientific interpretation.
+`redsan` owns EDSAN retrieval, source mechanics, and normalization. `ellmer`
+owns model transport and structured output. `extractionengine` connects those
+boundaries without hiding the authored rule.
 
-The LLM step is review-by-design. The engine does not claim LLM accuracy; it
-guarantees controlled, auditable execution around the LLM call. See
-[`DESIGN.md`](DESIGN.md) §1 and §9.
+The package is currently for internal use. It contains no patient data and no
+exported clinical concepts.
 
-Run the deterministic test suite with:
+## Development
 
-```sh
-Rscript tests/testthat.R
+Run package-native tests with:
+
+```r
+testthat::test_local(".")
 ```
 
-Start with:
-
-- **[DESIGN.md](DESIGN.md)** — the target architecture and vocabulary contract (§16 lists deferred capabilities gated on a consumer).
-- **[HANDOFF.md](HANDOFF.md)** — chronological collaboration log for maintainers (closed 2026-06 history in [HANDOFF-archive.md](HANDOFF-archive.md)).
-
-In one sentence: ellmer handles LLM transport; this project gathers dated clinical
-evidence, constructs auditable cohort variables, and evaluates them.
-
-> ⚠️ Clinical data must **never** be committed to this repo. See `.gitignore`.
-> The name `extraction-engine` is a placeholder.
+The concise package contract is in [DESIGN.md](DESIGN.md). The pre-package
+prototype is preserved at tag
+`checkpoint/pre-package-rebuild-2026-07-12`.

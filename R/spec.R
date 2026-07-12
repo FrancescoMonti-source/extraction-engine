@@ -11,8 +11,6 @@
 # are validating object boundaries and execution flow, not freezing syntax.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 # Every spec object is tagged so a reader (and a test) can see the API is not yet
 # frozen, and so the runner can dispatch on class rather than on a name string.
 .experimental_spec <- function(x, class) {

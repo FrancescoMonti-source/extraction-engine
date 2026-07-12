@@ -10,8 +10,6 @@
 # tasks, same discipline as the text path. Provenance points at the exact source rows.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 # --- contract / provenance helpers ------------------------------------------
 
 .require_columns <- function(x, required, label) {

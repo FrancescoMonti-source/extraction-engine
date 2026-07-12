@@ -37,8 +37,6 @@
 # attach per-channel status + evidence provenance + the Venn/UpSet audit.
 # =============================================================================
 
-suppressWarnings(suppressMessages(library(dplyr)))
-
 .HITSET_OPS <- c("(", "!", "&", "|")
 
 # Parse one expression string to a single AST node, or stop() with "malformed".

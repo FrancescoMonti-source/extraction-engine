@@ -1,0 +1,32 @@
+Package: extractionengine
+Type: Package
+Title: Auditable Execution of Study Variable Definitions
+Version: 0.1.0
+Authors@R: c(
+    person(
+      given = "Francesco",
+      family = "Monti",
+      email = "58150610+FrancescoMonti-source@users.noreply.github.com",
+      role = c("aut", "cre")
+    )
+  )
+Description: Executes explicit operational definitions of study variables over
+    prepared EDSAN views. It keeps values, source coverage, evidence, and
+    execution provenance together so that each result can be audited. Clinical
+    and scientific definitions remain the researcher's responsibility.
+License: file LICENSE
+Encoding: UTF-8
+Imports:
+    corpustools,
+    dplyr,
+    ellmer (>= 0.4.1),
+    jsonlite,
+    openxlsx,
+    redsan (>= 0.1.1),
+    rlang,
+    stringr,
+    tibble,
+    tidyr
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

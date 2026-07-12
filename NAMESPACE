@@ -1,0 +1,9 @@
+import(corpustools)
+import(dplyr)
+import(stringr)
+
+S3method(inspect,default)
+S3method(inspect,ee_channel)
+S3method(inspect,ee_concept_spec)
+S3method(inspect,ee_resolved_variable_spec)
+S3method(inspect,ee_variable_spec)

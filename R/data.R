@@ -14,11 +14,6 @@
 # read_workbook_columns); the docs RDS carries no direct identifiers.
 # =============================================================================
 
-suppressWarnings(suppressMessages({
-    library(dplyr)
-    stopifnot(requireNamespace("openxlsx", quietly = TRUE))
-}))
-
 # EDSAN timestamps use the hospital's local timezone. Date conversion must retain
 # that clinical calendar day rather than derive a UTC date near local midnight.
 WAREHOUSE_TZ <- "Europe/Paris"
