@@ -123,7 +123,7 @@ binary_presence_text_definition <- function(name, status_key, field, system_prom
                 type = "object",
                 additionalProperties = FALSE,
                 required = as.list(c(status_key, "evidence_ids")),
-                properties = setNames(
+                properties = stats::setNames(
                     list(
                         list(type = "string",
                              enum = as.list(c("documented", "not_documented"))),
@@ -304,7 +304,7 @@ run_extraction <- function(coverage, candidates, definition, chat,
     metadata <- .chat_metadata(chat)
     .require_gated_chat(metadata)
     task_ids <- coverage$task_id[coverage$coverage_state == "candidate"]
-    if (sample_n > 0L) task_ids <- head(task_ids, sample_n)
+    if (sample_n > 0L) task_ids <- utils::head(task_ids, sample_n)
 
     query_hash <- substr(rlang::hash(query), 1L, 12L)   # audit: retrieval-query fingerprint
     values_l <- list(); evidence_l <- list(); attempts_l <- list()

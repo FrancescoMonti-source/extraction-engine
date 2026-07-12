@@ -78,7 +78,7 @@ type_anastomoses <- function(snippet_ids) {
                                         "pour 'unusable' cite OBLIGATOIREMENT l'extrait qui cause le null;",
                                         "[] seulement pour 'not_documented'. N'invente jamais d'identifiant."))))
     }
-    props <- setNames(
+    props <- stats::setNames(
         lapply(names(ANASTOMOSES_FIELDS),
                function(f) evidenced(ANASTOMOSES_FIELDS[[f]], ANASTOMOSES_VALUE_DESCRIPTIONS[[f]])),
         names(ANASTOMOSES_FIELDS))

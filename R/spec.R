@@ -36,7 +36,7 @@
          "string.", call. = FALSE)
 }
 
-# Normalize the ratified window spelling (DESIGN §7): c(from_days, to_days)
+# Normalize the ratified window spelling (DESIGN section 7): c(from_days, to_days)
 # relative to the anchor -- c(0, 180) = forward 6 months, c(-1825, 7) = 5-year
 # lookback with a week of grace, c(-Inf, 0) = unbounded lookback. NULL = no
 # window (whole history / event scope). Internal ee_window records pass through
@@ -56,12 +56,12 @@
          "(from <= to; e.g. c(0, 180), c(-1825, 7), c(-Inf, 0)).", call. = FALSE)
 }
 
-# Normalize the three ratified channel entry forms (DESIGN §5) into activations
+# Normalize the three ratified channel entry forms (DESIGN section 5) into activations
 # plus variable-local inline definitions:
 #   "name"                       plain activation, inherit everything
 #   name = use_channel(...)      activation with local replacements
 #   name = lab_channel(...) etc. INLINE definition of a variable-local channel
-# Inline names must not collide with concept channels (§14.3 overrides are the
+# Inline names must not collide with concept channels (section 14.3 overrides are the
 # only deviation path for inherited channels); promote inline -> concept when a
 # second variable wants the same channel.
 .normalize_variable_channels <- function(channels, concept) {
@@ -97,7 +97,7 @@
                 stop("inline channel '", nm, "' collides with a concept ",
                      "channel of the same name; override inherited channels ",
                      "with use_channel(...) replacements instead (DESIGN ",
-                     "§14.3).", call. = FALSE)
+                     "section 14.3).", call. = FALSE)
             }
             act_names[[i]] <- nm
             inline[[nm]] <- x
@@ -113,11 +113,11 @@
              paste(unique(act_names[duplicated(act_names)]), collapse = ", "),
              call. = FALSE)
     }
-    list(activations = setNames(acts, act_names), inline = inline)
+    list(activations = stats::setNames(acts, act_names), inline = inline)
 }
 
 # Lower any_positive() to a raw hit-set expression and enforce the combine / channel
-# / output validity matrix (design note §8). The PRESENCE of a combine encodes
+# / output validity matrix (design note section 8). The PRESENCE of a combine encodes
 # multi-channel hit-set algebra: with >=2 channels combine MUST be an expression
 # (any_positive() is sugar that lowers to "a | b | ..."); with a single channel
 # there is no hit-algebra, so combine MUST be NULL and the value is shaped by
@@ -139,7 +139,7 @@
                  "drops combine_channels.", call. = FALSE)
         }
         # A combine expression gates ROWS; it never produces the value itself
-        # (DESIGN §8). bin_output() lifts membership directly; num/cat read the
+        # (DESIGN section 8). bin_output() lifts membership directly; num/cat read the
         # survivors' values and must declare the payload (values_from + reduce,
         # checked with the channel list in .check_output_payload); str/struct
         # behind a gate stay unshaped until a consumer arrives.
@@ -154,7 +154,7 @@
                 }
             } else {
                 stop("Output '", output$kind, "' behind a combine expression is ",
-                     "not shaped yet (DESIGN §8): bin (membership) and num/cat/date ",
+                     "not shaped yet (DESIGN section 8): bin (membership) and num/cat/date ",
                      "(values_from/reduce payload) are; revisit with a consumer.",
                      call. = FALSE)
             }
@@ -178,7 +178,7 @@
     combine
 }
 
-# Payload resolution for num/cat/date outputs (DESIGN §8): values_from must name
+# Payload resolution for num/cat/date outputs (DESIGN section 8): values_from must name
 # an activated channel; omitted, it can only default to the sole channel of a
 # single-channel variable -- with several channels the pick is real, non-derivable
 # information. Returns the output with values_from normalized, so the runner and
@@ -207,7 +207,7 @@
 # symbol; an activated channel absent from the expression is dead weight. Both are
 # spec errors, surfaced at build time. One exemption: the output's payload channel
 # (values_from) may stay out of the expression -- it does not define the qualifying
-# keys, but its rows are still scoped by them (DESIGN §8, §14.9's hb_all).
+# keys, but its rows are still scoped by them (DESIGN sections 8 and 14.9).
 .check_expr_channels <- function(combine, activated, payload_channel = NULL) {
     if (!inherits(combine, "ee_combiner") ||
         !identical(combine$kind, "hit_set_expr")) {
@@ -226,7 +226,7 @@
     invisible(TRUE)
 }
 
-# combine_at_level (DESIGN §7): the key at which the expression is evaluated;
+# combine_at_level (DESIGN section 7): the key at which the expression is evaluated;
 # qualifying keys exists-lift to the output grain. NULL = the output grain (the
 # default, today's semantics). Declared, it must sit ON the identity spine and at
 # the output grain or finer -- evaluating coarser would leak hits across output
@@ -314,7 +314,7 @@ use_channel <- function(method = NULL, extractor = NULL, selector = NULL,
             use_channel()
         }
     })
-    setNames(uses, channel_names)
+    stats::setNames(uses, channel_names)
 }
 
 # A variable_spec is the concrete executable definition of one analytical variable.
@@ -368,7 +368,7 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
                                                 output_one_row_per)
     # Payload first: values_from is normalized there (defaults to the sole
     # channel), and the expression check exempts the payload channel from the
-    # dead-weight rule -- a payload-only channel is legitimate (§14.9's hb_all).
+    # dead-weight rule -- a payload-only channel is legitimate (section 14.9).
     output <- .check_output_payload(output, names(channels))
     .check_expr_channels(combine, names(channels),
                          payload_channel = output$values_from)
@@ -443,7 +443,7 @@ inspect.default <- function(x, ...) {
 
 # `catalog` is the variable's full channel catalog: concept channels plus any
 # variable-local inline definitions (they resolve identically; an inline definer
-# binds wherever it appears, DESIGN §5).
+# binds wherever it appears, DESIGN section 5).
 .resolve_channel_activation <- function(name, catalog, channel_use) {
     channel_def <- catalog[[name]]
     if (is.null(channel_def)) {
@@ -452,7 +452,7 @@ inspect.default <- function(x, ...) {
     method <- .inherit_from_activation(channel_def, channel_use, "method",
                                        "default_method")
     extractor <- .inherit_from_activation(channel_def, channel_use, "extractor")
-    # The selector inherits like every other activation field (DESIGN §14.3): a
+    # The selector inherits like every other activation field (DESIGN section 14.3): a
     # use_channel(selector = ...) override IS the executed definition, so the
     # resolved view -- and the provenance built from it -- must record it, not the
     # concept baseline.

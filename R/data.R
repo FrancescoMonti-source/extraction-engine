@@ -163,3 +163,7 @@ EE_SOURCES <- list(
     pmsi_actes = ACTE_SOURCE,
     biology = BIOL_SOURCE,
     documents = DOCS_SOURCE)
+
+edsan_source_specs <- function() {
+    EE_SOURCES
+}

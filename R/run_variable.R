@@ -955,8 +955,8 @@
         h <- reduced[[ch]][[tid]]$hit
         if (length(h)) h[[1]] else NA
     }, logical(1))
-    vectors  <- setNames(lapply(referenced, hit_vec), referenced)
-    observed <- setNames(lapply(vectors, function(v) v %in% TRUE), referenced)
+    vectors  <- stats::setNames(lapply(referenced, hit_vec), referenced)
+    observed <- stats::setNames(lapply(vectors, function(v) v %in% TRUE), referenced)
 
     level <- variable$combine_at_level
     sub_level <- !is.null(level) &&
@@ -969,7 +969,7 @@
         # of keys observed by the referenced channels (the engine has no roster of
         # unobserved stays, so negation is complement within the observed keys;
         # the task-level membership/overlap audit above is unchanged).
-        keysets <- setNames(lapply(referenced, function(ch) {
+        keysets <- stats::setNames(lapply(referenced, function(ch) {
             .channel_level_keys(channel_results[[ch]], level, ch,
                                 task_ids[vectors[[ch]] %in% TRUE])
         }), referenced)
