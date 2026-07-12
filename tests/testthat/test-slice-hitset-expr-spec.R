@@ -4,16 +4,15 @@
 # per-channel TRUE/FALSE/NA without exposing migration-era decision_state/role.
 
 hx_concept <- function() {
-    code_ch <- function(source, prefix) code_channel(
-        source = source, selector = icd10(prefix),
-        required_roles = c("subject_id", "event_id", "event_start", "event_end",
-                           "code", "source_item_id"),
-        linkage = "subject")
     concept_spec(
         name = "transplant_minus_dialysis",
         channels = list(
-            transplant_act = code_ch("acts", "Z94"),
-            dialysis_signal = code_ch("dialysis_dx", "Z99")))
+            transplant_act = act_channel(
+                source = "pmsi_actes", selector = ccam("Z94", match = "regex"),
+                linkage = "subject"),
+            dialysis_signal = code_channel(
+                source = "pmsi_diag", selector = icd10("Z99"),
+                linkage = "subject")))
 }
 
 hx_var <- function(expr = "transplant_act & !dialysis_signal",
@@ -38,11 +37,13 @@ hx_row <- function(srid, patid, code) tibble::tibble(
     DATENT = as.Date("2024-05-20"), DATSORT = as.Date("2024-05-21"))
 
 hx_sources <- list(
-    acts = dplyr::bind_rows(
-        hx_row("acts:1", "Q1", "Z940"),  # included: act hit, dialysis negative
-        hx_row("acts:2", "Q2", "Z940"),  # included: exclusion source unavailable
-        hx_row("acts:3", "Q3", "Z940")), # excluded: dialysis hit
-    dialysis_dx = dplyr::bind_rows(
+    pmsi_actes = dplyr::bind_rows(
+        hx_row("acts:1", "Q1", "Z940"),
+        hx_row("acts:2", "Q2", "Z940"),
+        hx_row("acts:3", "Q3", "Z940")) %>%
+        dplyr::transmute(source_row_id, PATID, EVTID, ELTID,
+                         CODEACTE = diag, DATEACTE = DATENT),
+    pmsi_diag = dplyr::bind_rows(
         hx_row("dx:1", "Q1", "I10"),
         hx_row("dx:3", "Q3", "Z992"),
         hx_row("dx:4", "Q4", "I10")))

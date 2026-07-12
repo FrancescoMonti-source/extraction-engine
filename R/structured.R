@@ -49,7 +49,9 @@
     if (inherits(x, "POSIXt")) {
         return(as.Date(x, tz = "Europe/Paris"))
     }
-    as.Date(x)
+    if (inherits(x, "Date")) return(x)
+    stop("Expected a Date or POSIXt value from a prepared source view.",
+         call. = FALSE)
 }
 
 .assert_evidence_resolves <- function(evidence, observations, source_rows) {
@@ -523,24 +525,33 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                                    grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
                                    group_at_level = NULL, keep_group_when = NULL,
+                                   result_id_col = "BIOL_ID",
+                                   date_col = "DATEXAM",
+                                   analyte_col = "analyte",
+                                   value_col = "value",
+                                   value_raw_col = "value_raw",
                                    field = "analyte_value", source = "biology") {
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> event scope
     .validate_structured_inputs(
         tasks, source_table,
-        c("source_row_id", "PATID", "EVTID", "ELTID", "BIOL_ID", "DATEXAM",
-          "analyte", "value", "value_raw"),
+        c("source_row_id", "PATID", "EVTID", "ELTID", result_id_col, date_col,
+          analyte_col, value_col, value_raw_col),
         "biology rows", require_anchor = windowed)
+    if (!is.numeric(source_table[[value_col]])) {
+        stop("biology rows value column must be numeric in the prepared view: ",
+             value_col, ".", call. = FALSE)
+    }
 
     biol <- source_table %>% transmute(
         source_row_id = as.character(source_row_id),
         PATID = as.character(PATID),
         EVTID = as.character(EVTID),
         ELTID = as.character(ELTID),
-        BIOL_ID = as.character(BIOL_ID),
-        DATEXAM = .clinical_date(DATEXAM),
-        analyte = as.character(analyte),
-        value = suppressWarnings(as.numeric(value)),
-        value_raw = as.character(value_raw))
+        BIOL_ID = as.character(.data[[result_id_col]]),
+        DATEXAM = .clinical_date(.data[[date_col]]),
+        analyte = as.character(.data[[analyte_col]]),
+        value = .data[[value_col]],
+        value_raw = as.character(.data[[value_raw_col]]))
     # A subject-context predicate (keep_when) names raw columns beyond this fixed
     # set (e.g. PATSEX/PATAGE); carry them through untouched so they reach the
     # observation rows. transmute preserves row order, so source_table aligns 1:1.

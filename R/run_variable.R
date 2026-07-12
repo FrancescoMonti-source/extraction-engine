@@ -71,6 +71,7 @@
                     candidates = internal(src$candidates)))
     }
     if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
+        validate_source_view(src$docs_index, DOCS_SOURCE)
         return(.retrieve_text_channel(channel_def, variable, tasks, src, selector))
     }
     stop("A documents source must be pre-retrieved {coverage, candidates} or raw ",
@@ -138,21 +139,41 @@
 
 # Resolve a coded channel's PHYSICAL columns from its source's roles (registry):
 # which column is the code, and the time field(s) -- a point source uses one date
-# for both ends. Falls back to the pmsi$diag shape for an unregistered source.
+# for both ends.
 .code_source_binding <- function(source) {
-    spec <- if (source %in% names(EE_SOURCES)) EE_SOURCES[[source]] else NULL
-    if (is.null(spec)) {
-        return(list(code_col = "diag", start_col = "DATENT", end_col = "DATSORT"))
+    spec <- EE_SOURCES[[source]]
+    if (is.null(spec)) stop("Unknown prepared EDSAN source: ", source, call. = FALSE)
+    code_col <- source_roles(spec)$code
+    if (is.null(code_col)) {
+        stop("Prepared source '", source, "' has no code role.", call. = FALSE)
     }
-    code_col <- source_roles(spec)$code %||% "diag"
     if (identical(spec$source_time_kind, "point")) {
         d <- spec$source_time_start
         list(code_col = code_col, start_col = d, end_col = d)
     } else {
         list(code_col = code_col,
-             start_col = spec$source_time_start %||% "DATENT",
-             end_col   = spec$source_time_end %||% "DATSORT")
+             start_col = spec$source_time_start,
+             end_col = spec$source_time_end)
     }
+}
+
+.lab_source_binding <- function(source) {
+    spec <- EE_SOURCES[[source]]
+    if (is.null(spec)) stop("Unknown prepared EDSAN source: ", source, call. = FALSE)
+    roles <- source_roles(spec)
+    required <- c("source_result_id", "point_date", "analyte", "value_num",
+                  "value_str")
+    missing <- setdiff(required, names(roles))
+    if (length(missing)) {
+        stop("Prepared source '", source, "' lacks lab role(s): ",
+             paste(missing, collapse = ", "), ".", call. = FALSE)
+    }
+    list(
+        result_id_col = roles$source_result_id,
+        date_col = roles$point_date,
+        analyte_col = roles$analyte,
+        value_col = roles$value_num,
+        value_raw_col = roles$value_str)
 }
 
 # Grain guard: the OUTPUT GRAIN (variable$output_one_row_per) is carried by the task
@@ -201,9 +222,13 @@
         stop("index_event anchor needs source '", anchor$source, "' in sources.",
              call. = FALSE)
     }
-    spec <- if (anchor$source %in% names(EE_SOURCES)) EE_SOURCES[[anchor$source]]
-            else NULL
-    roles <- if (is.null(spec)) list() else source_roles(spec)
+    spec <- EE_SOURCES[[anchor$source]]
+    if (is.null(spec)) {
+        stop("index_event requires a registered prepared EDSAN source; got '",
+             anchor$source, "'.", call. = FALSE)
+    }
+    validate_source_view(src, spec)
+    roles <- source_roles(spec)
     code_col <- roles$code %||% NULL
     if (is.null(code_col)) {
         stop("index_event: source '", anchor$source, "' lacks a 'code' role.",
@@ -211,11 +236,10 @@
     }
     # `at` names the source's own date COLUMN (owner ruling 2026-07-07: raw names,
     # not role vocabulary); omitted, it defaults to the source's windowing clock.
-    date_col <- anchor$at %||% (if (is.null(spec)) NULL else spec$source_time_start)
+    date_col <- anchor$at %||% spec$source_time_start
     if (is.null(date_col)) {
-        stop("index_event: source '", anchor$source, "' is not registered; ",
-             "name the anchor date column explicitly (at = \"<column>\").",
-             call. = FALSE)
+        stop("index_event: source '", anchor$source,
+             "' has no registered source clock.", call. = FALSE)
     }
     if (!date_col %in% names(src)) {
         hint <- if (date_col %in% c("point_date", "event_start", "event_end")) {
@@ -323,9 +347,14 @@
         stop("Missing source data for channel '", channel_name,
              "' (source: ", source, ").", call. = FALSE)
     }
+    spec <- EE_SOURCES[[source]]
+    if (is.null(spec)) {
+        stop("Channel '", channel_name,
+             "' requires a registered prepared EDSAN source; got '", source,
+             "'.", call. = FALSE)
+    }
     if (channel_def$type %in% c("code", "act", "lab")) {
-        spec <- EE_SOURCES[[source]]
-        if (!is.null(spec)) validate_source_view(sources[[source]], spec)
+        validate_source_view(sources[[source]], spec)
     }
     # The window is only meaningful for date/interval-scoped structured channels;
     # text eligibility (date-window OR event membership) is resolved upstream, so a
@@ -369,6 +398,7 @@
             # assembly. A NULL window is event-scoped (rows sharing the task's grain unit).
             w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
                  else .window_days(variable)
+            bind <- .lab_source_binding(source)
             measure_analyte_values(
                 sources[[source]], tasks,
                 analytes = .selector_codes(selector, "codes"),
@@ -377,6 +407,11 @@
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 group_at_level = channel_def$group_at_level,
                 keep_group_when = channel_def$keep_group_when,
+                result_id_col = bind$result_id_col,
+                date_col = bind$date_col,
+                analyte_col = bind$analyte_col,
+                value_col = bind$value_col,
+                value_raw_col = bind$value_raw_col,
                 field = variable$name, source = source)
         },
         doc = {
@@ -393,8 +428,7 @@
                           else stop("Doc channel '", channel_name, "' needs a ",
                                     "docs_index frame (bare, or inside a raw ",
                                     "{corpus, docs_index} source).", call. = FALSE)
-            spec <- if (source %in% names(EE_SOURCES)) EE_SOURCES[[source]]
-                    else NULL
+            validate_source_view(docs_index, spec)
             w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
                  else .window_days(variable)
             measure_doc_presence(
@@ -403,8 +437,7 @@
                 from_days = w[["from_days"]], to_days = w[["to_days"]],
                 group_at_level = channel_def$group_at_level,
                 keep_group_when = channel_def$keep_group_when,
-                date_col = (if (is.null(spec)) NULL else spec$source_time_start) %||%
-                    "RECDATE",
+                date_col = spec$source_time_start,
                 field = variable$name, source = source)
         },
         text = {
