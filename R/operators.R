@@ -177,21 +177,40 @@ num_output <- function(values_from = NULL, reduce = NULL) {
 # with reduce = (payload flavor) the level is computed from the surviving payload
 # rows' values and MUST be one of `levels`; without it (extraction flavor, e.g.
 # smoking statuses) the level is a text channel's accepted documented status.
-cat_output <- function(levels, values_from = NULL, reduce = NULL) {
+cat_output <- function(levels, values_from = NULL, reduce = NULL,
+                       description = NULL, rationale = NULL) {
     levels <- as.character(levels)
     if (!length(levels) || anyNA(levels) || any(!nzchar(levels)) ||
         anyDuplicated(levels)) {
         stop("cat_output() needs unique non-empty levels.", call. = FALSE)
     }
+    if (!is.null(description) &&
+        (!is.character(description) || length(description) != 1L ||
+         is.na(description) || !nzchar(trimws(description)))) {
+        stop("cat_output() description must be one non-empty string or NULL.",
+             call. = FALSE)
+    }
+    if (!is.null(rationale) &&
+        (!is.character(rationale) || length(rationale) != 1L ||
+         is.na(rationale) || !nzchar(trimws(rationale)))) {
+        stop("cat_output() rationale must be one non-empty string or NULL.",
+             call. = FALSE)
+    }
     .check_payload_args("cat_output()", values_from, reduce,
                         reduce_required = FALSE)
+    if (!is.null(rationale) &&
+        (!is.null(values_from) || !is.null(reduce))) {
+        stop("cat_output() rationale is available only for LLM extraction, not ",
+             "for a reduced categorical payload.", call. = FALSE)
+    }
     if (!is.null(values_from) && is.null(reduce)) {
         stop("cat_output() values_from without reduce has no meaning: the payload ",
              "flavor needs both.", call. = FALSE)
     }
     .new_spec(
         list(kind = "categorical", levels = levels,
-             values_from = values_from, reduce = reduce),
+             values_from = values_from, reduce = reduce,
+             description = description, rationale = rationale),
         "ee_output_type")
 }
 

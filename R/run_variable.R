@@ -103,22 +103,13 @@
 }
 
 # A text channel's {coverage, candidates} either come PRE-RETRIEVED (fixtures, for
-# tests/debugging) or are produced by REAL retrieval from raw documents
-# (corpus + docs_index). This is the seam that makes run_variable() a real entry
+# tests/debugging) or are produced by REAL retrieval from a metadata-rich tCorpus.
+# This is the seam that makes run_variable() a real entry
 # point into retrieval instead of always being handed coverage/candidates.
 .resolve_text_inputs <- function(src, channel_def, variable, tasks, selector) {
     if (is.list(src) && all(c("coverage", "candidates") %in% names(src))) {
-        # Pre-retrieved frames are PUBLIC inputs: like the cohort, they may key
-        # rows by grain_id; the engine's internals speak task_id.
-        internal <- function(d) {
-            if (is.data.frame(d) && "grain_id" %in% names(d) &&
-                !"task_id" %in% names(d)) {
-                names(d)[names(d) == "grain_id"] <- "task_id"
-            }
-            d
-        }
-        coverage <- internal(src$coverage)
-        candidates <- internal(src$candidates)
+        coverage <- src$coverage
+        candidates <- src$candidates
         if (!is.data.frame(coverage) || !is.data.frame(candidates)) {
             stop("Pre-retrieved text coverage and candidates must be data frames.",
                  call. = FALSE)
@@ -147,20 +138,20 @@
             coverage, candidates, tasks, channel_def$required_roles)
         return(list(coverage = coverage, candidates = candidates))
     }
-    if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
-        validate_source_view(src$docs_index, DOCS_SOURCE)
-        return(.retrieve_text_channel(channel_def, variable, tasks, src, selector))
+    raw <- .raw_document_source(src)
+    if (!is.null(raw)) {
+        return(.retrieve_text_channel(channel_def, variable, tasks, raw, selector))
     }
-    stop("A documents source must be pre-retrieved {coverage, candidates} or raw ",
-         "{corpus, docs_index}.", call. = FALSE)
+    stop("A documents source must be a metadata-rich tCorpus or pre-retrieved ",
+         "{coverage, candidates}.", call. = FALSE)
 }
 
-# Real retrieval from raw documents (corpus + docs_index). The declared evidence
+# Real retrieval from a tCorpus and its private metadata view. The declared evidence
 # scope is resolved first; an authored temporal window is then intersected with
 # that eligible set. With no window, patient scope sees the whole record and event
 # scope sees the whole event.
 # Then the existing retrieve() runs the channel's Lucene query and assembles
-# candidates + coverage. Eligibility keeps the document's EVTID when docs_index
+# candidates + coverage. Eligibility keeps the document's EVTID when metadata
 # carries it, so a text hit stays attributable to its stay (combine_at_level, §7).
 .text_eligibility_cols <- function(d) {
     select(d, any_of(c("task_id", "ELTID", "EVTID", "RECDATE", "RECTYPE",
@@ -528,18 +519,14 @@
         },
         doc = {
             # Metadata-selected document existence (no content, no LLM): the doc
-            # branch reads the docs_index only -- a raw {corpus, docs_index}
-            # source contributes its index; a bare frame IS an index.
+            # branch reads document metadata only; a tCorpus contributes its
+            # metadata view and a bare frame is already an index.
             if (!identical(selector$kind, "doc_meta")) {
                 stop("Doc channel '", channel_name, "' needs a doc_meta() ",
                      "selector.", call. = FALSE)
             }
             src <- sources[[source]]
-            docs_index <- if (is.data.frame(src)) src
-                          else if (is.list(src) && is.data.frame(src$docs_index)) src$docs_index
-                          else stop("Doc channel '", channel_name, "' needs a ",
-                                    "docs_index frame (bare, or inside a raw ",
-                                    "{corpus, docs_index} source).", call. = FALSE)
+            docs_index <- .document_index(src)
             validate_source_view(docs_index, spec)
             w <- if (is.null(variable$window)) list(from_days = NULL, to_days = NULL)
                  else .window_days(variable)
@@ -891,6 +878,12 @@
         cw <- isTRUE(nrow(vrow) > 0L && "citation_warning" %in% names(vrow) &&
                      isTRUE(vrow$citation_warning[[1]]))
         reason <- if (nrow(vrow)) as.character(vrow$validity_reason[[1]]) else NA_character_
+        rationale <- if (nrow(vrow) && "task_summary" %in% names(vrow) &&
+                         scalar_present(vrow$task_summary[[1]])) {
+            as.character(vrow$task_summary[[1]])
+        } else {
+            NA_character_
+        }
         outside_contract <- identical(state, "valid") &&
             (nrow(vrow) != 1L || is.na(status_val) ||
              !status_val %in% variable$output$levels)
@@ -903,6 +896,7 @@
         tibble::tibble(
             task_id = tid,
             value = if (identical(state, "valid")) status_val else NA_character_,
+            rationale = if (identical(state, "valid")) rationale else NA_character_,
             channel_coverage = if (identical(state, "valid")) "complete" else "partial",
             needs_review = needs_review,
             citation_warning = cw,
@@ -916,6 +910,11 @@
     values <- rows %>%
         transmute(task_id, variable = var_name, value, channel_coverage,
                   needs_review, citation_warning, review_reason)
+    if (!is.null(variable$output$rationale)) {
+        values$rationale <- rows$rationale
+        front <- c("task_id", "variable", "value", "rationale")
+        values <- values[c(front, setdiff(names(values), front))]
+    }
     channel_status <- rows %>%
         transmute(task_id, variable = var_name, channel = channel_name,
                   source = source_name, status, value, citation_warning, needs_review)
@@ -1313,6 +1312,12 @@
     output <- if (is.null(variable$output)) NULL else {
         out <- list(kind = variable$output$kind)
         if (!is.null(variable$output$levels)) out$levels <- variable$output$levels
+        if (!is.null(variable$output$description)) {
+            out$description <- variable$output$description
+        }
+        if (!is.null(variable$output$rationale)) {
+            out$rationale <- variable$output$rationale
+        }
         if (!is.null(variable$output$fields)) out$fields <- variable$output$fields
         # Payload spec (DESIGN §8): values_from as resolved at build; reduce as
         # deparsed source -- the executed rule, serializable.
@@ -1380,7 +1385,7 @@
     # A caller-supplied anchor column remains part of the row declaration; if it
     # supplies several anchor values for one output unit, the grain guard below
     # rejects the ambiguity instead of silently choosing one.
-    explicit_id <- any(c("grain_id", "task_id") %in% names(cohort))
+    explicit_id <- "task_id" %in% names(cohort)
     if (!explicit_id) {
         grain <- variable$output_one_row_per %||% "PATID"
         grain_keys <- unique(c("PATID", grain))
@@ -1395,19 +1400,14 @@
         keep <- intersect(keep, names(cohort))
         cohort <- dplyr::distinct(tibble::as_tibble(cohort)[keep])
     }
-    # The row identifier is grain_id publicly (owner pick 2026-07-05: the id of
-    # one grain unit -- patient, stay, index event); the engine's internals keep
-    # task_id (there it names extraction tasks). Normalize on the way in; the
-    # output envelope renames on the way out (.publish_grain_id).
-    if ("grain_id" %in% names(cohort) && !"task_id" %in% names(cohort)) {
-        names(cohort)[names(cohort) == "grain_id"] <- "task_id"
-    }
+    # task_id is internal execution plumbing derived from the declared grain
+    # keys. Public result views publish those native keys, never this composite.
     if (!"task_id" %in% names(cohort)) {
         keys <- intersect(
             unique(c("PATID", variable$output_one_row_per %||% "PATID")),
             names(cohort))
         if (!length(keys)) {
-            stop("cohort carries neither grain_id nor grain key column(s); ",
+            stop("cohort carries no grain key column(s); ",
                  "cannot identify its rows.", call. = FALSE)
         }
         cohort$task_id <- do.call(
@@ -1416,12 +1416,26 @@
     cohort
 }
 
-# Publish the public row identifier: every output view keys its rows by
-# grain_id; the raw channel_results (engine-internal views) keep task_id.
-.publish_grain_id <- function(run) {
+# Publish the native grain keys on every row-keyed output view. task_id remains
+# only in raw channel_results, where it identifies one internal extraction task.
+.publish_grain_keys <- function(run, tasks, grain_keys) {
+    key_map <- dplyr::distinct(
+        tibble::as_tibble(tasks)[c("task_id", grain_keys)])
+    if (anyDuplicated(as.character(key_map$task_id))) {
+        stop("Internal task_id does not map uniquely to the output grain.",
+             call. = FALSE)
+    }
     lapply(run, function(el) {
         if (is.data.frame(el) && "task_id" %in% names(el)) {
-            names(el)[names(el) == "task_id"] <- "grain_id"
+            index <- match(as.character(el$task_id),
+                           as.character(key_map$task_id))
+            if (anyNA(index)) {
+                stop("A published result row does not resolve to its grain keys.",
+                     call. = FALSE)
+            }
+            keys <- key_map[index, grain_keys, drop = FALSE]
+            payload <- el[setdiff(names(el), c("task_id", grain_keys))]
+            return(dplyr::bind_cols(keys, payload))
         }
         el
     })
@@ -1436,6 +1450,10 @@ cohort_from_sources <- function(sources) {
     ids <- unlist(lapply(sources, function(src) {
         if (is.data.frame(src) && "PATID" %in% names(src)) {
             return(as.character(src$PATID))
+        }
+        if (.is_tcorpus(src)) {
+            index <- .document_index_from_corpus(src)
+            return(as.character(index$PATID))
         }
         if (is.list(src) && is.data.frame(src$docs_index) &&
             "PATID" %in% names(src$docs_index)) {
@@ -1559,11 +1577,13 @@ run_variable <- function(variable, cohort = NULL, sources = NULL, chat = NULL) {
     # whether written directly or lowered from any_positive(); NA for a single-channel
     # variable, which has no cross-channel combine (its value comes from output()).
     combine_rule <- if (inherits(combine, "ee_combiner")) combine$expr else NA_character_
-    .publish_grain_id(
+    .publish_grain_keys(
         c(list(spec = variable, selected_channels = selected,
                 combine_rule = combine_rule,
                provenance = .build_provenance(variable, chat),
-               channel_results = channel_results), out))
+               channel_results = channel_results), out),
+        tasks = tasks,
+        grain_keys = grain_keys)
 }
 
 # The protocol run: every variable of a study over ONE declared cohort laid

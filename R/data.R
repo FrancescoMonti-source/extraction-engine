@@ -207,6 +207,62 @@ DOCS_SOURCE <- source_spec(
         point_date = "RECDATE", document_type = "RECTYPE"),
     unique_columns = "ELTID")
 
+.is_tcorpus <- function(x) inherits(x, "tCorpus")
+
+# A metadata-rich tCorpus is the canonical public document source. corpustools
+# stores the column supplied as doc_column under its own `doc_id` name; the
+# engine restores the native EDSAN name only in this private execution view.
+.document_index_from_corpus <- function(corpus) {
+    if (!.is_tcorpus(corpus) || !is.function(corpus$get_meta)) {
+        stop("documents must be a corpustools tCorpus.", call. = FALSE)
+    }
+    meta <- tibble::as_tibble(corpus$get_meta(copy = TRUE))
+    if (!"doc_id" %in% names(meta)) {
+        stop("documents tCorpus metadata is missing doc_id.", call. = FALSE)
+    }
+    if ("ELTID" %in% names(meta)) {
+        same_id <- identical(as.character(meta$ELTID),
+                             as.character(meta$doc_id))
+        if (!same_id) {
+            stop("documents tCorpus must use ELTID as its doc_column.",
+                 call. = FALSE)
+        }
+        meta$ELTID <- NULL
+    }
+    names(meta)[names(meta) == "doc_id"] <- "ELTID"
+    validate_source_view(meta, DOCS_SOURCE)
+    meta
+}
+
+# Normalize the canonical tCorpus and the retained legacy bundle to the one
+# private shape consumed by text retrieval.
+.raw_document_source <- function(src) {
+    if (.is_tcorpus(src)) {
+        return(list(corpus = src,
+                    docs_index = .document_index_from_corpus(src)))
+    }
+    if (is.list(src) && all(c("corpus", "docs_index") %in% names(src))) {
+        if (!.is_tcorpus(src$corpus) || !is.data.frame(src$docs_index)) {
+            stop("legacy document bundles need a tCorpus and docs_index frame.",
+                 call. = FALSE)
+        }
+        validate_source_view(src$docs_index, DOCS_SOURCE)
+        return(src)
+    }
+    NULL
+}
+
+.document_index <- function(src) {
+    if (is.data.frame(src)) {
+        validate_source_view(src, DOCS_SOURCE)
+        return(src)
+    }
+    raw <- .raw_document_source(src)
+    if (!is.null(raw)) return(raw$docs_index)
+    stop("documents must be a metadata-rich tCorpus or a document index frame.",
+         call. = FALSE)
+}
+
 DIAG_SOURCE <- source_spec(
     name = "pmsi diagnoses", module = "pmsi", table = "diag",
     roles = list(

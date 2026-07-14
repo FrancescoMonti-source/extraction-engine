@@ -17,9 +17,10 @@ cohort_from_sources(sources)
 \code{sources$cohort} is required. A table may carry \code{PATID + EVTID}; the
 variable's \code{output_one_row_per} declaration projects it to patient or stay
 grain before internal extraction tasks are derived.}
-\item{sources}{Named EDSAN views and, for text retrieval, document candidate
-inputs. Logical package source names are connected to caller objects here, for
-example \code{list(biology = bio)}.}
+\item{sources}{Named EDSAN views and, for text retrieval, a metadata-rich
+\pkg{corpustools} \code{tCorpus}. Its metadata must retain the native document
+identifiers and scope fields. Logical package source names are connected to
+caller objects here, for example \code{list(biology = bio, documents = corpus)}.}
 \item{chat}{An optional \pkg{ellmer} Chat override. When omitted, a
 \code{lucene_llm} variable creates one Ollama Chat from its declared \code{model}
 and \code{model_params}; that base Chat is then deep-cloned and cleared for every
@@ -29,9 +30,12 @@ do not create a Chat.}
 }
 \value{
 \code{run_variable()} returns values, per-channel status and coverage, resolvable
-evidence, the compiled spec, and provenance. \code{run_protocol()} returns one
-such result per variable. \code{cohort_from_sources()} returns an explicit PATID
-frame for deliberate exploratory use.
+evidence, the compiled spec, and provenance. Row-keyed public views expose the
+native output-grain columns: \code{PATID} at patient grain and
+\code{PATID + EVTID} at stay grain. \code{run_protocol()} returns one such result
+per variable. A categorical LLM output that declares \code{rationale} publishes
+that explanation beside its value. \code{cohort_from_sources()} returns an
+explicit PATID frame for deliberate exploratory use.
 }
 \description{
 Execute the authored rule without judging its scientific correctness. Model calls

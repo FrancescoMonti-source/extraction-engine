@@ -42,6 +42,8 @@ separate, explicit parts of the study definition.
 The existing semantics are preserved:
 
 - task and output grain are checked explicitly;
+- published result views carry the native grain keys; composite task identifiers
+  remain internal execution details;
 - windows and event selection run before measurement;
 - structured and text channels report coverage independently of their value;
 - multi-channel combination operates on observed hit sets and reports partial or
@@ -53,6 +55,9 @@ The existing semantics are preserved:
 A text variable declares its Ollama model and model parameters. `run_variable()`
 constructs one base `ellmer` Chat for that variable; an explicitly supplied Chat
 remains a test/debug override. Each task uses an isolated clone of that base Chat.
+Categorical LLM outputs may request a described free-text rationale beside the
+grammar-gated value; this explanation is model output, not engine validation of
+the scientific choice.
 `run_protocol()` executes variables sequentially in list order, completing every
 task row of one variable before resolving the next variable's model. Provider,
 model, parameters, call status, and available truncation diagnostics are audit

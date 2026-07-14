@@ -85,6 +85,10 @@ result <- run_variable(
 )
 ```
 
+Published result views carry the native output-grain keys. A patient-grain
+variable exposes `PATID`; a stay-grain variable exposes `PATID + EVTID`.
+Composite execution IDs remain internal to the engine.
+
 `"biology"` is the package's logical source name; `bio` is an arbitrary object
 name in the caller's R session. `list(biology = bio)` connects them only at
 execution. Biology typing is delegated to `redsan` automatically at this
@@ -155,7 +159,14 @@ smoking_status <- variable_spec(
     )
   ),
 
-  output = cat_output(smoking_levels),
+  output = cat_output(
+    smoking_levels,
+    description = "Statut tabagique explicitement documenté dans les extraits.",
+    rationale = paste(
+      "Justification brève du choix, fondée uniquement sur les extraits",
+      "et sans ajouter d'information non documentée."
+    )
+  ),
 
   model = "gemma3:4b",
   model_params = list(
@@ -164,20 +175,36 @@ smoking_status <- variable_spec(
   )
 )
 
+corpus <- corpustools::create_tcorpus(
+  docs |>
+    dplyr::select(ELTID, RECTXT, PATID, EVTID, RECDATE, RECTYPE) |>
+    as.data.frame(),
+  text_columns = "RECTXT",
+  doc_column = "ELTID",
+  split_sentences = TRUE,
+  remember_spaces = FALSE,
+  verbose = FALSE
+)
+
 result_smoking <- run_variable(
   smoking_status,
   cohort = cohorte,
-  sources = list(documents = documents)
+  sources = list(documents = corpus)
 )
 ```
 
-Here `documents` is the caller-owned document source, normally a list containing
-the persisted `corpus` and its typed `docs_index`. As with biology, the binding is
-made only at execution: `sources = list(documents = documents)` connects that
-object to the logical source name used by `text_channel()`.
+The document source is the caller-owned `tCorpus`. Its metadata must retain
+`PATID`, `EVTID`, `RECDATE`, and `RECTYPE`; corpustools stores the declared
+`ELTID` document column as `doc_id`, which the engine maps back internally. As
+with biology, binding happens only at execution: `documents = corpus` connects
+the object to the logical source name used by `text_channel()`.
 
 `cat_output()` is the single machine-readable declaration of the allowed values.
-For each cohort row, the engine derives the structured `ellmer` response type,
+Its optional `description` gives ellmer the study-owned meaning of the returned
+value. Its optional `rationale` requests a required non-empty explanation and is
+used as that field's ellmer description; the published row then carries both
+`value` and `rationale`. The engine supplies the enclosing-object and
+evidence-field descriptions itself. For each cohort row, it derives the structured `ellmer` response type,
 appends the numbered Lucene excerpts to the authored prompt, constrains the value
 to those levels, and constrains evidence IDs to the excerpts actually supplied.
 The model may select the wrong allowed category, but it cannot return a category

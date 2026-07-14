@@ -436,6 +436,10 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
     }
     catalog <- c(concept$channels, inline_channels)
     needs_chat <- .check_text_channel_uses(channels, catalog, output)
+    if (!is.null(output$rationale) && !needs_chat) {
+        stop("cat_output() rationale requires a selected text channel with ",
+             "method = 'lucene_llm'.", call. = FALSE)
+    }
     if (!is.null(model) && !needs_chat) {
         stop("variable_spec() model has no effect without a selected ",
              "method = 'lucene_llm' channel.",
@@ -570,6 +574,13 @@ print.ee_variable_spec <- function(x, ...) {
     cat("Concept: ", resolved$concept, "\n", sep = "")
     cat("Output: ", resolved$output$kind, ", one row per ",
         resolved$output_one_row_per, "\n", sep = "")
+    if (!is.null(resolved$output$description)) {
+        cat("Output description: ", resolved$output$description, "\n",
+            sep = "")
+    }
+    if (!is.null(resolved$output$rationale)) {
+        cat("Rationale: ", resolved$output$rationale, "\n", sep = "")
+    }
     if (!is.null(resolved$model)) {
         cat("Model: ", resolved$model, "\n", sep = "")
     }
@@ -659,8 +670,8 @@ print.ee_variable_spec <- function(x, ...) {
     }
     available <- names(source_roles(spec))
     # Text content lives in the corpus/pre-retrieved candidate payload rather
-    # than the typed docs_index. It is the one channel-runtime role not bound by
-    # the prepared source_spec itself.
+    # than the typed tCorpus metadata view. It is the one channel-runtime role
+    # not bound by the prepared source_spec itself.
     if (identical(channel$type, "text")) available <- c(available, "text")
     missing <- setdiff(required, available)
     if (length(missing)) {

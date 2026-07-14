@@ -22,7 +22,13 @@ bin_output()
 
 num_output(values_from = NULL, reduce = NULL)
 
-cat_output(levels, values_from = NULL, reduce = NULL)
+cat_output(
+  levels,
+  values_from = NULL,
+  reduce = NULL,
+  description = NULL,
+  rationale = NULL
+)
 
 date_output(values_from = NULL, reduce = NULL)
 
@@ -39,6 +45,13 @@ struct_output(fields)
 \item{reduce}{A plain function reducing payload values to one value.}
 \item{levels}{Allowed categorical values. For a \code{lucene_llm} variable these
 levels also define the model's generated \pkg{ellmer} value enum.}
+\item{description}{Optional study-owned meaning of a categorical output. For a
+\code{lucene_llm} variable this becomes the description of the generated
+\pkg{ellmer} value enum; the engine supplies descriptions for the enclosing
+object and evidence identifiers.}
+\item{rationale}{Optional study-owned description of a short rationale requested
+from a \code{lucene_llm} model. When supplied, the generated structured response
+requires a non-empty \code{rationale} string and the published values include it.}
 \item{fields}{Names of fields emitted by a structured text definition.}
 }
 \value{A typed operator, anchor, or output specification.}

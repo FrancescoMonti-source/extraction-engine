@@ -88,15 +88,34 @@ DEFAULT_LLM_SYSTEM_PROMPT <- paste(
     field <- variable$name
     authored_prompt <- channel$prompt
     system_prompt <- channel$system_prompt %||% DEFAULT_LLM_SYSTEM_PROMPT
+    value_description <- output$description %||%
+        "Valeur finale extraite ; choisir exactement une valeur autoris\u00e9e."
+    rationale_description <- output$rationale
 
     .llm_definition(
         name = variable$name,
         system_prompt = system_prompt,
         type_builder = function(snippet_ids) {
-            ellmer::type_object(
-                value = ellmer::type_enum(levels),
-                evidence_ids = ellmer::type_array(
-                    ellmer::type_enum(snippet_ids)))
+            fields <- list(
+                value = ellmer::type_enum(
+                    levels,
+                    description = value_description))
+            if (!is.null(rationale_description)) {
+                fields$rationale <- ellmer::type_string(
+                    description = rationale_description)
+            }
+            fields$evidence_ids <- ellmer::type_array(
+                ellmer::type_enum(
+                    snippet_ids,
+                    description = "Identifiant d'un extrait fourni."),
+                description = paste(
+                    "Identifiants des extraits soutenant directement la valeur.",
+                    "Utiliser uniquement les identifiants fournis."))
+            do.call(
+                ellmer::type_object,
+                c(list(.description = paste0(
+                    "R\u00e9sultat structur\u00e9 pour la variable '",
+                    variable$name, "'.")), fields))
         },
         prompt_builder = function(task_row, candidates) {
             paste(
@@ -118,18 +137,28 @@ DEFAULT_LLM_SYSTEM_PROMPT <- paste(
                 result$evidence_ids
             }
             citations <- resolve_cited_ids(cited, snippet_ids)
-            valid <- !is.na(value) && value %in% levels
+            rationale <- if (is.null(rationale_description)) {
+                NA_character_
+            } else if (scalar_present(result$rationale)) {
+                as.character(result$rationale[[1]])
+            } else {
+                NA_character_
+            }
+            value_valid <- !is.na(value) && value %in% levels
+            rationale_valid <- is.null(rationale_description) || !is.na(rationale)
+            valid <- value_valid && rationale_valid
             fields <- tibble::tibble(
                 field = field,
                 status = if (valid) "extracted" else "invalid",
                 normalized_value = if (valid) value else NA_character_,
                 evidence_ids = list(citations$real_ids),
                 field_validity = if (valid) "valid" else "invalid",
-                validity_reason = if (valid) "" else
-                    "value does not match the declared categorical output",
+                validity_reason = if (valid) "" else if (!value_valid)
+                    "value does not match the declared categorical output"
+                    else "required rationale is missing",
                 citation_warning = citations$citation_warning,
                 citation_warning_reason = citations$citation_warning_reason)
-            list(fields = fields, summary = NA_character_)
+            list(fields = fields, summary = rationale)
         })
 }
 
