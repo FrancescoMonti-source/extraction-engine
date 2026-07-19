@@ -132,36 +132,16 @@ validate_source_view <- function(data, spec) {
 # Adapt normalized redsan frames to the stable execution view used internally.
 # This is deliberately an execution-boundary projection, not a second public
 # normalization step: redsan owns parsing/typing; the engine supplies only its
-# run-local evidence coordinate and the historical role aliases consumed by the
-# structured executor.
+# run-local evidence coordinate while preserving physical prepared columns.
 .source_row_ids <- function(source, rows) {
     sprintf("%s:%08d", source, as.integer(rows))
 }
 
 .prepare_biology_view <- function(data) {
-    canonical <- c("BIOL_ID", "DATEXAM", "analyte", "value", "value_raw")
-    if (!all(canonical %in% names(data))) {
-        raw_value <- if (is.data.frame(data) && "NUMRES" %in% names(data)) {
-            as.character(data$NUMRES)
-        } else {
-            NULL
-        }
-        data <- redsan::process_biol(data)
-
-        if (!"BIOL_ID" %in% names(data) && "biol_ID" %in% names(data)) {
-            data$BIOL_ID <- as.character(data$biol_ID)
-        }
-        if (!"analyte" %in% names(data) && "TYPEANA" %in% names(data)) {
-            data$analyte <- as.character(data$TYPEANA)
-        }
-        if (!"value" %in% names(data) && "NUMRES" %in% names(data)) {
-            data$value <- data$NUMRES
-        }
-        if (!"value_raw" %in% names(data) && "NUMRES" %in% names(data)) {
-            data$value_raw <- raw_value %||% as.character(data$NUMRES)
-        }
-    }
-    data
+    # redsan owns typing and preserves the normalized physical result columns.
+    # The engine adds no `value` alias: variable outputs read NUMRES, STRRES,
+    # DATEXAM, or another prepared column explicitly through from_channel().
+    redsan::process_biol(data)
 }
 
 .prepare_execution_sources <- function(sources, cohort) {
@@ -172,8 +152,8 @@ validate_source_view <- function(data, spec) {
 
     cohort_patids <- unique(as.character(cohort$PATID))
     cohort_patids <- cohort_patids[!is.na(cohort_patids) & nzchar(cohort_patids)]
-    structured <- intersect(names(sources), c("pmsi_diag", "pmsi_actes", "biology"))
-    for (source in structured) {
+    prepared_sources <- intersect(names(sources), names(EE_SOURCES))
+    for (source in prepared_sources) {
         data <- sources[[source]]
         if (!is.data.frame(data)) next
         # Restrict the expensive normalization/projection to declared cohort
@@ -188,7 +168,8 @@ validate_source_view <- function(data, spec) {
             source_rows <- source_rows[keep]
             data <- data[which(keep), , drop = FALSE]
         }
-        if (identical(source, "biology")) data <- .prepare_biology_view(data)
+        prepare <- EE_SOURCE_PREPARERS[[source]] %||% base::identity
+        data <- prepare(data)
         if (!"source_row_id" %in% names(data)) {
             data <- tibble::add_column(
                 data,
@@ -275,8 +256,8 @@ BIOL_SOURCE <- source_spec(
     roles = list(
         source_row_id = "source_row_id", subject_id = "PATID",
         event_id = "EVTID", source_item_id = "ELTID",
-        source_result_id = "BIOL_ID", point_date = "DATEXAM",
-        analyte = "analyte", value_num = "value", value_str = "value_raw"))
+        source_result_id = "biol_ID", point_date = "DATEXAM",
+        analyte = "TYPEANA"))
 
 ACTE_SOURCE <- source_spec(
     name = "PMSI acts", module = "pmsi", table = "actes",
@@ -290,6 +271,12 @@ EE_SOURCES <- list(
     pmsi_actes = ACTE_SOURCE,
     biology = BIOL_SOURCE,
     documents = DOCS_SOURCE)
+
+# Source-specific boundary adaptation is itself registry data. Adding virology
+# or bacteriology means registering its source contract and, only if necessary,
+# its preparer here; execution never branches on a source name.
+EE_SOURCE_PREPARERS <- list(
+    biology = .prepare_biology_view)
 
 edsan_source_specs <- function() {
     EE_SOURCES

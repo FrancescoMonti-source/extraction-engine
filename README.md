@@ -4,229 +4,384 @@
 > definitions, not the author of those definitions.
 
 The package executes explicit study-variable specifications over prepared EDSAN
-views. It returns the value together with source coverage, resolvable evidence,
-and execution provenance. The researcher owns the clinical definition, the
-scientific validity of the rule, and interpretation of the result.
+views. It returns values together with source coverage, resolvable evidence, and
+execution provenance. The researcher owns the clinical definition and its
+scientific interpretation; `redsan` owns source normalization; `ellmer` owns
+model transport and structured output.
 
-`redsan` owns EDSAN retrieval, source mechanics, and normalization. `ellmer`
-owns model transport and structured output. `extractionengine` connects those
-boundaries without hiding the authored rule.
+The package is experimental and currently intended for internal use. Its API is
+allowed to break when a clearer execution contract is found. It contains no
+patient data or exported clinical concepts.
 
-The package is currently for internal use. It contains no patient data and no
-exported clinical concepts.
+## One complete authoring workflow
 
-## First structured variable
-
-The cohort declares the available study units. It may contain one row per stay:
-
-```r
-cohorte <- readRDS("path/to/cohorte")  # PATID + EVTID
-bio <- readRDS("path/to/bio")
-```
-
-The variable, not the cohort object, chooses the output grain. With
-`output_one_row_per = "PATID"`, repeated stays are projected to one row per
-patient. With `output_one_row_per = "EVTID"`, `PATID + EVTID` identifies one
-output row per stay. Internal extraction tasks are derived by the engine; users
-pass a `cohort`.
-
-A concept declares where a signal can be observed. Here the same measurement is
-available through two EDSAN analyte codes:
+Assume `cohort` contains `PATID + EVTID`, `bio` is a prepared biology view, and
+`documents` is a metadata-rich `corpustools::tCorpus`. A concept only locates
+source rows. It does not decide which source column becomes the result or how
+those rows are interpreted.
 
 ```r
-hemoglobine <- concept_spec(
-  name = "hemoglobine",
+anemia <- concept_spec(
+  name = "anemia",
   channels = list(
-    hemoglobin_gdl = lab_channel(
-      source = "biology",
+    hb = lab_channel(
       selector = analyte("NGR.NGR-HB-GDL")
     ),
-    hemoglobin_mml = lab_channel(
-      source = "biology",
-      selector = analyte("NGR.NGR-HB-MML")
+    text_anemia = text_channel(
+      selector = lucene_query("anemi*")
     )
   )
 )
 ```
 
-The study variable activates those channels and supplies the operational rule.
-`keep_when` extends the inherited analyte selector, so its code is not repeated.
-The thresholds and conversion below are demonstration choices owned by the
-researcher; the engine does not validate their scientific correctness.
+`lab_channel()` defaults to the logical source `"biology"`; another registered
+lab source can be named with `source =`. `analyte()` selects `TYPEANA` rows and
+nothing else. It does not infer whether `NUMRES`, `STRRES`, or `DATEXAM` should be
+read.
+
+The variable activates concept channels explicitly. The list name is the alias
+used by combine expressions, output, inspection, and provenance. The mandatory
+`channel =` points either to a concept-channel name or to an inline channel
+definition. It never points to another activation alias.
 
 ```r
-anemia <- variable_spec(
-  name = "anemia_demo",
-  concept = hemoglobine,
-  output_one_row_per = "EVTID",
+mean_hb_for_patients_with_anemic_stays <- variable_spec(
+  name = "mean_hb_for_patients_with_anemic_stays",
+  concept = anemia,
+
   channels = list(
-    hemoglobin_gdl = use_channel(
-      keep_when = \(value, PATSEX) {
-        value < ifelse(PATSEX == "F", 12, 13)
-      }
+    text_anemia = use_channel(
+      channel = "text_anemia",
+      search_within = "PATID",
+      method = "lucene"
     ),
-    hemoglobin_mml = use_channel(
-      keep_when = \(value, PATSEX) {
-        value < ifelse(PATSEX == "F", 12, 13) * 0.6206
+    hb = use_channel(
+      channel = "hb"
+    ),
+    hb_low = use_channel(
+      channel = "hb",
+      filter_rows = \(NUMRES, PATSEX) {
+        NUMRES < ifelse(PATSEX == "F", 12, 13)
       }
     )
   ),
-  combine_channels = any_positive(),
-  output = bin_output()
+
+  combine = combine_channels(
+    "text_anemia & hb_low",
+    by = "EVTID"
+  ),
+
+  output = from_channel(
+    "hb",
+    column = "NUMRES",
+    filter_by_qualified = "PATID",
+    group_by = "PATID",
+    reduce = mean
+  )
 )
 
-anemia                         # concise human-readable print
-inspect(anemia)                # compiled debugging representation
-
-result <- run_variable(
-  anemia,
-  cohort = cohorte,
-  sources = list(biology = bio)
+hb_result <- run_variable(
+  mean_hb_for_patients_with_anemic_stays,
+  cohort = cohort,
+  sources = list(biology = bio, documents = documents)
 )
 ```
 
-Published result views carry the native output-grain keys. A patient-grain
-variable exposes `PATID`; a stay-grain variable exposes `PATID + EVTID`.
-Composite execution IDs remain internal to the engine.
+Here `filter_rows` runs separately inside each task after relational, window, and
+selector filtering. Its formal arguments name real prepared-source columns and
+it returns one logical per row; `NA` is treated as `FALSE`, and surviving rows
+stay intact. `filter_groups`, paired with `use_channel(group_by =)`, is the
+corresponding one-logical-per-group rule and retains all surviving rows of
+accepted groups. That `group_by` is an intermediate grouping used only by
+`filter_groups`; it is not the final output grain. The mandatory `group_by` in
+`bin_output(group_by = ...)` or `from_channel(group_by = ...)` independently
+defines that terminal grain.
+An activation may also declare `window = c(from_days, to_days)` relative to the
+variable's shared `anchor`; other activations remain unwindowed.
 
-`"biology"` is the package's logical source name; `bio` is an arbitrary object
-name in the caller's R session. `list(biology = bio)` connects them only at
-execution. Biology typing is delegated to `redsan` automatically at this
-boundary; callers do not manufacture engine-specific `analyte`, `value`, or row
-identifier columns.
+A character anchor names an exact `Date` or `POSIXt` column supplied by the
+cohort. For example, a stay-grain cohort may carry `PATID`, `EVTID`, and
+`admission_date`, and the variable may declare `anchor = "admission_date"`.
+When a window consumes that anchor, every output unit must retain one
+unambiguous, non-missing date after cohort projection. The engine copies it to
+the internal task clock; it does not look for that column in a channel source.
 
-## Text evidence and text variables
+Alternatively, `index_event()` derives the clock from the registered source it
+names, before any channel runs. It currently accepts a code selector created by
+`icd10()` or `ccam()`; `at` names the source's real date column (or defaults to
+its registered clock), and `select_event` must resolve multiple matches. This
+anchor resolution is independent of the variable's activated channels.
 
-The concept declares every place where potentially relevant evidence can be
-found. It does not say what to do with that evidence. Text channels use the
-logical source `"documents"` by default, while `evidence_scope` explicitly says
-whether eligible documents come from the same patient or the same stay.
+The relational declarations answer different questions:
+
+- `search_within = "PATID"` makes the patient's documents eligible before
+  retrieval; their native `EVTID`, when present, can still support a finer
+  combine; text activations must declare `"PATID"` or `"EVTID"`;
+- `combine_channels(..., by = "EVTID")` requires the text and low-Hb signals to
+  coexist in a stay;
+- `filter_by_qualified = "PATID"` lets the reducer read all Hb rows of each
+  qualified patient; changing it to `"EVTID"` restricts the mean to qualifying
+  stays;
+- `group_by = "PATID"` publishes one final row per patient.
+
+`filter_by_qualified` is admitted, and required, only when `combine$by` is finer
+than `output$group_by`; it may then be only the combine key or the output key.
+It must be `NULL` when there is no combine, the grains are equal, or a coarser
+combine is broadcast to finer output units. A channel may be payload-only: `hb`
+feeds `from_channel()` even though only `text_anemia` and `hb_low` occur in the
+combine expression. Here *payload* simply means the source data selected for
+publication; it is not a hidden engine column.
+
+### Why the qualifying-row filter and output grain are different
+
+The subtle case is a combine evaluated at a finer key than the final output,
+followed by a `from_channel()` reducer. Suppose one patient has two stays:
+
+| PATID | EVTID | Hb values | Combine result |
+|---|---|---|---|
+| P1 | E1 | 8, 10 | qualifying |
+| P1 | E2 | 14, 16 | not qualifying |
+
+With `combine_channels(..., by = "EVTID")`, the combine answers only that E1
+qualifies. With `group_by = "PATID"`, the reducer must ultimately publish one
+value for P1. Those declarations still leave two scientifically different
+questions.
+
+To ask *what is the patient's mean Hb in qualifying stays?*, restrict the input
+rows by the combine key:
 
 ```r
-smoking <- concept_spec(
-  name = "smoking",
+from_channel(
+  "hb",
+  column = "NUMRES",
+  filter_by_qualified = "EVTID",
+  group_by = "PATID",
+  reduce = mean
+)
+```
+
+This is relationally equivalent to:
+
+```r
+hb_rows |>
+  semi_join(qualified_evtids, by = c("PATID", "EVTID")) |>
+  group_by(PATID) |>
+  summarise(value = mean(NUMRES))
+# P1: mean(c(8, 10)) = 9
+```
+
+To ask *among patients with at least one qualifying stay, what is the patient's
+mean Hb across all stays?*, restrict by the output key instead:
+
+```r
+from_channel(
+  "hb",
+  column = "NUMRES",
+  filter_by_qualified = "PATID",
+  group_by = "PATID",
+  reduce = mean
+)
+```
+
+This first projects the qualifying stays to their patients, then filters the Hb
+rows:
+
+```r
+qualified_patids <- qualified_evtids |>
+  distinct(PATID)
+
+hb_rows |>
+  semi_join(qualified_patids, by = "PATID") |>
+  group_by(PATID) |>
+  summarise(value = mean(NUMRES))
+# P1: mean(c(8, 10, 14, 16)) = 12
+```
+
+Both routes correctly produce one row per PATID. Execution always follows
+`combine by -> filter by qualified -> group by -> reduce`, and the three
+declarations answer separate questions:
+
+- `combine$by`: where is qualification decided?
+- `filter_by_qualified`: rows from which qualified units feed the reducer?
+- `output$group_by`: at which key is the final result grouped and published?
+
+The filter must be `NULL` when there is no combine, when
+`bin_output(group_by = ...)` publishes membership directly, when combine and
+output use the same key, or when a coarser combine is broadcast to a finer
+output grain.
+
+An LLM response is already one row per output task. When it is used as a
+fine-to-coarse payload, `filter_by_qualified` must therefore equal
+`output$group_by`; lower-level LLM payload scope would require one model call per
+lower-level key and is not implemented.
+
+For a deterministic channel, `column` is the exact prepared-source column name.
+There is no hidden `value` alias. With `reduce = NULL`, zero non-missing values
+produce a typed `NA`, one is returned directly, and more than one is a cardinality
+error. With `reduce =`, the reducer receives only non-missing values and must
+return exactly one scalar. It may intentionally change type, for example from a
+numeric measurement to a categorical label. Consequently the same lab concept
+can be published with `column = "NUMRES"`, `"STRRES"`, or `"DATEXAM"`; a row
+containing both result columns is valid because the read is explicit.
+
+The reducer is terminal: `group_by = "EVTID"` with `reduce = mean` computes one
+stay mean, while `group_by = "PATID"` pools the patient's raw values.
+`filter_by_qualified` filters rows before that grouping and reducer; it does not
+implement a mean of stay means. Such a two-stage aggregation requires an
+explicit derived variable and is intentionally future work.
+
+## Structured text extraction
+
+LLM-specific fields are declared directly with a native `ellmer::TypeObject`.
+The concept still only locates candidate text:
+
+```r
+tabagisme <- concept_spec(
+  name = "tabagisme",
   channels = list(
-    smoking_mentions = text_channel(
-      selector = lucene_query("taba*"),
-      evidence_scope = "event"
+    text_tabagisme = text_channel(
+      selector = lucene_query("taba*")
     )
   )
 )
-```
 
-The same channel can support a deterministic presence variable with
-`method = "lucene"` and `bin_output()`, or a structured extraction with
-`method = "lucene_llm"`. The latter keeps the detailed study instruction in a
-plain prompt owned by the researcher:
+tabagisme_levels <- c("actif", "sevre", "non_fumeur", "indetermine")
 
-```r
-smoking_levels <- c(
-  "actif",
-  "sevre",
-  "non_fumeur",
-  "indetermine"
-)
-
-smoking_prompt <- paste(
-  "Détermine le statut tabagique explicitement documenté",
-  "pour le patient cible dans les extraits fournis.",
-  "",
-  "Valeurs possibles :",
-  "- actif : tabagisme actuel explicitement documenté ;",
-  "- sevre : ancien fumeur, arrêt ou sevrage explicitement documenté ;",
-  "- non_fumeur : non-fumeur ou absence de tabagisme explicitement documentée ;",
-  "- indetermine : extraits insuffisants, ambigus ou contradictoires.",
-  "",
-  "Règles :",
-  "- utilise uniquement les extraits fournis ;",
-  "- évalue le patient cible, jamais sa famille ou son entourage ;",
-  "- ne déduis jamais non_fumeur du silence ;",
-  "- choisis une seule valeur ;",
-  "- cite uniquement les identifiants des extraits soutenant la réponse ;",
-  "- n’invente jamais d’identifiant.",
-  sep = "\n"
-)
-
-smoking_status <- variable_spec(
-  name = "smoking_status",
-  concept = smoking,
-  output_one_row_per = "EVTID",
+tabagisme_enum <- variable_spec(
+  name = "tabagisme_enum",
+  concept = tabagisme,
 
   channels = list(
-    smoking_mentions = use_channel(
+    text_tabagisme = use_channel(
+      channel = "text_tabagisme",
+      search_within = "EVTID",
       method = "lucene_llm",
-      prompt = smoking_prompt
+      model = "gemma3:4b",
+      model_params = list(temperature = 0, seed = 42),
+      response = ellmer::type_object(
+        "Extraction structurée du statut tabagique.",
+        statut_tabagique = ellmer::type_enum(
+          tabagisme_levels,
+          paste(
+            "Statut explicitement documenté;",
+            "ne jamais déduire non_fumeur du silence."
+          )
+        )
+      )
     )
   ),
 
-  output = cat_output(
-    smoking_levels,
-    description = "Statut tabagique explicitement documenté dans les extraits.",
-    rationale = paste(
-      "Justification brève du choix, fondée uniquement sur les extraits",
-      "et sans ajouter d'information non documentée."
-    )
-  ),
-
-  model = "gemma3:4b",
-  model_params = list(
-    temperature = 0,
-    seed = 42
-  )
+  output = from_channel("text_tabagisme", group_by = "EVTID")
 )
 
-corpus <- corpustools::create_tcorpus(
-  docs |>
-    dplyr::select(ELTID, RECTXT, PATID, EVTID, RECDATE, RECTYPE) |>
-    as.data.frame(),
-  text_columns = "RECTXT",
-  doc_column = "ELTID",
-  split_sentences = TRUE,
-  remember_spaces = FALSE,
-  verbose = FALSE
-)
-
-result_smoking <- run_variable(
-  smoking_status,
-  cohort = cohorte,
-  sources = list(documents = corpus)
+smoking_result <- run_variable(
+  tabagisme_enum,
+  cohort = cohort,
+  sources = list(documents = documents)
 )
 ```
 
-The document source is the caller-owned `tCorpus`. Its metadata must retain
-`PATID`, `EVTID`, `RECDATE`, and `RECTYPE`; corpustools stores the declared
-`ELTID` document column as `doc_id`, which the engine maps back internally. As
-with biology, binding happens only at execution: `documents = corpus` connects
-the object to the logical source name used by `text_channel()`.
+`from_channel("text_tabagisme", group_by = "EVTID")` publishes the complete
+structured frame: every authored TypeObject field plus `rationale` by default.
+Supplying `column =` instead projects one field. In `use_channel()`,
+`rationale = TRUE` or omission uses:
+“Justification brève du choix, fondée uniquement sur les extraits et sans ajouter
+d'information non documentée.” A non-empty string overrides that description;
+`FALSE` or `NULL` omits the field.
 
-`cat_output()` is the single machine-readable declaration of the allowed values.
-Its optional `description` gives ellmer the study-owned meaning of the returned
-value. Its optional `rationale` requests a required non-empty explanation and is
-used as that field's ellmer description; the published row then carries both
-`value` and `rationale`. The engine supplies the enclosing-object and
-evidence-field descriptions itself. For each cohort row, it derives the structured `ellmer` response type,
-appends the numbered Lucene excerpts to the authored prompt, constrains the value
-to those levels, and constrains evidence IDs to the excerpts actually supplied.
-The model may select the wrong allowed category, but it cannot return a category
-outside the declared vocabulary. The engine does not judge the scientific meaning
-of the selected category.
+The package-level system prompt contains only general structured-extraction
+instructions and can be overridden with `system_prompt =`. The engine constructs
+the user prompt from the target and numbered excerpts; `user_prompt =` is an
+optional prefix for cross-field instructions. Variable-specific meaning belongs
+in the TypeObject and individual `type_*()` descriptions.
 
-By default every Lucene match is passed to the model. A real operational cap is
-written explicitly as `max_candidates = 10` inside `use_channel()`. The optional
-`system_prompt` lives in the same place; when omitted, the package supplies a
-French structured-extraction default that treats excerpts as data, requires the
-declared schema, and forbids invented information or evidence identifiers.
+Before `chat_structured()`, the engine adds `rationale` and an `evidence_ids` enum
+limited to the snippets actually shown. Those names, grain keys, and audit fields
+are reserved and cannot collide with authored fields. Evidence identifiers are
+resolved to the evidence table rather than published as JSON columns. No manual
+`json_format` is used.
 
-`run_variable()` creates the Ollama Chat automatically. `run_protocol()` runs
-variables in list order and completes all rows of one variable before moving to
-the next model. One base Chat is created per `lucene_llm` variable and cloned for
-its cohort rows; the Ollama model is not rebuilt for every row. Passing `chat =`
-remains an explicit test/debug override. A `method = "lucene"` variable never
-creates a Chat.
+An LLM response does not implicitly define boolean channel membership. A
+`lucene_llm` activation may be published with `from_channel()` (including as a
+payload gated by a deterministic combine), but it cannot currently appear in
+`combine = combine_channels(...)`. Compilation fails with an explanatory error
+until an explicit response-to-hit rule such as `hit_when` is implemented. Use
+`method = "lucene"` when Lucene-hit presence itself is the intended membership
+signal.
+
+No candidate, model failure, or invalid schema still yields a stable result row
+with typed missing fields and separate status/review information. Raw response
+and provenance remain auditable. Public evidence has one durable
+`evidence_ref`; LLM evidence also keeps the prompt-local `snippet_id` when
+available. Internal `source_row_id` and `hit_ref` coordinates remain in
+`audit$internal$channel_intermediates`, not in the public evidence frame. When
+an evidence row carries a native `EVTID`, the public evidence frame names it
+`source_EVTID`; at stay-grain output, the target stay remains `EVTID`.
+
+`run_variable()` returns only `values`, `channel_status`, `evidence`, and
+`audit`. `channel_status` has one row per output task and activated channel. Its
+stable core identifies the output unit, variable, channel, and source, then
+records `status`, `hit`, and `processing_state`; some execution paths add review
+or contribution fields. `status` is the coarse execution outcome: `complete`
+means that ascertainment finished, not that a signal was present. Presence is
+recorded separately as `TRUE`, `FALSE`, or `NA` in `hit`, while
+`processing_state` retains the more specific executor outcome. On a combine,
+`contribution` summarizes the channel as `signal`, `negative`,
+`silent`, `invalid`, `error`, or `unknown`; here `negative` means "successfully
+ascertained with no observed hit", not a clinical negative finding.
+
+`evidence` has one row per retained source row or text snippet. Structured
+evidence preserves the prepared source's row columns, such as `TYPEANA`,
+`NUMRES`, `STRRES`, and `DATEXAM` when available, together with its public
+coordinates. Every row receives one canonical `evidence_ref`; internal
+`source_row_id` and `hit_ref` identifiers are removed from this public frame.
+
+`run_protocol()` accepts either an entirely unnamed variable list or an entirely
+named one whose names exactly equal each `spec$name` in the same order. Canonical
+names must be unique, and the returned result list is always named from
+`spec$name`; an R binding such as `local_name <- variable_spec(name = "canonical",
+...)` never changes the public identifier.
+
+The audit contains a tidy `counts` table with output-grain keys plus `channel`,
+`stage`, `unit`, and `n`. Its stages describe the following counts when the
+corresponding executor emits them:
+
+| `stage` | What `n` counts |
+|---|---|
+| `task_join` | source rows associated with the task by its relational keys |
+| `window` | source rows remaining after the activation's time window |
+| `selector` | rows matching the channel selector |
+| `filter_rows` | rows surviving the row predicate |
+| `filter_groups` | rows retained inside accepted groups |
+| `model_input` | snippets supplied to the model |
+| `output_input` | non-missing values supplied to the terminal reducer |
+
+Stages are included only when that executor records a distinct count. Their
+absence alone does not prove that an operation did not run; in particular, text
+retrieval does not currently emit a separate `window` row.
+
+`llm_calls` contains one row per task/channel model invocation, including model
+configuration, call and processing outcomes, timing, prompt/schema/query
+fingerprints, diagnostics, and the raw or partial response. A task that never
+reaches the model, for example because it has no candidate, has no call row. The
+`execution_manifest` is a resolved snapshot of what was configured and executed,
+not a chronological activity log. Combination runs additionally keep `overlap`,
+a tabular Venn/UpSet-style count of observed `TRUE`/`FALSE`/`NA` channel patterns,
+and `combine_keys`, the key-level relation evaluated at `combine$by`, including
+each channel's membership and the final `qualifies` decision. `overlap` is
+computed from task-level hit patterns; it is not an aggregation of
+`combine_keys`.
+
+Executable and debugging details are explicitly separated under
+`audit$internal` as `resolved_spec` and `channel_intermediates`. Printing
+`audit$execution_manifest` gives a compact author-facing summary; its complete
+resolved fields remain directly addressable for programmatic audit.
+
+`bin_output(group_by = ...)` remains the output for source membership or a
+combine result. A deterministic `method = "lucene"` activation never creates a
+Chat.
 
 ## Development
-
-Build and check the package with:
 
 ```text
 R CMD build .
@@ -234,8 +389,6 @@ R CMD check extractionengine_0.1.0.tar.gz
 ```
 
 Before adding a model to the package approval list, run
-`Rscript scripts/check_grammar_enforcement.R` against that model.
-
-The concise package contract is in [DESIGN.md](DESIGN.md). The pre-package
-prototype is preserved at tag
-`checkpoint/pre-package-rebuild-2026-07-12`.
+`Rscript scripts/check_grammar_enforcement.R` against that model. The concise
+package contract is in [DESIGN.md](DESIGN.md); the pre-package prototype remains
+available at tag `checkpoint/pre-package-rebuild-2026-07-12`.

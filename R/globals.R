@@ -5,11 +5,11 @@ utils::globalVariables(c(
     "context_after", "context_before", "days_from_anchor", "doc_date",
     "doc_id", "evidence_ids", "evidence_ref", "evidence_refs", "field",
     "field_validity", "hit", "hit_ref", "hit_sentence", "hit_text",
-    "in_corpus", "is_target", "measurement_time", "n_candidate_rows",
+    "in_corpus", "is_target", "n_candidate_rows",
     "n_eligible_documents", "n_fields", "n_invalid", "n_matching_rows",
     "n_scope_rows", "n_searchable_documents", "n_snippets", "n_source_rows",
     "n_valid", "needs_review", "normalized_value", "offset",
     "processing_state", "processing_status", "review_reason",
     "selected_evidence", "sentence", "snippet_id", "source_row_id", "status",
     "t_end", "t_start", "task_id", "task_summary", "task_validity", "text",
-    "token", "token_id", "validity_reason", "value", "value_raw"))
+    "token", "token_id", "validity_reason", "value"))

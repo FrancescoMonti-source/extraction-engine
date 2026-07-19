@@ -24,18 +24,6 @@
     invisible(TRUE)
 }
 
-# Normalize a combine_channels= value into an ee_combiner. A bare string is a
-# hit-set expression (combine_channels = "(a | b) & !c"); operator records pass
-# through; NULL is allowed (single-channel direct specs). See hit_set_expr().
-.as_combiner <- function(combine) {
-    if (is.null(combine) || inherits(combine, "ee_combiner")) return(combine)
-    if (is.character(combine) && length(combine) == 1L && nzchar(combine)) {
-        return(hit_set_expr(combine))
-    }
-    stop("combine_channels must be a combiner operator or a hit-set expression ",
-         "string.", call. = FALSE)
-}
-
 # Normalize the ratified window spelling (DESIGN section 7): c(from_days, to_days)
 # relative to the anchor -- c(0, 180) = forward 6 months, c(-1825, 7) = 5-year
 # lookback with a week of grace, c(-Inf, 0) = unbounded lookback. NULL = no
@@ -56,108 +44,53 @@
          "(from <= to; e.g. c(0, 180), c(-1825, 7), c(-Inf, 0)).", call. = FALSE)
 }
 
-# Normalize the three ratified channel entry forms (DESIGN section 5) into activations
-# plus variable-local inline definitions:
-#   "name"                       plain activation, inherit everything
-#   name = use_channel(...)      activation with local replacements
-#   name = lab_channel(...) etc. INLINE definition of a variable-local channel
-# Inline names must not collide with concept channels (section 14.3 overrides are the
-# only deviation path for inherited channels); promote inline -> concept when a
-# second variable wants the same channel.
+# Normalize the single activation grammar:
+#   alias = use_channel(channel = "concept_channel", ...)
+#   alias = use_channel(channel = text_channel(...), ...)
+# The external name is always the alias. A character `channel=` resolves only in
+# the concept catalog, never through another activation alias.
 .normalize_variable_channels <- function(channels, concept) {
-    if (is.character(channels)) channels <- as.list(channels)
     if (!is.list(channels)) {
-        stop("channels must be a character vector or a list (names, ",
-             "use_channel() activations, inline typed definitions).",
+        stop("channels must be a named list of use_channel() activations.",
              call. = FALSE)
     }
-    nms <- names(channels)
-    if (is.null(nms)) nms <- rep("", length(channels))
-    act_names <- character(length(channels))
-    acts <- vector("list", length(channels))
-    inline <- list()
-    for (i in seq_along(channels)) {
-        x <- channels[[i]]
-        nm <- nms[[i]]
-        if (is.character(x) && length(x) == 1L && nzchar(x) && !nzchar(nm)) {
-            act_names[[i]] <- x
-            acts[[i]] <- use_channel()
-        } else if (inherits(x, "ee_channel_use")) {
-            if (!nzchar(nm)) {
-                stop("use_channel() entries must be named after the channel ",
-                     "they activate.", call. = FALSE)
+    if (!length(channels)) {
+        stop("channels must activate at least one channel.", call. = FALSE)
+    }
+    .require_named_list(channels, "channels")
+    bad <- !vapply(channels, inherits, logical(1), "ee_channel_use")
+    if (any(bad)) {
+        stop("Every channels entry must use alias = use_channel(channel = ...); ",
+             "invalid: ", paste(names(channels)[bad], collapse = ", "), ".",
+             call. = FALSE)
+    }
+    for (alias in names(channels)) {
+        origin <- channels[[alias]]$channel
+        if (is.character(origin) && !origin %in% names(concept$channels)) {
+            alias_hint <- if (origin %in% names(channels)) {
+                " Activation aliases cannot point to other aliases."
+            } else {
+                ""
             }
-            act_names[[i]] <- nm
-            acts[[i]] <- x
-        } else if (inherits(x, "ee_channel")) {
-            if (!nzchar(nm)) {
-                stop("inline channel definitions must be named.", call. = FALSE)
-            }
-            if (nm %in% names(concept$channels)) {
-                stop("inline channel '", nm, "' collides with a concept ",
-                     "channel of the same name; override inherited channels ",
-                     "with use_channel(...) replacements instead (DESIGN ",
-                     "section 14.3).", call. = FALSE)
-            }
-            act_names[[i]] <- nm
-            inline[[nm]] <- x
-            acts[[i]] <- use_channel()
-        } else {
-            stop("channels entries must be channel names, use_channel() ",
-                 "activations, or named inline typed channel definitions.",
-                 call. = FALSE)
+            stop("Activation '", alias, "' references unknown concept channel '",
+                 origin, "'.", alias_hint, call. = FALSE)
         }
     }
-    if (anyDuplicated(act_names)) {
-        stop("channels activates a channel more than once: ",
-             paste(unique(act_names[duplicated(act_names)]), collapse = ", "),
-             call. = FALSE)
-    }
-    list(activations = stats::setNames(acts, act_names), inline = inline)
+    channels
 }
 
-# Lower any_positive() to a raw hit-set expression and enforce the combine / channel
-# / output validity matrix (design note section 8). The PRESENCE of a combine encodes
-# multi-channel hit-set algebra: with >=2 channels combine MUST be an expression
-# (any_positive() is sugar that lowers to "a | b | ..."); with a single channel
-# there is no hit-algebra, so combine MUST be NULL and the value is shaped by
-# output(). All cross-channel combine is hit-set algebra -- there is no reconcile
+# Enforce the combine / channel / output validity matrix (design note section 8).
+# The PRESENCE of a combine encodes multi-channel hit-set algebra: with >=2
+# channels combine MUST be built by combine_channels(); with a single channel
+# there is no hit-algebra, so combine MUST be NULL and the value is shaped by the
+# output. All cross-channel combine is hit-set algebra -- there is no reconcile
 # rule, so combine = NULL over >=2 channels is an error.
 .resolve_variable_combine <- function(combine, channel_names, output) {
     n <- length(channel_names)
-    if (inherits(combine, "ee_combiner") && identical(combine$kind, "any_positive")) {
-        if (n < 2L) {
-            stop("any_positive() needs >=2 channels; for a single channel drop ",
-                 "combine_channels and let output() shape the value.",
-                 call. = FALSE)
-        }
-        combine <- hit_set_expr(paste(channel_names, collapse = " | "))
-    }
     if (inherits(combine, "ee_combiner") && identical(combine$kind, "hit_set_expr")) {
         if (n < 2L) {
             stop("A combine expression needs >=2 channels; a single channel ",
-                 "drops combine_channels.", call. = FALSE)
-        }
-        # A combine expression gates ROWS; it never produces the value itself
-        # (DESIGN section 8). bin_output() lifts membership directly; num/cat read the
-        # survivors' values and must declare the payload (values_from + reduce,
-        # checked with the channel list in .check_output_payload); str/struct
-        # behind a gate stay unshaped until a consumer arrives.
-        if (!is.null(output) && !identical(output$kind, "binary")) {
-            if (output$kind %in% c("number", "categorical", "date")) {
-                if (!is.function(output$reduce)) {
-                    stop("combine gates rows, it does not produce the value; a '",
-                         output$kind, "' output behind a combine expression must ",
-                         "declare its payload: values_from = <channel> + reduce = ",
-                         "<function> (only bin_output() lifts membership directly).",
-                         call. = FALSE)
-                }
-            } else {
-                stop("Output '", output$kind, "' behind a combine expression is ",
-                     "not shaped yet (DESIGN section 8): bin (membership) and num/cat/date ",
-                     "(values_from/reduce payload) are; revisit with a consumer.",
-                     call. = FALSE)
-            }
+                 "uses combine = NULL.", call. = FALSE)
         }
         return(combine)
     }
@@ -168,36 +101,61 @@
     }
     # combine is NULL from here.
     if (n >= 2L) {
-        stop("Missing combine_channels: >=2 activated channels need a hit-set ",
-             "expression -- there is no reconcile rule otherwise.", call. = FALSE)
+        stop("Missing combine: >=2 activated channels need ",
+             "combine_channels(expr, by) -- there is no reconcile rule otherwise.",
+             call. = FALSE)
     }
     if (n == 1L && is.null(output)) {
-        stop("A single-channel variable needs an output() ",
-             "(binary/number/categorical/fields) to shape its value.", call. = FALSE)
+        stop("A single-channel variable needs bin_output() or from_channel().",
+             call. = FALSE)
     }
     combine
 }
 
-# Payload resolution for num/cat/date outputs (DESIGN section 8): values_from must name
-# an activated channel; omitted, it can only default to the sole channel of a
-# single-channel variable -- with several channels the pick is real, non-derivable
-# information. Returns the output with values_from normalized, so the runner and
-# provenance always see the executed payload channel.
-.check_output_payload <- function(output, channel_names) {
-    if (is.null(output) || !output$kind %in% c("number", "categorical", "date")) {
+# Validate the payload alias and cross-grain filtering contract. The channel
+# definition itself is checked later, once aliases have been resolved.
+.check_output_contract <- function(output, channel_names, combine) {
+    if (identical(output$kind, "binary")) return(output)
+    if (!identical(output$kind, "from_channel")) {
+        stop("Unsupported output contract '", output$kind,
+             "'; use bin_output() or from_channel().", call. = FALSE)
+    }
+    if (!output$channel %in% channel_names) {
+        stop("from_channel() must name an activated alias: got '",
+             output$channel, "'; activated: ",
+             paste(channel_names, collapse = ", "), ".", call. = FALSE)
+    }
+
+    has_combine <- inherits(combine, "ee_combiner") &&
+        identical(combine$kind, "hit_set_expr")
+    filter_level <- output$filter_by_qualified
+    if (!has_combine) {
+        if (!is.null(filter_level)) {
+            stop("from_channel() filter_by_qualified requires combine = ",
+                 "combine_channels(expr, by).", call. = FALSE)
+        }
         return(output)
     }
-    if (!is.function(output$reduce)) return(output)   # extraction-flavor cat
-    if (is.null(output$values_from)) {
-        if (length(channel_names) != 1L) {
-            stop("A payload output over several channels must declare values_from ",
-                 "= <channel>: the payload pick is not derivable.", call. = FALSE)
-        }
-        output$values_from <- channel_names[[1]]
-    } else if (!output$values_from %in% channel_names) {
-        stop("values_from must name an activated channel: got '",
-             output$values_from, "'; activated: ",
-             paste(channel_names, collapse = ", "), ".", call. = FALSE)
+
+    spine <- c(PATID = 1L, EVTID = 2L, ELTID = 3L)
+    combine_rank <- unname(spine[[combine$by]])
+    output_rank <- unname(spine[[output$group_by]])
+    is_fine_to_coarse <- combine_rank > output_rank
+
+    if (!is_fine_to_coarse && !is.null(filter_level)) {
+        stop("from_channel() filter_by_qualified must be NULL unless combine$by ",
+             "is finer than output$group_by.", call. = FALSE)
+    }
+    if (is_fine_to_coarse && is.null(filter_level)) {
+        stop("from_channel() requires filter_by_qualified when combine$by ('",
+             combine$by, "') is finer than output$group_by ('",
+             output$group_by, "').", call. = FALSE)
+    }
+    endpoints <- c(combine$by, output$group_by)
+    if (!is.null(filter_level) && !filter_level %in% endpoints) {
+        stop("from_channel() filter_by_qualified must equal combine$by ('",
+             combine$by, "') or output$group_by ('", output$group_by,
+             "'); got '", filter_level, "'.", call. = FALSE)
     }
     output
 }
@@ -206,7 +164,7 @@
 # activated channels: a referenced channel that is not activated is an unknown
 # symbol; an activated channel absent from the expression is dead weight. Both are
 # spec errors, surfaced at build time. One exemption: the output's payload channel
-# (values_from) may stay out of the expression -- it does not define the qualifying
+# may stay out of the expression -- it does not define the qualifying
 # keys, but its rows are still scoped by them (DESIGN sections 8 and 14.9).
 .check_expr_channels <- function(combine, activated, payload_channel = NULL) {
     if (!inherits(combine, "ee_combiner") ||
@@ -226,37 +184,6 @@
     invisible(TRUE)
 }
 
-# combine_at_level (DESIGN section 7): the key at which the expression is evaluated;
-# qualifying keys exists-lift to the output grain. NULL = the output grain (the
-# default, today's semantics). Declared, it must sit ON the identity spine and at
-# the output grain or finer -- evaluating coarser would leak hits across output
-# rows. It rides the combine: a single-channel variable has no algebra to place.
-.check_combine_at_level <- function(level, combine, output_one_row_per) {
-    if (is.null(level)) return(NULL)
-    if (!is.character(level) || length(level) != 1L || !nzchar(level)) {
-        stop("combine_at_level must be one non-empty column name.", call. = FALSE)
-    }
-    if (!inherits(combine, "ee_combiner") ||
-        !identical(combine$kind, "hit_set_expr")) {
-        stop("combine_at_level needs a combine expression: a single channel's ",
-             "filtered rows are already the surviving set; there is no algebra ",
-             "to evaluate at a level.", call. = FALSE)
-    }
-    spine <- c(PATID = 1L, EVTID = 2L, ELTID = 3L)
-    if (!level %in% names(spine)) {
-        stop("combine_at_level must be an identity-spine key (",
-             paste(names(spine), collapse = "/"), "); got '", level, "'.",
-             call. = FALSE)
-    }
-    if (output_one_row_per %in% names(spine) &&
-        spine[[level]] < spine[[output_one_row_per]]) {
-        stop("combine_at_level ('", level, "') must be the output grain or a ",
-             "finer spine key: evaluating above '", output_one_row_per,
-             "' would leak hits across output rows.", call. = FALSE)
-    }
-    level
-}
-
 # A concept_spec declares the signal channels available for a clinical concept.
 # It does not interpret meaning and it does not activate any channel by default.
 concept_spec <- function(name, channels) {
@@ -272,24 +199,77 @@ concept_spec <- function(name, channels) {
     .new_spec(list(name = name, channels = channels), "ee_concept_spec")
 }
 
-# use_channel() is the per-channel activation record placed inside a variable_spec.
-# Text methods are ordinary strings; the study-owned prompt stays directly beside
-# the method that consumes it. Ellmer schemas and parsing remain engine work.
-use_channel <- function(method = NULL, prompt = NULL, system_prompt = NULL,
-                        max_candidates = NULL, selector = NULL,
-                        keep_when = NULL, reducer = NULL) {
-    if (!is.null(reducer)) {
-        stop("use_channel() no longer takes reducer: reduction lives on the ",
-              "output -- num_output(values_from =, reduce =) / ",
-              "cat_output(levels, values_from =, reduce =).", call. = FALSE)
+.response_field_names <- function(response) {
+    properties <- tryCatch(S7::props(response)$properties,
+                           error = function(cnd) NULL)
+    names(properties) %||% character()
+}
+
+.LLM_RESERVED_RESPONSE_FIELDS <- c(
+    "rationale", "evidence_ids",
+    "task_id", "PATID", "EVTID", "ELTID", "source_EVTID",
+    "variable", "channel", "source", "origin", "origin_kind",
+    "field", "value", "accepted_value", "n_payload_rows",
+    "status", "coverage_state", "processing_state", "channel_coverage",
+    "needs_review", "review_reason", "field_validity", "validity_reason",
+    "task_validity", "task_validity_reason", "citation_warning",
+    "citation_warning_reason", "provider", "model", "params",
+    "attempt_status", "processing_status", "raw_response",
+    "partial_response", "prompt_hash", "schema_hash", "query_hash",
+    "error", "n_tries", "started_at", "latency_ms", "output_tokens",
+    "inferred_finish_reason", "temperature", "seed", "max_tokens",
+    "definition", "model_candidate_rank", "anchor_date",
+    "snippet_id", "hit_ref", "source_row_id", "evidence_ref")
+
+# use_channel() is the complete variable-local activation. `channel` is mandatory:
+# either one concept-channel name or one inline ee_channel definition.
+use_channel <- function(channel, selector = NULL, filter_rows = NULL,
+                        group_by = NULL, filter_groups = NULL,
+                        search_within = NULL, window = NULL, method = NULL,
+                        model = NULL, model_params = list(),
+                        response = NULL, rationale = TRUE,
+                        user_prompt = NULL, system_prompt = NULL,
+                        max_candidates = NULL) {
+    rationale_missing <- missing(rationale)
+    if (missing(channel)) {
+        stop("use_channel() requires channel = <concept name or inline channel>.",
+             call. = FALSE)
+    }
+    valid_origin <- inherits(channel, "ee_channel") ||
+        (is.character(channel) && length(channel) == 1L && !is.na(channel) &&
+         nzchar(channel))
+    if (!valid_origin) {
+        stop("use_channel() channel must be one concept-channel name or an inline ",
+             "channel definition.", call. = FALSE)
     }
     if (!is.null(method) &&
         (!is.character(method) || length(method) != 1L || is.na(method) ||
          !method %in% c("lucene", "lucene_llm"))) {
         stop("use_channel() method must be 'lucene', 'lucene_llm', or NULL.",
+              call. = FALSE)
+    }
+    if (!is.null(model) &&
+        (!is.character(model) || length(model) != 1L || is.na(model) ||
+         !nzchar(model))) {
+        stop("use_channel() model must be one non-empty model name or NULL.",
              call. = FALSE)
     }
-    for (field in c("prompt", "system_prompt")) {
+    if (is.null(model_params)) model_params <- list()
+    if (!is.list(model_params)) {
+        stop("use_channel() model_params must be a named list.",
+             call. = FALSE)
+    }
+    if (length(model_params) &&
+        (is.null(names(model_params)) || anyNA(names(model_params)) ||
+         any(!nzchar(names(model_params))) || anyDuplicated(names(model_params)))) {
+        stop("use_channel() model_params must be a named list with unique ",
+             "non-empty names.", call. = FALSE)
+    }
+    if (is.null(model) && length(model_params)) {
+        stop("use_channel() model_params require model = <model name>.",
+             call. = FALSE)
+    }
+    for (field in c("user_prompt", "system_prompt")) {
         value <- get(field)
         if (!is.null(value) &&
             (!is.character(value) || length(value) != 1L || is.na(value) ||
@@ -308,76 +288,225 @@ use_channel <- function(method = NULL, prompt = NULL, system_prompt = NULL,
         }
         max_candidates <- as.integer(max_candidates)
     }
-    llm_args <- !is.null(prompt) || !is.null(system_prompt) ||
-        !is.null(max_candidates)
-    if (!identical(method, "lucene_llm") && llm_args) {
-        stop("prompt, system_prompt, and max_candidates are valid only with ",
-             "method = 'lucene_llm'.", call. = FALSE)
-    }
-    if (identical(method, "lucene_llm") && is.null(prompt)) {
-        stop("method = 'lucene_llm' requires prompt = <non-empty string>.",
-             call. = FALSE)
-    }
     if (!is.null(selector) && !inherits(selector, "ee_selector")) {
         stop("use_channel() selector must be created with a selector constructor.",
              call. = FALSE)
     }
-    if (!is.null(keep_when)) {
-        if (!is.function(keep_when) || !length(formals(keep_when))) {
-            stop("use_channel() keep_when must be a function naming the source ",
+    if (!is.null(filter_rows)) {
+        if (!is.function(filter_rows) || !length(formals(filter_rows))) {
+            stop("use_channel() filter_rows must be a function naming the source ",
                  "row columns it reads.", call. = FALSE)
         }
-        if (!is.null(selector)) {
-            stop("use_channel() takes either selector or keep_when, not both; ",
-                 "keep_when extends the inherited analyte selector.",
+    }
+    has_group <- !is.null(group_by)
+    has_group_rule <- !is.null(filter_groups)
+    if (has_group != has_group_rule) {
+        stop(if (has_group)
+                 "use_channel() group_by requires filter_groups."
+             else "use_channel() filter_groups requires group_by.",
+             call. = FALSE)
+    }
+    if (has_group) {
+        if (!is.character(group_by) || length(group_by) != 1L ||
+            is.na(group_by) ||
+            !group_by %in% c("PATID", "EVTID", "ELTID")) {
+            stop("use_channel() group_by must be PATID, EVTID, or ELTID.",
                  call. = FALSE)
         }
+        if (!is.function(filter_groups) ||
+            !length(formals(filter_groups))) {
+            stop("use_channel() filter_groups must be a function naming the ",
+                 "group columns it reads.", call. = FALSE)
+        }
+    }
+    if (!is.null(search_within) &&
+        (!is.character(search_within) ||
+         length(search_within) != 1L || is.na(search_within) ||
+         !search_within %in% c("PATID", "EVTID"))) {
+        stop("use_channel() search_within must be PATID, EVTID, or NULL.",
+             call. = FALSE)
+    }
+    window <- .as_window(window)
+
+    is_llm <- identical(method, "lucene_llm")
+    llm_only_args <- !is.null(model) || length(model_params) ||
+        !is.null(response) || !is.null(user_prompt) ||
+        !is.null(system_prompt) || !is.null(max_candidates) || !rationale_missing
+    if (!is_llm && llm_only_args) {
+        stop("model, model_params, response, rationale, user_prompt, system_prompt, ",
+             "and max_candidates are valid only with method = 'lucene_llm'.",
+             call. = FALSE)
+    }
+    if (is_llm) {
+        if (!inherits(response, "ellmer::TypeObject")) {
+            stop("method = 'lucene_llm' requires response = ellmer::type_object(...).",
+                 call. = FALSE)
+        }
+        collisions <- intersect(.response_field_names(response),
+                                .LLM_RESERVED_RESPONSE_FIELDS)
+        if (length(collisions)) {
+            stop("LLM response field(s) reserved by the engine: ",
+                 paste(collisions, collapse = ", "), ".", call. = FALSE)
+        }
+        if (isTRUE(rationale)) {
+            rationale <- DEFAULT_RATIONALE_DESCRIPTION
+        } else if (isFALSE(rationale) || is.null(rationale)) {
+            rationale <- NULL
+        } else if (!is.character(rationale) || length(rationale) != 1L ||
+                   is.na(rationale) || !nzchar(trimws(rationale))) {
+            stop("use_channel() rationale must be TRUE, FALSE, NULL, or one ",
+                 "non-empty string.", call. = FALSE)
+        }
+    } else {
+        rationale <- NULL
     }
     .new_spec(
-        list(method = method, prompt = prompt, system_prompt = system_prompt,
-             max_candidates = max_candidates, selector = selector,
-             keep_when = keep_when),
+        list(channel = channel, selector = selector, filter_rows = filter_rows,
+             group_by = group_by, filter_groups = filter_groups,
+             search_within = search_within, window = window,
+             method = method, model = model, model_params = model_params,
+             response = response, rationale = rationale,
+             user_prompt = user_prompt, system_prompt = system_prompt,
+             max_candidates = max_candidates),
         "ee_channel_use")
 }
 
-# Text execution has two deliberately narrow public modes. Retrieval-only Lucene
-# produces binary membership; Lucene + LLM produces one grammar-gated category.
-.check_text_channel_uses <- function(channels, catalog, output) {
-    text_names <- names(channels)[vapply(
-        names(channels),
-        function(name) identical(catalog[[name]]$type, "text"),
-        logical(1))]
-    for (name in text_names) {
-        method <- channels[[name]]$method
-        if (is.null(method)) {
-            stop("Text channel '", name, "' requires use_channel(method = ",
-                 "'lucene' or 'lucene_llm').", call. = FALSE)
+.activation_channel_definition <- function(alias, activation, concept) {
+    origin <- activation$channel
+    if (inherits(origin, "ee_channel")) {
+        return(list(definition = origin, origin_name = alias,
+                    origin_kind = "inline"))
+    }
+    definition <- concept$channels[[origin]]
+    if (is.null(definition)) {
+        stop("Activation '", alias, "' references unknown concept channel '",
+             origin, "'.", call. = FALSE)
+    }
+    list(definition = definition, origin_name = origin,
+         origin_kind = "concept")
+}
+
+.check_text_channel_uses <- function(channels, concept) {
+    needs_chat <- FALSE
+    for (alias in names(channels)) {
+        activation <- channels[[alias]]
+        definition <- .activation_channel_definition(alias, activation, concept)$definition
+        is_text <- identical(definition$type, "text")
+        if (is_text && is.null(activation$method)) {
+            stop("Text activation '", alias, "' requires method = 'lucene' or ",
+                 "'lucene_llm'.", call. = FALSE)
         }
-        if (identical(method, "lucene") &&
-            !identical(output$kind, "binary")) {
-            stop("Text method 'lucene' produces presence and requires bin_output().",
+        if (!is_text && !is.null(activation$method)) {
+            stop("Activation '", alias, "' uses method = '", activation$method,
+                 "', but its channel is not a text channel.", call. = FALSE)
+        }
+        if (!is_text && !is.null(activation$search_within)) {
+            stop("Activation '", alias,
+                 "' declares search_within, but its channel is not textual.",
                  call. = FALSE)
         }
-        if (identical(method, "lucene_llm") &&
-            (!identical(output$kind, "categorical") ||
-             is.function(output$reduce))) {
-            stop("Text method 'lucene_llm' requires cat_output(levels) without ",
-                 "a payload reducer.", call. = FALSE)
+        if (is_text && is.null(activation$search_within)) {
+            stop("Text activation '", alias,
+                 "' requires search_within = 'PATID' or 'EVTID'.",
+                 call. = FALSE)
+        }
+        needs_chat <- needs_chat || identical(activation$method, "lucene_llm")
+    }
+    needs_chat
+}
+
+.check_llm_grain_collisions <- function(channels, output_group_by) {
+    for (alias in names(channels)) {
+        activation <- channels[[alias]]
+        if (!identical(activation$method, "lucene_llm")) next
+        collisions <- intersect(
+            .response_field_names(activation$response), output_group_by)
+        if (length(collisions)) {
+            stop("LLM activation '", alias,
+                 "' authors the output grain field '", collisions[[1]],
+                 "'; grain keys are engine-owned.", call. = FALSE)
         }
     }
-    any(vapply(text_names, function(name) {
-        identical(channels[[name]]$method, "lucene_llm")
-    }, logical(1)))
+    invisible(TRUE)
+}
+
+# A structured LLM response is a record, not boolean membership. Until authors
+# can declare how a response becomes a hit, accepting every valid response would
+# silently make the combine expression mean something different from its text.
+.check_llm_combine_channels <- function(combine, channels) {
+    if (!inherits(combine, "ee_combiner") ||
+        !identical(combine$kind, "hit_set_expr")) {
+        return(invisible(TRUE))
+    }
+
+    llm_aliases <- names(channels)[vapply(
+        channels,
+        function(channel) identical(channel$method, "lucene_llm"),
+        logical(1))]
+    referenced <- intersect(combine$channels, llm_aliases)
+
+    if (length(referenced)) {
+        stop(
+            "combine_channels() cannot currently use lucene_llm activation(s): ",
+            paste(referenced, collapse = ", "), ". A valid structured response ",
+            "does not define whether the channel hit. Publish the LLM response ",
+            "with from_channel(), or use method = 'lucene' for Lucene-hit ",
+            "membership; an explicit response-to-hit rule such as hit_when is ",
+            "not implemented.",
+            call. = FALSE)
+    }
+
+    invisible(TRUE)
+}
+
+.check_output_channel_type <- function(output, channels, concept) {
+    if (!identical(output$kind, "from_channel")) return(invisible(TRUE))
+    activation <- channels[[output$channel]]
+    definition <- .activation_channel_definition(
+        output$channel, activation, concept)$definition
+    if (identical(activation$method, "lucene_llm")) {
+        if (!is.null(output$reduce)) {
+            stop("from_channel() reduce is for deterministic source columns; ",
+                 "an LLM activation already returns one structured row per task.",
+                 call. = FALSE)
+        }
+        if (!is.null(output$filter_by_qualified) &&
+            !identical(output$filter_by_qualified, output$group_by)) {
+            stop("An LLM response is already one row per output task; in a ",
+                 "fine-to-coarse combine, from_channel() must use ",
+                 "filter_by_qualified = output$group_by ('", output$group_by,
+                 "'), not '", output$filter_by_qualified, "'.", call. = FALSE)
+        }
+        if (!is.null(output$column)) {
+            fields <- .response_field_names(activation$response)
+            if (!is.null(activation$rationale)) fields <- c(fields, "rationale")
+            if (!output$column %in% fields) {
+                stop("from_channel() column '", output$column,
+                     "' is not declared by LLM activation '", output$channel,
+                     "'; available: ", paste(fields, collapse = ", "), ".",
+                     call. = FALSE)
+            }
+        }
+        return(invisible(TRUE))
+    }
+    if (identical(definition$type, "text")) {
+        stop("from_channel() cannot publish retrieval-only text activation '",
+             output$channel, "'; use bin_output() for Lucene membership.",
+             call. = FALSE)
+    }
+    if (is.null(output$column)) {
+        stop("from_channel() must declare column = <prepared-source column> for ",
+             "deterministic activation '", output$channel, "'.", call. = FALSE)
+    }
+    invisible(TRUE)
 }
 
 # A variable_spec is the concrete executable definition of one analytical variable.
 # Reuse is an ordinary R function that calls this constructor.
-variable_spec <- function(name, concept, output_one_row_per = "PATID",
-                           anchor = NULL, window = NULL, channels = list(),
-                           output = NULL, combine_channels = NULL,
-                           combine_at_level = NULL, model = NULL,
-                           model_params = list()) {
-    if (!is.character(name) || length(name) != 1L || !nzchar(name)) {
+variable_spec <- function(name, concept, anchor = NULL, channels = list(),
+                          combine = NULL, output = NULL) {
+    if (!is.character(name) || length(name) != 1L || is.na(name) ||
+        !nzchar(trimws(name))) {
         stop("variable_spec() requires one non-empty name.", call. = FALSE)
     }
     if (!inherits(concept, "ee_concept_spec")) {
@@ -387,89 +516,49 @@ variable_spec <- function(name, concept, output_one_row_per = "PATID",
         stop("variable_spec() output must be created with an output constructor.",
              call. = FALSE)
     }
-    if (!is.null(model) &&
-        (!is.character(model) || length(model) != 1L || is.na(model) ||
-         !nzchar(model))) {
-        stop("variable_spec() model must be one non-empty model name or NULL.",
-             call. = FALSE)
-    }
-    if (is.null(model_params)) model_params <- list()
-    if (!is.list(model_params)) {
-        stop("variable_spec() model_params must be a named list.",
-             call. = FALSE)
-    }
-    if (length(model_params) &&
-        (is.null(names(model_params)) || anyNA(names(model_params)) ||
-         any(!nzchar(names(model_params))) || anyDuplicated(names(model_params)))) {
-        stop("variable_spec() model_params must be a named list with unique ",
-             "non-empty names.", call. = FALSE)
-    }
-    if (is.null(model) && length(model_params)) {
-        stop("variable_spec() model_params require model = <model name>.",
-             call. = FALSE)
-    }
     if (!is.null(anchor) && !inherits(anchor, "ee_index_event") &&
         (!is.character(anchor) || length(anchor) != 1L || !nzchar(anchor))) {
-        stop("variable_spec() anchor must be NULL, one task column, or index_event().",
+        stop("variable_spec() anchor must be NULL, one cohort date column, or index_event().",
              call. = FALSE)
     }
-    # output_one_row_per is the OUTPUT GRAIN: the concrete task column one output row
-    # represents ("PATID" = one row per patient, "EVTID" = one row per stay). It is
-    # the group-by the engine honors (the task universe is supplied at this grain) and
-    # what run_variable checks the tasks frame against. NULL from a template default
-    # coalesces to patient grain.
-    if (is.null(output_one_row_per)) output_one_row_per <- "PATID"
-    if (!is.character(output_one_row_per) || length(output_one_row_per) != 1L ||
-        !nzchar(output_one_row_per)) {
-        stop("variable_spec() output_one_row_per must be one non-empty column name ",
-             "(e.g. \"PATID\" or \"EVTID\").", call. = FALSE)
-    }
-    normalized <- .normalize_variable_channels(channels, concept)
-    channels <- normalized$activations
-    inline_channels <- normalized$inline
+    channels <- .normalize_variable_channels(channels, concept)
+    .check_text_channel_uses(channels, concept)
+    .check_llm_grain_collisions(channels, output$group_by)
 
-    unknown <- setdiff(names(channels),
-                       c(names(concept$channels), names(inline_channels)))
-    if (length(unknown)) {
-        stop("Selected channel(s) not declared by concept_spec or inline: ",
-             paste(unknown, collapse = ", "), call. = FALSE)
-    }
-    catalog <- c(concept$channels, inline_channels)
-    needs_chat <- .check_text_channel_uses(channels, catalog, output)
-    if (!is.null(output$rationale) && !needs_chat) {
-        stop("cat_output() rationale requires a selected text channel with ",
-             "method = 'lucene_llm'.", call. = FALSE)
-    }
-    if (!is.null(model) && !needs_chat) {
-        stop("variable_spec() model has no effect without a selected ",
-             "method = 'lucene_llm' channel.",
-             call. = FALSE)
+    windowed <- names(channels)[vapply(
+        channels, function(x) !is.null(x$window), logical(1))]
+    if (length(windowed) && is.null(anchor)) {
+        stop("A channel window requires an explicit variable anchor cohort column ",
+             "or index_event(); activation(s): ",
+             paste(windowed, collapse = ", "), ".", call. = FALSE)
     }
 
-    window <- .as_window(window)
-    if (!is.null(window) && is.null(anchor)) {
-        stop("A relative window requires an explicit anchor task column or ",
-             "index_event().", call. = FALSE)
+    if (!is.null(combine) && !inherits(combine, "ee_combiner")) {
+        stop("variable_spec() combine must be NULL or created with ",
+             "combine_channels(expr, by).", call. = FALSE)
     }
-
-    combine <- .as_combiner(combine_channels)   # bare string -> hit_set_expr()
     combine <- .resolve_variable_combine(combine, names(channels), output)
-    combine_at_level <- .check_combine_at_level(combine_at_level, combine,
-                                                output_one_row_per)
-    # Payload first: values_from is normalized there (defaults to the sole
-    # channel), and the expression check exempts the payload channel from the
-    # dead-weight rule -- a payload-only channel is legitimate (section 14.9).
-    output <- .check_output_payload(output, names(channels))
+    output <- .check_output_contract(output, names(channels), combine)
+    .check_output_channel_type(output, channels, concept)
     .check_expr_channels(combine, names(channels),
-                         payload_channel = output$values_from)
+                         payload_channel = output$channel)
+    .check_llm_combine_channels(combine, channels)
+
+    event_search <- names(channels)[vapply(
+        channels,
+        function(x) identical(x$search_within, "EVTID"),
+        logical(1))]
+    if (length(event_search) &&
+        !identical(output$group_by, "EVTID") &&
+        !inherits(anchor, "ee_index_event")) {
+        stop("search_within = 'EVTID' requires EVTID-bearing tasks via ",
+             "output group_by = 'EVTID' or index_event(); activation(s): ",
+             paste(event_search, collapse = ", "), ".", call. = FALSE)
+    }
 
     .new_spec(
-        list(name = name, concept = concept, output_one_row_per = output_one_row_per,
-              anchor = anchor,
-              window = window, channels = channels,
-              inline_channels = inline_channels, output = output,
-              combine = combine, combine_at_level = combine_at_level,
-              model = model, model_params = model_params),
+        list(name = name, concept = concept, anchor = anchor,
+             channels = channels, combine = combine, output = output),
         "ee_variable_spec")
 }
 
@@ -499,10 +588,7 @@ inspect.ee_channel <- function(x, ...) {
              source = x$source,
              selector = x$selector,
              native_grain = x$native_grain,
-             required_roles = x$required_roles,
-              evidence_scope = x$evidence_scope,
-              group_at_level = x$group_at_level,
-              keep_group_when = x$keep_group_when),
+             required_roles = x$required_roles),
         "ee_channel_inspection")
 }
 
@@ -522,14 +608,6 @@ inspect.default <- function(x, ...) {
     if (identical(selector$kind, "analyte")) {
         cat(indent, "analyte: ", paste(selector$codes, collapse = ", "), "\n",
             sep = "")
-        if (!is.null(selector$keep_when)) {
-            cat(indent, "rule: ", .one_line(selector$keep_when), "\n", sep = "")
-        } else if (!is.null(selector$gt) || !is.null(selector$lt)) {
-            bounds <- c(
-                if (!is.null(selector$gt)) paste0("value > ", selector$gt),
-                if (!is.null(selector$lt)) paste0("value < ", selector$lt))
-            cat(indent, "rule: ", paste(bounds, collapse = " and "), "\n", sep = "")
-        }
     } else if (identical(selector$kind, "code")) {
         cat(indent, "codes: ", paste(selector$codes, collapse = ", "),
             " (", selector$match, ")\n", sep = "")
@@ -543,14 +621,9 @@ inspect.default <- function(x, ...) {
     invisible(NULL)
 }
 
-.print_evidence_scope <- function(evidence_scope, indent = "    ") {
-    if (is.null(evidence_scope)) return(invisible(NULL))
-    scope <- if (identical(evidence_scope, "event")) {
-        "same PATID + EVTID"
-    } else {
-        "same PATID"
-    }
-    cat(indent, "scope: ", scope, "\n", sep = "")
+.print_search_within <- function(search_within, indent = "    ") {
+    if (is.null(search_within)) return(invisible(NULL))
+    cat(indent, "search within: ", search_within, "\n", sep = "")
     invisible(NULL)
 }
 
@@ -563,7 +636,6 @@ print.ee_concept_spec <- function(x, ...) {
         cat("    type: ", channel$type, "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
-        .print_evidence_scope(channel$evidence_scope)
     }
     invisible(x)
 }
@@ -572,92 +644,72 @@ print.ee_variable_spec <- function(x, ...) {
     resolved <- resolve_variable_spec(x)
     cat("Study variable: ", resolved$name, "\n", sep = "")
     cat("Concept: ", resolved$concept, "\n", sep = "")
-    cat("Output: ", resolved$output$kind, ", one row per ",
-        resolved$output_one_row_per, "\n", sep = "")
-    if (!is.null(resolved$output$description)) {
-        cat("Output description: ", resolved$output$description, "\n",
-            sep = "")
-    }
-    if (!is.null(resolved$output$rationale)) {
-        cat("Rationale: ", resolved$output$rationale, "\n", sep = "")
-    }
-    if (!is.null(resolved$model)) {
-        cat("Model: ", resolved$model, "\n", sep = "")
-    }
-    if (is.null(resolved$window)) {
-        cat("Window: whole available history at the declared grain\n")
-    } else {
-        cat("Window: ", resolved$window$from_days, " to ",
-            resolved$window$to_days, " days from ",
-            if (is.character(resolved$anchor)) resolved$anchor else "index event",
-            "\n", sep = "")
-    }
     cat("\nChannels:\n")
     for (name in names(resolved$channels)) {
         channel <- resolved$channels[[name]]
         cat("  ", name, "\n", sep = "")
+        cat("    origin: ", channel$origin_kind, ":", channel$origin_name,
+            "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
-        .print_evidence_scope(channel$evidence_scope)
+        if (!is.null(channel$filter_rows)) {
+            cat("    filter rows: ", .one_line(channel$filter_rows), "\n", sep = "")
+        }
+        if (!is.null(channel$filter_groups)) {
+            cat("    intermediate filter groups by ", channel$group_by, ": ",
+                .one_line(channel$filter_groups), "\n", sep = "")
+        }
+        .print_search_within(channel$search_within)
+        if (!is.null(channel$window)) {
+            cat("    window: ", channel$window$from_days, " to ",
+                channel$window$to_days, " days from ",
+                if (is.character(resolved$anchor)) resolved$anchor else "index event",
+                "\n", sep = "")
+        }
         if (!is.null(channel$method)) {
             cat("    method: ", channel$method, "\n", sep = "")
         }
         if (identical(channel$method, "lucene_llm")) {
+            cat("    declared model: ",
+                channel$model %||% "run_variable(chat=) override required",
+                "\n", sep = "")
             candidate_rule <- if (is.null(channel$max_candidates)) {
                 "all matches"
             } else {
                 paste("first", channel$max_candidates, "matches")
             }
             cat("    candidates after Lucene: ", candidate_rule, "\n", sep = "")
-            prompt <- gsub("\\s+", " ", channel$prompt)
-            cat("    llm prompt: ", trimws(prompt), "\n", sep = "")
+            if (!is.null(channel$user_prompt)) {
+                prompt <- gsub("\\s+", " ", channel$user_prompt)
+                cat("    user prompt prefix: ", trimws(prompt), "\n", sep = "")
+            }
             cat("    system prompt: ",
                 if (is.null(channel$system_prompt)) "package default" else "override",
                 "\n", sep = "")
-            cat("    response: categorical value + evidence ids ",
-                "(engine generated)\n", sep = "")
+            cat("    response fields: ",
+                paste(.response_field_names(channel$response), collapse = ", "),
+                if (is.null(channel$rationale)) "" else ", rationale",
+                " (+ evidence_ids for audit)\n", sep = "")
         }
     }
-    combine <- resolved$combine_rule
-    if (length(combine) == 1L && !is.na(combine)) {
-        cat("\nCombine: ", combine, "\n", sep = "")
+    combine <- resolved$combine
+    if (inherits(combine, "ee_combiner") && !is.null(combine$expr)) {
+        cat("\nCombine: ", combine$expr, "\n", sep = "")
+        cat("Combine by: ", resolved$combine$by, "\n", sep = "")
     }
+    cat("Output: ", resolved$output$kind, "\n", sep = "")
+    if (identical(resolved$output$kind, "from_channel")) {
+        cat("Payload alias: ", resolved$output$channel, "\n", sep = "")
+        cat("Payload column: ", resolved$output$column %||% "all LLM fields",
+            "\n", sep = "")
+        if (!is.null(resolved$output$filter_by_qualified)) {
+            cat("Filter by qualified: ",
+                resolved$output$filter_by_qualified, "\n", sep = "")
+        }
+    }
+    cat("Group by: ", resolved$output$group_by, "\n", sep = "")
+    if (is.function(resolved$output$reduce)) cat("Reduce: configured\n")
     invisible(x)
-}
-
-.inherit_from_activation <- function(channel_def, channel_use, field,
-                                     channel_field = field) {
-    value <- channel_use[[field]]
-    source <- "activation"
-    if (is.null(value)) {
-        value <- channel_def[[channel_field]]
-        source <- "channel"
-    }
-    if (is.null(value)) {
-        value <- NULL
-        source <- "none"
-    }
-    list(value = value, source = source)
-}
-
-.extend_analyte_selector <- function(selector, keep_when, channel_name) {
-    if (is.null(keep_when)) return(selector)
-    if (is.null(selector) || !identical(selector$kind, "analyte")) {
-        stop("Channel '", channel_name,
-             "': use_channel(keep_when =) can extend only an inherited analyte ",
-             "selector.", call. = FALSE)
-    }
-    if (!is.null(selector$gt) || !is.null(selector$lt) ||
-        !is.null(selector$keep_when)) {
-        stop("Channel '", channel_name,
-             "' already carries a value rule; keep_when cannot silently replace ",
-             "it.", call. = FALSE)
-    }
-    selector$gt <- NULL
-    selector$lt <- NULL
-    selector$unit <- selector$unit %||% NULL
-    selector$keep_when <- keep_when
-    selector
 }
 
 .check_channel_required_roles <- function(channel) {
@@ -682,40 +734,45 @@ print.ee_variable_spec <- function(x, ...) {
     invisible(TRUE)
 }
 
-# `catalog` is the variable's full channel catalog: concept channels plus any
-# variable-local inline definitions (they resolve identically; an inline definer
-# binds wherever it appears, DESIGN section 5).
-.resolve_channel_activation <- function(name, catalog, channel_use) {
-    channel_def <- catalog[[name]]
-    if (is.null(channel_def)) {
-        stop("Cannot resolve unknown channel: ", name, call. = FALSE)
+.resolve_channel_activation <- function(name, concept, channel_use) {
+    origin <- .activation_channel_definition(name, channel_use, concept)
+    channel_def <- origin$definition
+    original_selector <- channel_def$selector
+    selector <- channel_use$selector %||% original_selector
+    expected_selector <- switch(
+        channel_def$type,
+        code = "code", act = "code", lab = "analyte",
+        text = "lucene_query", doc = "doc_meta")
+    if (is.null(expected_selector) || !identical(selector$kind, expected_selector)) {
+        stop("Activation '", name, "' selector kind '", selector$kind,
+             "' is incompatible with channel type '", channel_def$type, "'.",
+             call. = FALSE)
     }
-    # The selector inherits like every other activation field (DESIGN section 14.3): a
-    # use_channel(selector = ...) override IS the executed definition, so the
-    # resolved view -- and the provenance built from it -- must record it, not the
-    # concept baseline.
-    selector <- .inherit_from_activation(channel_def, channel_use, "selector")
-    selector$value <- .extend_analyte_selector(
-        selector$value, channel_use$keep_when, name)
-    if (!is.null(channel_use$keep_when)) {
-        selector$source <- "channel + activation keep_when"
-    }
-
     .new_spec(
         list(
             name = name,
+            origin_name = origin$origin_name,
+            origin_kind = origin$origin_kind,
             type = channel_def$type,
             source = channel_def$source,
-            selector = selector$value,
-            selector_source = selector$source,
+            original_selector = original_selector,
+            selector = selector,
+            selector_source = if (is.null(channel_use$selector))
+                origin$origin_kind else "activation",
             native_grain = channel_def$native_grain,
             required_roles = channel_def$required_roles,
-            evidence_scope = channel_def$evidence_scope,
             produces = channel_def$produces,
-            group_at_level = channel_def$group_at_level,
-            keep_group_when = channel_def$keep_group_when,
+            filter_rows = channel_use$filter_rows,
+            group_by = channel_use$group_by,
+            filter_groups = channel_use$filter_groups,
+            search_within = channel_use$search_within,
+            window = channel_use$window,
             method = channel_use$method,
-            prompt = channel_use$prompt,
+            model = channel_use$model,
+            model_params = channel_use$model_params,
+            response = channel_use$response,
+            rationale = channel_use$rationale,
+            user_prompt = channel_use$user_prompt,
             system_prompt = channel_use$system_prompt,
             max_candidates = channel_use$max_candidates),
         "ee_resolved_channel")
@@ -726,34 +783,20 @@ resolve_variable_spec <- function(variable) {
     if (!inherits(variable, "ee_variable_spec")) {
         stop("resolve_variable_spec() requires a variable_spec().", call. = FALSE)
     }
-    catalog <- c(variable$concept$channels, variable$inline_channels)
     resolved_channels <- lapply(
         names(variable$channels),
         function(name) .resolve_channel_activation(
-            name, catalog, variable$channels[[name]]))
+            name, variable$concept, variable$channels[[name]]))
     names(resolved_channels) <- names(variable$channels)
     invisible(lapply(resolved_channels, .check_channel_required_roles))
-
-    combine_rule <- if (inherits(variable$combine, "ee_combiner") &&
-                        !is.null(variable$combine$expr)) {
-        variable$combine$expr
-    } else {
-        NA_character_
-    }
 
     .new_spec(
         list(
             name = variable$name,
             concept = variable$concept$name,
-            output_one_row_per = variable$output_one_row_per,
             anchor = variable$anchor,
-            window = variable$window,
-            output = variable$output,
+            channels = resolved_channels,
             combine = variable$combine,
-            combine_rule = combine_rule,
-            combine_at_level = variable$combine_at_level,
-            model = variable$model,
-            model_params = variable$model_params,
-            channels = resolved_channels),
+            output = variable$output),
         "ee_resolved_variable_spec")
 }

@@ -22,6 +22,7 @@ Imports:
     ellmer (>= 0.4.1),
     redsan (>= 0.1.1),
     rlang,
+    S7,
     stringr,
     tibble,
     tidyr

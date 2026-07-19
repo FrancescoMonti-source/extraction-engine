@@ -3,6 +3,7 @@
 ^\.claude$
 ^\.codex$
 ^\.Rhistory$
+^\.vscode$
 ^outputs$
 ^scripts$
 ^HANDOFF.*$

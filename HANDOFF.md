@@ -1334,3 +1334,147 @@ declared no blocker to promotion for extractionengine `535381a` or redsan `ab6fb
 The pre-existing experimental API residue was unchanged and was judged non-blocking;
 cleaning it remains outside this migration. No patient data, real model call, network
 download, clinical concept, or scientific correctness judgment entered the work.
+
+## Relational concept -> activation -> output contract -- superseded WIP (2026-07-18)
+
+The July 14 lane-typing direction was superseded before release. At this
+intermediate stage, the breaking API separated three responsibilities:
+`concept_spec()` locates source rows, mandatory `use_channel(channel =)` defines
+their variable-local use, and `from_channel()` selects the exact prepared-source
+column and optional reducer.
+`analyte()` now selects only `TYPEANA`; typed analyte selectors, inferred result
+lanes, the dual-lane error, legacy output constructors, and implicit payload
+routing are removed. A biology row may retain `NUMRES`, `STRRES`, and `DATEXAM` together;
+the explicit output column makes the read unambiguous.
+
+Activation aliases are first-class audit coordinates. `filter_rows`, `group_by`,
+and `filter_groups` are variable-local row/group operations. A relative `window`
+also belongs to the activation while `anchor` remains the shared task clock. Text
+retrieval declares `search_within`, independently of `combine_by`, output
+`restrict_to_combined_by`, and `output_one_row_per`.
+
+The combine is a qualifying relation keyed by `combine_by`: a finer relation is
+projected existentially, the same key matches directly, and a coarser relation is
+broadcast explicitly to output units. A payload restriction is a `semi_join()`
+on either the combine key or the output key and is mandatory when those keys
+differ; it never creates an intermediate aggregation. Native evidence stay
+identity is preserved as `source_EVTID` when public `EVTID` denotes a different
+target stay. An LLM response is one row per output task, so cross-grain LLM
+payloads currently support only output-key restriction; lower-key restriction
+would require per-key calls.
+
+LLM activations accept a native `ellmer::TypeObject`. Field-specific instructions
+live in its descriptions; the engine owns the general system prompt, target and
+excerpt user message, dynamic evidence enum, and optional rationale field.
+Omitted/`TRUE` rationale uses the generic description, a string overrides it, and
+`FALSE`/`NULL` disables it. `chat_structured()` remains the structured-output
+boundary and a whole response frame is published by `from_channel(alias)`.
+
+This entry records an intermediate contract and supersedes only the July 14 WIP
+entry above it in history. It is itself superseded by the July 19 consolidation
+below; removed names in this section are historical, not current authoring syntax.
+
+**Implementation and verification.** The dirty WIP was consolidated in place;
+no reset, compatibility shim, commit, or merge was performed. The suite contains
+exactly three sentinel `test_that()` blocks and finishes with 28 assertions, zero
+failures, warnings, or skips. `R CMD build` produced
+`extractionengine_0.1.0.tar.gz`; the built-tarball
+`R CMD check --no-manual` finished with `Status: OK`, and `git diff --check` is
+clean. The unrestricted manual-PDF check reached the documentation and test gates
+but could not run `pdflatex`, which is not installed on this machine.
+
+That verified tarball was installed in the local R 4.5 library. The Desktop demo
+then loaded the installed package and completed its deterministic path for three
+stays with `options(extractionengine.demo_llm = FALSE)`. The real Ollama call
+remains intentionally disabled pending the owner's interactive validation.
+
+## Activation-owned models and compact audit envelope -- superseded WIP (2026-07-18)
+
+The ongoing dirty-WIP cleanup moves `model` and `model_params` from
+`variable_spec()` to each `lucene_llm` `use_channel()`. This makes model choice
+part of the activation's LLM configuration and permits different activations in
+one variable to use different transports. `run_variable(chat =)` remains a
+single global test/debug override; task calls still use isolated Chat clones.
+
+The public run envelope is now limited to `values`, `channel_status`, `evidence`,
+and `audit`. Evidence exposes one canonical `evidence_ref`, optional
+prompt-local `snippet_id`, and publishes any native evidence `EVTID` as
+`source_EVTID`; it can equal the target under event-scoped retrieval. Internal
+`source_row_id` and `hit_ref` remain in `audit$internal$channel_intermediates`.
+Audit metadata is nested: long staged
+`counts`, `llm_calls`, the resolved `execution_manifest`, and, for combines,
+`overlap` and `combine_keys`. The executable `resolved_spec` and raw
+`channel_intermediates` are explicitly separated under `audit$internal`.
+
+This slice retains exactly three sentinel `test_that()` blocks (45 expectations).
+`testthat::test_local(".")`, `R CMD build`, the built-tarball
+`R CMD check --no-manual` (`Status: OK`), and `git diff --check` all pass. The
+verified tarball is installed in the local R 4.5 library; the Desktop demo loads
+that installation and completes its deterministic path for three stays with the
+LLM disabled. The real Ollama call remains for the owner's interactive check.
+No compatibility shim, commit, or merge is part of this WIP.
+
+## Self-contained combine, output grain, and canonical naming -- implemented (2026-07-19)
+
+The approved final consolidation replaces the separate
+`combine_channels`/`combine_by` and `output_one_row_per` axes with two complete
+contracts. `variable_spec(name, concept, anchor, channels, combine, output)` now
+receives `combine = combine_channels(expr, by)`, while `bin_output(group_by)` or
+`from_channel(channel, column, filter_by_qualified, group_by, reduce)` owns the
+final output grain. `name` remains the explicit canonical variable identifier;
+there is no PATID default and no compatibility shim for the removed signatures.
+The public hit-set authoring surface is the single boolean expression string in
+`combine_channels()`; `hit_set_expr()`, `any_positive()`, and
+`hit_set_difference()` are no longer exported.
+
+Cross-grain payload execution is now explicit and ordered:
+`combine by -> filter by qualified -> group by -> reduce`.
+`filter_by_qualified` is admitted and required only when the combine grain is
+finer than the output grain. It can retain either rows of qualifying subunits
+(`combine$by`) or all rows of qualified final units (`output$group_by`); it must
+be `NULL` without a combine, at equal grain, and for coarse-to-fine broadcast.
+The reducer then receives non-missing raw values once per final group, without
+implicit intermediate aggregation. An LLM payload in this fine-to-coarse case
+supports only output-grain filtering and still forbids `reduce`.
+
+`use_channel(group_by =)` remains deliberately different: it is only the
+intermediate grouping paired with `filter_groups`, never the published grain.
+`inspect()` and the execution manifest expose the combine, qualified-row filter,
+terminal grouping, and reducer as distinct stages. `audit$combine_keys` retains
+the qualifying relation at `combine$by`.
+
+`run_protocol()` accepts an entirely unnamed list or an entirely named list whose
+names exactly match each `spec$name` in order. Duplicate canonical names,
+partially named lists, and discordant external names fail; returned results are
+always named from `spec$name`, so call sites no longer repeat `var = var`.
+
+All README, design-contract, reference-manual, and Desktop-demo examples use only
+this new surface. The README includes the equivalent relational data flow:
+`semi_join() -> group_by() -> summarise()`. Vignette infrastructure remains a
+later tranche.
+
+Final verification retains exactly three sentinel `test_that()` blocks with 49
+passing expectations. `testthat::test_local(".")`, `R CMD build`, the built-tarball
+`R CMD check --no-manual` (`Status: OK`), and `git diff --check` all pass. The
+unrestricted manual-PDF check reaches all code, documentation, and test gates but
+cannot create the PDF because `pdflatex` is unavailable on this machine. The
+verified tarball is installed in the local R 4.5 library; the deterministic
+Desktop demo completes for three stays with the LLM disabled, and the owner has
+subsequently inspected and validated the interactive demo results. The
+consolidation is recorded as one direct commit on `master`; no PR or merge is
+required.
+
+### Deferred: lazy execution of payload-only LLM activations
+
+Today every activation is executed for every output task before the combine is
+evaluated. Consequently, an LLM activation used only by `from_channel()` can be
+called even for units later excluded by the combine; its authored fields are then
+masked to `NA`, while the call and its evidence remain observable in the audit.
+
+A future tranche should split qualification from payload execution: run the
+channels referenced by `combine_channels()` first, derive the qualified output
+tasks, and invoke a payload-only LLM activation only for those tasks. It must also
+define an explicit audit state for payload calls skipped by the gate and ensure
+that their nonexistent evidence is not confused with retrieval failure. Preserve
+the current published-value semantics and cover the change inside the existing
+LLM sentinel rather than adding another `test_that()` block.

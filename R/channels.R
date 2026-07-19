@@ -3,7 +3,7 @@
 .channel_produces <- c(
     code = "code_hit",
     act = "act_hit",
-    lab = "numeric_measurement",
+    lab = "lab_rows",
     text = "text_candidate",
     doc = "doc_hit")
 
@@ -30,9 +30,7 @@
 }
 
 channel <- function(source, selector, type,
-                    native_grain = NA_character_, required_roles = character(),
-                    evidence_scope = NULL, group_at_level = NULL,
-                    keep_group_when = NULL) {
+                    native_grain = NA_character_, required_roles = character()) {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
         stop("source must be one non-empty string.", call. = FALSE)
     }
@@ -54,31 +52,6 @@ channel <- function(source, selector, type,
         any(!nzchar(required_roles))) {
         stop("required_roles must contain non-empty role names.", call. = FALSE)
     }
-    if (!is.null(evidence_scope) &&
-        (!is.character(evidence_scope) || length(evidence_scope) != 1L ||
-         is.na(evidence_scope) ||
-         !evidence_scope %in% c("patient", "event"))) {
-        stop("evidence_scope must be 'patient', 'event', or NULL.",
-             call. = FALSE)
-    }
-    has_level <- !is.null(group_at_level)
-    has_predicate <- !is.null(keep_group_when)
-    if (has_level != has_predicate) {
-        stop(if (has_level)
-                 "group_at_level without keep_group_when is dead weight."
-             else "keep_group_when needs group_at_level.", call. = FALSE)
-    }
-    if (has_level) {
-        if (!is.character(group_at_level) || length(group_at_level) != 1L ||
-            !group_at_level %in% c("PATID", "EVTID", "ELTID")) {
-            stop("group_at_level must be PATID, EVTID, or ELTID.",
-                 call. = FALSE)
-        }
-        if (!is.function(keep_group_when)) {
-            stop("keep_group_when must be a plain function.", call. = FALSE)
-        }
-    }
-
     .new_spec(
         list(
             type = type,
@@ -86,66 +59,40 @@ channel <- function(source, selector, type,
             selector = selector,
             produces = unname(.channel_produces[[type]]),
             native_grain = native_grain,
-            required_roles = unique(required_roles),
-            evidence_scope = evidence_scope,
-            group_at_level = group_at_level,
-            keep_group_when = keep_group_when),
+            required_roles = unique(required_roles)),
         "ee_channel")
 }
 
 code_channel <- function(source, selector, native_grain = NA_character_,
-                         required_roles = character(), evidence_scope = NULL,
-                         group_at_level = NULL, keep_group_when = NULL) {
+                         required_roles = character()) {
     .check_channel_selector(selector, "code", "code")
-    channel(source, selector, "code", native_grain, required_roles,
-            evidence_scope,
-            group_at_level = group_at_level,
-            keep_group_when = keep_group_when)
+    channel(source, selector, "code", native_grain, required_roles)
 }
 
 act_channel <- function(source, selector, native_grain = NA_character_,
-                        required_roles = character(), evidence_scope = NULL,
-                        group_at_level = NULL, keep_group_when = NULL) {
+                        required_roles = character()) {
     .check_channel_selector(selector, "code", "act")
-    channel(source, selector, "act", native_grain, required_roles,
-            evidence_scope,
-            group_at_level = group_at_level,
-            keep_group_when = keep_group_when)
+    channel(source, selector, "act", native_grain, required_roles)
 }
 
-lab_channel <- function(source, selector, native_grain = NA_character_,
-                        required_roles = character(), evidence_scope = NULL,
-                        group_at_level = NULL, keep_group_when = NULL) {
+lab_channel <- function(source = "biology", selector,
+                        native_grain = NA_character_,
+                        required_roles = character()) {
     .check_channel_selector(selector, "analyte", "lab")
-    channel(source, selector, "lab", native_grain, required_roles,
-            evidence_scope,
-            group_at_level = group_at_level,
-            keep_group_when = keep_group_when)
+    channel(source, selector, "lab", native_grain, required_roles)
 }
 
-text_channel <- function(selector, evidence_scope, source = "documents",
+text_channel <- function(selector, source = "documents",
                          native_grain = NA_character_,
-                         required_roles = character(),
-                         group_at_level = NULL, keep_group_when = NULL) {
-    if (missing(evidence_scope)) {
-        stop("text_channel() requires evidence_scope = 'patient' or 'event'.",
-             call. = FALSE)
-    }
+                         required_roles = character()) {
     .check_channel_selector(selector, "lucene_query", "text")
-    channel(source, selector, "text", native_grain, required_roles,
-            evidence_scope,
-            group_at_level = group_at_level,
-            keep_group_when = keep_group_when)
+    channel(source, selector, "text", native_grain, required_roles)
 }
 
 doc_channel <- function(source, selector, native_grain = NA_character_,
-                        required_roles = character(), evidence_scope = NULL,
-                        group_at_level = NULL, keep_group_when = NULL) {
+                        required_roles = character()) {
     .check_channel_selector(selector, "doc_meta", "doc")
-    channel(source, selector, "doc", native_grain, required_roles,
-            evidence_scope,
-            group_at_level = group_at_level,
-            keep_group_when = keep_group_when)
+    channel(source, selector, "doc", native_grain, required_roles)
 }
 
 .check_codes <- function(codes, what) {
@@ -196,45 +143,4 @@ doc_meta <- function(...) {
 analyte <- function(codes) {
     .new_spec(list(kind = "analyte", codes = .check_codes(codes, "analyte()")),
               "ee_selector")
-}
-
-analyte_value <- function(codes, gt = NULL, lt = NULL, unit = NULL,
-                          keep_when = NULL) {
-    for (bound in c("gt", "lt")) {
-        value <- get(bound)
-        if (!is.null(value) &&
-            (!is.numeric(value) || length(value) != 1L || is.na(value))) {
-            stop("analyte_value() `", bound, "` must be one number.",
-                 call. = FALSE)
-        }
-    }
-    if (!is.null(unit) &&
-        (!is.character(unit) || length(unit) != 1L || is.na(unit) || !nzchar(unit))) {
-        stop("analyte_value() `unit` must be one non-empty string.",
-             call. = FALSE)
-    }
-    if (!is.null(keep_when)) {
-        if (!is.function(keep_when)) {
-            stop("analyte_value() `keep_when` must be a function of row columns.",
-                 call. = FALSE)
-        }
-        if (!is.null(gt) || !is.null(lt)) {
-            stop("analyte_value() takes EITHER fixed bounds (gt/lt) OR ",
-                 "keep_when, not both.",
-                 call. = FALSE)
-        }
-        if (!length(formals(keep_when))) {
-            stop("analyte_value() `keep_when` must name at least one row column.",
-                 call. = FALSE)
-        }
-    } else if (is.null(gt) && is.null(lt)) {
-        stop("analyte_value() needs gt/lt or keep_when; use analyte() otherwise.",
-             call. = FALSE)
-    }
-    .new_spec(
-        list(kind = "analyte", codes = .check_codes(codes, "analyte_value()"),
-             gt = if (is.null(gt)) NULL else as.numeric(gt),
-             lt = if (is.null(lt)) NULL else as.numeric(lt),
-             unit = unit, keep_when = keep_when),
-        "ee_selector")
 }

@@ -1,16 +1,15 @@
 # =============================================================================
 # extract.R -- reusable structured extraction core (integrated baseline)
 # -----------------------------------------------------------------------------
-# Generic plumbing only. A study author writes a prompt directly in use_channel();
-# the engine compiles the declared output into the runtime schema, prompt envelope,
-# result adapter, evidence checks, and provenance records.
+# Generic plumbing only. A study author declares an ellmer TypeObject on a
+# use_channel(); the engine adds its audit fields, prompt envelope, evidence
+# checks, and provenance records.
 # =============================================================================
 
 # Single private runtime bundle for the executor. It is deliberately not exported:
 # ordinary variable specs never write type builders, prompt builders, or parsers.
-.llm_definition <- function(name, system_prompt, type_builder, prompt_builder,
-                            parser, summary_field = NULL,
-                            summary_required = FALSE) {
+.llm_definition <- function(name, system_prompt, response, type_builder,
+                            prompt_builder, parser, value_prototype) {
     if (!is.character(name) || length(name) != 1L || !nzchar(name) ||
         !is.character(system_prompt) || length(system_prompt) != 1L ||
         !nzchar(system_prompt)) {
@@ -24,16 +23,80 @@
                  call. = FALSE)
         }
     }
-    if (!is.logical(summary_required) || length(summary_required) != 1L ||
-        is.na(summary_required)) {
-        stop("summary_required must be TRUE or FALSE.", call. = FALSE)
+    if (!inherits(response, "ellmer::TypeObject")) {
+        stop("Internal LLM definitions require an ellmer TypeObject response.",
+             call. = FALSE)
+    }
+    if (!is.data.frame(value_prototype) || nrow(value_prototype) != 0L) {
+        stop("Internal LLM value_prototype must be a zero-row data frame.",
+             call. = FALSE)
     }
     structure(
         list(name = name, system_prompt = system_prompt,
+             response = response, value_prototype = value_prototype,
              type_builder = type_builder, prompt_builder = prompt_builder,
-             parser = parser, summary_field = summary_field,
-             summary_required = summary_required),
+             parser = parser),
         class = c("ee_llm_definition", "list"))
+}
+
+.llm_type_object_parts <- function(response) {
+    if (!inherits(response, "ellmer::TypeObject")) {
+        stop("use_channel() response must be an ellmer::TypeObject.",
+             call. = FALSE)
+    }
+    parts <- S7::props(response)
+    properties <- parts$properties
+    property_names <- names(properties)
+    if (!is.list(properties) || is.null(property_names) ||
+        anyNA(property_names) || any(!nzchar(property_names)) ||
+        anyDuplicated(property_names)) {
+        stop("The response TypeObject must have uniquely named properties.",
+             call. = FALSE)
+    }
+    collisions <- intersect(property_names, .LLM_RESERVED_RESPONSE_FIELDS)
+    if (length(collisions)) {
+        stop("The response TypeObject uses engine-reserved field name(s): ",
+             paste(collisions, collapse = ", "), ".", call. = FALSE)
+    }
+    list(
+        description = parts$description,
+        required = parts$required,
+        properties = properties,
+        additional_properties = parts$additional_properties)
+}
+
+.rebuild_llm_type_object <- function(parts, properties) {
+    do.call(
+        ellmer::type_object,
+        c(list(.description = parts$description), properties,
+          list(.required = parts$required,
+               .additional_properties = parts$additional_properties)))
+}
+
+.llm_field_prototype <- function(type) {
+    parts <- S7::props(type)
+    if (inherits(type, "ellmer::TypeBasic")) {
+        return(switch(
+            parts$type,
+            string = character(),
+            integer = integer(),
+            number = double(),
+            boolean = logical(),
+            list()))
+    }
+    if (inherits(type, "ellmer::TypeEnum")) {
+        values <- parts$values
+        return(values[FALSE])
+    }
+    # Arrays, nested objects, ignored fields, and custom JSON-schema fields are
+    # represented as list columns so their R structure is preserved intact.
+    list()
+}
+
+.llm_value_prototype <- function(properties, rationale_description = NULL) {
+    columns <- lapply(properties, .llm_field_prototype)
+    if (!is.null(rationale_description)) columns$rationale <- character()
+    tibble::as_tibble(columns)
 }
 
 scalar_present <- function(x) {
@@ -44,6 +107,72 @@ scalar_present <- function(x) {
 format_snippet_block <- function(task_snippets) {
     paste(sprintf("%s: %s", task_snippets$snippet_id, task_snippets$snippet_text),
           collapse = "\n\n")
+}
+
+format_task_target <- function(task_row, group_by) {
+    declared <- if (identical(group_by, "PATID")) {
+        "PATID"
+    } else {
+        unique(c("PATID", group_by))
+    }
+    keys <- intersect(declared, names(task_row))
+    if (!length(keys)) keys <- intersect("task_id", names(task_row))
+    if (!length(keys)) return("(cible courante)")
+    values <- vapply(keys, function(key) {
+        value <- task_row[[key]]
+        if (!length(value) || all(is.na(value))) "NA" else paste(value, collapse = ", ")
+    }, character(1))
+    paste(sprintf("%s: %s", keys, values), collapse = "\n")
+}
+
+.llm_missing_value <- function(type) {
+    prototype <- .llm_field_prototype(type)
+    if (is.list(prototype)) return(list(NULL))
+    prototype[NA_integer_]
+}
+
+.llm_result_column <- function(result, name, type) {
+    type_parts <- S7::props(type)
+    present <- name %in% names(result) && !is.null(result[[name]])
+    if (!present) {
+        if (isTRUE(type_parts$required)) {
+            stop("Structured response is missing required field '", name, "'.",
+                 call. = FALSE)
+        }
+        return(.llm_missing_value(type))
+    }
+
+    value <- result[[name]]
+    if (length(value) == 1L && is.atomic(value) && is.na(value)) {
+        if (isTRUE(type_parts$required)) {
+            stop("Structured response is missing required field '", name, "'.",
+                 call. = FALSE)
+        }
+        return(.llm_missing_value(type))
+    }
+    if (inherits(type, "ellmer::TypeBasic")) {
+        valid <- length(value) == 1L && !is.list(value) && switch(
+            type_parts$type,
+            string = is.character(value),
+            integer = is.integer(value),
+            number = is.numeric(value),
+            boolean = is.logical(value),
+            FALSE)
+        if (!valid) {
+            stop("Structured response field '", name,
+                 "' does not match its declared scalar type.", call. = FALSE)
+        }
+        return(value)
+    }
+    if (inherits(type, "ellmer::TypeEnum")) {
+        if (length(value) != 1L || is.list(value) ||
+            is.na(value) || !value %in% type_parts$values) {
+            stop("Structured response field '", name,
+                 "' does not match its declared enum.", call. = FALSE)
+        }
+        return(value)
+    }
+    list(value)
 }
 
 # Shared citation resolution. Only IDs actually supplied to the model may
@@ -69,37 +198,56 @@ DEFAULT_LLM_SYSTEM_PROMPT <- paste(
     "N\u2019invente aucune information ni aucun identifiant de preuve.",
     sep = "\n")
 
-# Compile one resolved lucene_llm channel against the variable's categorical
-# output. The value enum comes from cat_output(); the evidence enum is rebuilt for
-# each cohort row from the snippet IDs that the model actually receives.
+# Compile one resolved lucene_llm activation. The authored TypeObject is kept as
+# the public value contract; rationale and evidence IDs are engine-owned fields
+# added to a fresh schema for each task.
 .compile_llm_channel <- function(channel, variable) {
     if (!identical(channel$method, "lucene_llm")) {
         stop("Internal LLM compilation requires method = 'lucene_llm'.",
              call. = FALSE)
     }
-    output <- variable$output
-    if (is.null(output) || !identical(output$kind, "categorical") ||
-        is.function(output$reduce)) {
-        stop("method = 'lucene_llm' requires cat_output(levels) ",
-             "without a payload reducer.", call. = FALSE)
+    response <- channel$response
+    response_parts <- .llm_type_object_parts(response)
+    authored_properties <- response_parts$properties
+    authored_fields <- names(authored_properties)
+    channel_name <- channel$name
+    if (!is.character(channel_name) || length(channel_name) != 1L ||
+        is.na(channel_name) || !nzchar(channel_name)) {
+        stop("A resolved LLM channel must have one non-empty alias.",
+             call. = FALSE)
     }
-
-    levels <- output$levels
-    field <- variable$name
-    authored_prompt <- channel$prompt
+    user_prompt <- channel$user_prompt
+    if (!is.null(user_prompt) &&
+        (!is.character(user_prompt) || length(user_prompt) != 1L ||
+         is.na(user_prompt) || !nzchar(trimws(user_prompt)))) {
+        stop("use_channel() user_prompt must be one non-empty string or NULL.",
+             call. = FALSE)
+    }
     system_prompt <- channel$system_prompt %||% DEFAULT_LLM_SYSTEM_PROMPT
-    value_description <- output$description %||%
-        "Valeur finale extraite ; choisir exactement une valeur autoris\u00e9e."
-    rationale_description <- output$rationale
+    rationale_description <- channel$rationale
+    if (!is.null(rationale_description) &&
+        (!is.character(rationale_description) ||
+         length(rationale_description) != 1L || is.na(rationale_description) ||
+         !nzchar(trimws(rationale_description)))) {
+        stop("A resolved LLM channel rationale must be a description string or NULL.",
+             call. = FALSE)
+    }
+    value_prototype <- .llm_value_prototype(
+        authored_properties, rationale_description)
 
     .llm_definition(
-        name = variable$name,
+        name = channel_name,
         system_prompt = system_prompt,
+        response = response,
+        value_prototype = value_prototype,
         type_builder = function(snippet_ids) {
-            fields <- list(
-                value = ellmer::type_enum(
-                    levels,
-                    description = value_description))
+            snippet_ids <- as.character(snippet_ids)
+            if (!length(snippet_ids) || anyNA(snippet_ids) ||
+                any(!nzchar(snippet_ids)) || anyDuplicated(snippet_ids)) {
+                stop("Runtime LLM schemas require unique, non-empty snippet IDs.",
+                     call. = FALSE)
+            }
+            fields <- authored_properties
             if (!is.null(rationale_description)) {
                 fields$rationale <- ellmer::type_string(
                     description = rationale_description)
@@ -111,83 +259,95 @@ DEFAULT_LLM_SYSTEM_PROMPT <- paste(
                 description = paste(
                     "Identifiants des extraits soutenant directement la valeur.",
                     "Utiliser uniquement les identifiants fournis."))
-            do.call(
-                ellmer::type_object,
-                c(list(.description = paste0(
-                    "R\u00e9sultat structur\u00e9 pour la variable '",
-                    variable$name, "'.")), fields))
+            .rebuild_llm_type_object(response_parts, fields)
         },
         prompt_builder = function(task_row, candidates) {
-            paste(
-                authored_prompt,
+            engine_prompt <- paste(
+                "Cible d'extraction :",
+                format_task_target(task_row, variable$output$group_by),
                 "",
                 "Extraits num\u00e9rot\u00e9s :",
                 format_snippet_block(candidates),
                 sep = "\n")
+            if (is.null(user_prompt)) engine_prompt else paste(
+                user_prompt, "", engine_prompt, sep = "\n")
         },
         parser = function(result, snippet_ids) {
-            value <- if (!is.null(result$value) && length(result$value) == 1L) {
-                as.character(result$value)
-            } else {
-                NA_character_
+            if (!is.list(result) || is.null(names(result)) ||
+                anyNA(names(result)) || anyDuplicated(names(result))) {
+                stop("Structured response must be a uniquely named list.",
+                     call. = FALSE)
             }
-            cited <- if (is.null(result$evidence_ids)) {
-                character()
+            columns <- Map(
+                function(name, type) .llm_result_column(result, name, type),
+                authored_fields, authored_properties)
+            names(columns) <- authored_fields
+            values <- if (length(columns)) {
+                tibble::as_tibble(columns)
             } else {
-                result$evidence_ids
+                tibble::tibble(.rows = 1L)
             }
-            citations <- resolve_cited_ids(cited, snippet_ids)
-            rationale <- if (is.null(rationale_description)) {
-                NA_character_
-            } else if (scalar_present(result$rationale)) {
-                as.character(result$rationale[[1]])
-            } else {
-                NA_character_
+            if (nrow(values) != 1L) {
+                stop("Structured response must produce exactly one value row.",
+                     call. = FALSE)
             }
-            value_valid <- !is.na(value) && value %in% levels
-            rationale_valid <- is.null(rationale_description) || !is.na(rationale)
-            valid <- value_valid && rationale_valid
-            fields <- tibble::tibble(
-                field = field,
-                status = if (valid) "extracted" else "invalid",
-                normalized_value = if (valid) value else NA_character_,
-                evidence_ids = list(citations$real_ids),
-                field_validity = if (valid) "valid" else "invalid",
-                validity_reason = if (valid) "" else if (!value_valid)
-                    "value does not match the declared categorical output"
-                    else "required rationale is missing",
+            if (!is.null(rationale_description)) {
+                if (!scalar_present(result$rationale)) {
+                    stop("Structured response is missing required field 'rationale'.",
+                         call. = FALSE)
+                }
+                values$rationale <- as.character(result$rationale[[1]])
+            }
+            if (!"evidence_ids" %in% names(result) ||
+                is.null(result$evidence_ids)) {
+                stop("Structured response is missing required field 'evidence_ids'.",
+                     call. = FALSE)
+            }
+            citations <- resolve_cited_ids(result$evidence_ids, snippet_ids)
+            list(
+                values = values,
+                evidence_ids = citations$real_ids,
                 citation_warning = citations$citation_warning,
                 citation_warning_reason = citations$citation_warning_reason)
-            list(fields = fields, summary = rationale)
         })
 }
 
 APPROVED_MODELS <- c("gemma3:4b")
 
-# A variable owns its model choice; the engine owns transport construction.
+# An LLM activation owns its model choice; the engine owns transport construction.
 # Kept behind a tiny seam so package tests can verify orchestration without
 # starting a real Ollama request.
 .create_ollama_chat <- function(model, params) {
     ellmer::chat_ollama(model = model, params = params)
 }
 
-.variable_needs_chat <- function(variable) {
-    any(vapply(variable$channels, function(channel) {
-        identical(channel$type, "text") &&
-            identical(channel$method, "lucene_llm")
-    }, logical(1)))
+.channel_needs_chat <- function(channel) {
+    identical(channel$type, "text") &&
+        identical(channel$method, "lucene_llm")
 }
 
-.resolve_variable_chat <- function(variable, chat) {
-    if (!.variable_needs_chat(variable)) return(NULL)
-    if (!is.null(chat)) return(chat)
-    if (is.null(variable$model)) {
-        stop("lucene_llm variable '", variable$name,
-             "' must declare model = <Ollama model> in variable_spec() ",
-             "or receive chat = <ellmer Chat> in run_variable().",
-             call. = FALSE)
-    }
-    .create_ollama_chat(variable$model, variable$model_params)
+.resolve_channel_chats <- function(variable, chat) {
+    chats <- lapply(names(variable$channels), function(alias) {
+        channel <- variable$channels[[alias]]
+        if (!.channel_needs_chat(channel)) return(NULL)
+        if (!is.null(chat)) return(chat)
+        if (is.null(channel$model)) {
+            stop("lucene_llm activation '", alias, "' in variable '",
+                 variable$name,
+                 "' must declare model = <Ollama model> in use_channel() ",
+                 "or receive chat = <ellmer Chat> in run_variable().",
+                 call. = FALSE)
+        }
+        .create_ollama_chat(channel$model, channel$model_params)
+    })
+    names(chats) <- names(variable$channels)
+    # Preflight every activation before the first model call. This keeps a
+    # multi-model variable atomic when a later Chat is invalid or not approved.
+    invisible(lapply(chats, function(resolved_chat) {
+        if (is.null(resolved_chat)) return(NULL)
+        .require_gated_chat(.chat_metadata(resolved_chat))
+    }))
+    chats
 }
 
 .candidate_selector <- function(max_candidates) {
@@ -323,20 +483,17 @@ APPROVED_MODELS <- c("gemma3:4b")
     rows[index, , drop = FALSE]
 }
 
-# Materialize one task's evidence; asserts every cited ID resolves to exactly one
-# snippet (caught per-task by the caller, so a failure never aborts the batch).
-.materialize_task_evidence <- function(fields, task_snippets, summary_field) {
-    links <- fields %>% select(field, evidence_ids) %>%
-        tidyr::unnest_longer(evidence_ids, values_to = "snippet_id", keep_empty = FALSE) %>%
-        distinct(field, snippet_id)
-    if (!nrow(links)) return(tibble::tibble())
+# Materialize response-level evidence once; asserts every cited ID resolves to
+# exactly one snippet (caught per-task, so a failure never aborts the batch).
+.materialize_task_evidence <- function(evidence_ids, task_snippets) {
+    evidence_ids <- unique(as.character(evidence_ids))
+    if (!length(evidence_ids)) return(tibble::tibble())
+    links <- tibble::tibble(
+        field = "__response__",
+        snippet_id = evidence_ids)
     ev <- links %>% left_join(task_snippets, by = "snippet_id")
     if (nrow(ev) != nrow(links) || anyNA(ev$hit_ref)) {
         stop("evidence ID does not resolve to exactly one snippet", call. = FALSE)
-    }
-    if (!is.null(summary_field)) {
-        ev <- bind_rows(ev, ev %>% distinct(snippet_id, .keep_all = TRUE) %>%
-                                mutate(field = summary_field))
     }
     ev %>% select(any_of(c("field", "snippet_id", "hit_ref", "ELTID", "EVTID",
                            "sentence", "hit_text", "snippet_text", "RECDATE",
@@ -375,21 +532,21 @@ run_extraction <- function(coverage, candidates, definition, chat,
         if (identical(call$status, "completed")) {
             res <- tryCatch({
                 parsed <- definition$parser(call$result, ts$snippet_id)
-                f <- parsed$fields
-                summary_ok <- !isTRUE(definition$summary_required) || scalar_present(parsed$summary)
-                tv <- if (all(f$field_validity == "valid") && summary_ok) "valid" else "invalid"
-                treason <- paste(unique(c(
-                    f$validity_reason[f$field_validity == "invalid"],
-                    if (!summary_ok) "required summary missing")), collapse = " | ")
-                # FIELD-LEVEL acceptance: a valid grounded field is accepted even if a
-                # sibling field is invalid.
-                f$accepted_value <- ifelse(f$field_validity == "valid", f$normalized_value, NA_character_)
-                f$task_id <- tid; f$task_validity <- tv; f$task_validity_reason <- treason
-                f$task_summary <- if (scalar_present(parsed$summary)) as.character(parsed$summary[[1]]) else NA_character_
-                f$model <- metadata$model
-                ev <- .materialize_task_evidence(f, ts, definition$summary_field)
+                values <- parsed$values
+                if (!is.data.frame(values) || nrow(values) != 1L) {
+                    stop("The LLM parser must return exactly one wide value row.",
+                         call. = FALSE)
+                }
+                values$accepted_value <- "present"
+                values$task_id <- as.character(tid)
+                values$task_validity <- "valid"
+                values$task_validity_reason <- NA_character_
+                values$citation_warning <- isTRUE(parsed$citation_warning)
+                values$citation_warning_reason <-
+                    as.character(parsed$citation_warning_reason)
+                ev <- .materialize_task_evidence(parsed$evidence_ids, ts)
                 if (nrow(ev)) ev$task_id <- tid
-                list(values = f, evidence = ev, task_validity = tv)
+                list(values = values, evidence = ev, task_validity = "valid")
             }, error = function(e) list(error = conditionMessage(e)))
 
             if (is.null(res$error)) {
@@ -417,7 +574,14 @@ run_extraction <- function(coverage, candidates, definition, chat,
             raw_response = list(if (identical(call$status, "completed")) call$result else NULL))
     }
 
-    values   <- if (length(values_l))   bind_rows(values_l)   else tibble::tibble()
+    empty_values <- definition$value_prototype
+    empty_values$accepted_value <- character()
+    empty_values$task_id <- character()
+    empty_values$task_validity <- character()
+    empty_values$task_validity_reason <- character()
+    empty_values$citation_warning <- logical()
+    empty_values$citation_warning_reason <- character()
+    values   <- if (length(values_l)) bind_rows(values_l) else empty_values
     evidence <- if (length(evidence_l)) bind_rows(evidence_l) else tibble::tibble()
     model_candidates <- if (length(selected_l)) bind_rows(selected_l) else candidates[0, ]
     attempts <- if (length(attempts_l)) bind_rows(attempts_l) else tibble::tibble(
@@ -445,5 +609,6 @@ run_extraction <- function(coverage, candidates, definition, chat,
 
     list(coverage = final_coverage, values = values, evidence = evidence,
          attempts = attempts, candidates = candidates,
-         model_candidates = model_candidates)
+         model_candidates = model_candidates,
+         value_prototype = definition$value_prototype)
 }

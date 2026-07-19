@@ -50,7 +50,7 @@
         return(as.Date(x, tz = "Europe/Paris"))
     }
     if (inherits(x, "Date")) return(x)
-    stop("Expected a Date or POSIXt value from a prepared source view.",
+    stop("Expected a Date or POSIXt value.",
          call. = FALSE)
 }
 
@@ -86,38 +86,25 @@
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
 
-# Value predicate for a thresholded analyte selector (DESIGN §8): strict cutoffs,
-# `gt` above and/or `lt` below. A missing value never passes; NULL bounds leave the
-# value unconstrained on that side.
-.passes_threshold <- function(value, gt, lt = NULL) {
-    ok <- !is.na(value)
-    if (!is.null(gt)) ok <- ok & value > gt
-    if (!is.null(lt)) ok <- ok & value < lt
-    ok
-}
-
-# Subject-context row predicate (DESIGN §8): the generalisation of a fixed gt/lt
-# cutoff to one that depends on attributes carried ON the row (sex/age reference
-# ranges). The closure's FORMALS name raw columns of `rows` -- same explicit-column
-# convention as index_event(at =) -- and it returns one logical per row. Applied
-# only to the analyte-matched rows, so `value` is always THIS analyte's value. An
-# NA result (e.g. a missing measurement) is not a hit, exactly like .passes_threshold.
+# Subject-context row predicate (DESIGN §8): the closure's FORMALS name actual
+# prepared-source columns -- same explicit-column convention as index_event(at =)
+# -- and it returns one logical per row. An NA result is not a hit.
 # A formal naming a column the source did not carry, or a result of the wrong
 # shape/type, is a hard error (a predicate breaking its contract is a bug -- the
-# same discipline as keep_group_when and a payload reduce).
-.eval_row_predicate <- function(rows, keep_when, field) {
-    args <- names(formals(keep_when))
+# same discipline as filter_groups and a payload reduce).
+.eval_row_predicate <- function(rows, filter_rows, field) {
+    args <- names(formals(filter_rows))
     missing <- setdiff(args, names(rows))
     if (length(missing)) {
-        stop("analyte_value() keep_when for '", field, "' names column(s) ",
+        stop("filter_rows for channel '", field, "' names column(s) ",
              paste(missing, collapse = ", "), " that the source does not carry; ",
              "only columns declared on the source_spec survive normalization, so ",
              "declare them (role-less is fine) to make them visible to the predicate.",
              call. = FALSE)
     }
-    res <- do.call(keep_when, as.list(rows[args]))
+    res <- do.call(filter_rows, as.list(rows[args]))
     if (!is.logical(res) || length(res) != nrow(rows)) {
-        stop("analyte_value() keep_when for '", field, "' must return one logical ",
+        stop("filter_rows for channel '", field, "' must return one logical ",
              "per row (got ", class(res)[1L], " of length ", length(res), " for ",
              nrow(rows), " rows); a row predicate breaking its contract is a bug.",
              call. = FALSE)
@@ -125,37 +112,67 @@
     res & !is.na(res)
 }
 
-# Aggregate membership predicate (the HAVING shape, DESIGN §8): group a task's
-# TARGET rows at `group_at_level`, apply the plain closure to each group's values,
-# and demote the rows of failing groups -- a grouped row FILTER, so qualifying
-# groups keep their ORIGINAL rows and downstream (hits, evidence, level algebra,
-# payload) is untouched. `values_col` is what the closure sees: measurements (lab)
-# or codes (code/act -- frequency rules are e.g. \(codes) length(codes) >= 2).
-# A closure breaking its contract (not exactly one TRUE/FALSE) is a hard error,
-# same rule as a payload reduce. Demoted rows stay in the observations audit.
-.apply_group_predicate <- function(observations, group_at_level, keep_group_when,
-                                   values_col, field) {
-    observations$group_demoted <- FALSE
-    if (is.null(keep_group_when)) return(observations)
-    grp_key <- paste(observations$task_id,
-                     observations[[group_at_level]], sep = "\r")
-    tgt <- observations$is_target
-    kept <- character()
-    if (any(tgt)) {
-        groups <- split(observations[[values_col]][tgt], grp_key[tgt])
-        keep <- vapply(groups, function(v) {
-            res <- keep_group_when(v)
-            if (!is.logical(res) || length(res) != 1L || is.na(res)) {
-                stop("keep_group_when for '", field, "' must return exactly ",
-                     "one TRUE/FALSE; a group predicate breaking its contract ",
-                     "is a bug.", call. = FALSE)
-            }
-            res
-        }, logical(1))
-        kept <- names(keep)[keep]
+# Apply a row predicate independently to each task's current target rows. Demoted
+# rows stay in observations and NA predicate results are false.
+.apply_row_predicate <- function(observations, filter_rows, field) {
+    observations$row_demoted <- FALSE
+    if (is.null(filter_rows)) return(observations)
+
+    target_rows <- which(observations$is_target)
+    if (!length(target_rows)) return(observations)
+    by_task <- split(target_rows, observations$task_id[target_rows])
+    for (idx in by_task) {
+        keep <- .eval_row_predicate(
+            observations[idx, , drop = FALSE], filter_rows, field)
+        observations$row_demoted[idx] <- !keep
+        observations$is_target[idx] <- keep
     }
-    observations$group_demoted <- tgt & !(grp_key %in% kept)
-    observations$is_target <- tgt & (grp_key %in% kept)
+    observations
+}
+
+# Aggregate predicate: evaluate a named-column closure on the current target rows,
+# separately for every task + declared level. For lab channels these are the rows
+# that survived filter_rows. Failing groups are demoted in-place so observations
+# retain the complete audit trail.
+.apply_group_predicate <- function(observations, group_by,
+                                   filter_groups, field) {
+    observations$group_demoted <- FALSE
+    if (is.null(filter_groups)) return(observations)
+    if (is.null(group_by) || !group_by %in% names(observations)) {
+        stop("filter_groups for channel '", field, "' groups by '",
+             group_by, "', which the prepared source does not carry.",
+             call. = FALSE)
+    }
+
+    args <- names(formals(filter_groups))
+    missing <- setdiff(args, names(observations))
+    if (length(missing)) {
+        stop("filter_groups for channel '", field,
+             "' names column(s) ", paste(missing, collapse = ", "),
+             " that the prepared source does not carry.", call. = FALSE)
+    }
+
+    target_rows <- which(observations$is_target)
+    if (!length(target_rows)) return(observations)
+    group_key <- paste(observations$task_id[target_rows],
+                       observations[[group_by]][target_rows], sep = "\r")
+    groups <- split(target_rows, group_key)
+    keep <- vapply(groups, function(idx) {
+        rows <- observations[idx, , drop = FALSE]
+        res <- do.call(filter_groups, as.list(rows[args]))
+        if (!is.logical(res) || length(res) != 1L || is.na(res)) {
+            stop("filter_groups for channel '", field,
+                 "' must return exactly one TRUE/FALSE per task + ",
+                 group_by, " group; a group predicate breaking its ",
+                 "contract is a bug.", call. = FALSE)
+        }
+        res
+    }, logical(1))
+    demoted <- unlist(groups[!keep], use.names = FALSE)
+    if (length(demoted)) {
+        observations$group_demoted[demoted] <- TRUE
+        observations$is_target[demoted] <- FALSE
+    }
     observations
 }
 
@@ -208,9 +225,10 @@
 # tasks: task_id, PATID, anchor_date (anchor only when windowed).
 measure_code_presence <- function(source_table, tasks, codes,
                                   match = c("regex", "exact"),
+                                  filter_rows = NULL,
                                   grain_keys = "PATID",
                                   from_days = NULL, to_days = NULL,
-                                  group_at_level = NULL, keep_group_when = NULL,
+                                  group_by = NULL, filter_groups = NULL,
                                   code_col = "diag", start_col = "DATENT",
                                   end_col = "DATSORT",
                                   missing_end = c("use_start", "exclude"),
@@ -218,7 +236,7 @@ measure_code_presence <- function(source_table, tasks, codes,
     match <- match.arg(match)
     missing_end <- match.arg(missing_end)
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> whole history
-    # Grain is DECLARED by the variable (output_one_row_per) and passed as grain_keys by
+    # Grain is declared by the output contract (output$group_by) and passed as grain_keys by
     # the caller (run_variable): "PATID" alone scopes by subject (patient grain);
     # c("PATID","EVTID") scopes each task to its OWN stay (stay grain) -- closing the
     # DESIGN §7 executor gap ("EVTID is invariant across HDW rows"). source_counts and
@@ -229,14 +247,26 @@ measure_code_presence <- function(source_table, tasks, codes,
                  code_col, start_col, end_col)),
         "coded rows", require_anchor = windowed)
 
-    rows <- source_table %>% transmute(
-        source_row_id = as.character(source_row_id),
-        PATID = as.character(PATID),
-        EVTID = as.character(EVTID),
-        ELTID = as.character(ELTID),
-        code = as.character(.data[[code_col]]),
-        t_start = .clinical_date(.data[[start_col]]),
-        t_end = .clinical_date(.data[[end_col]]))
+    source_columns <- names(source_table)
+    rows <- tibble::as_tibble(source_table) %>%
+        mutate(
+            source_row_id = as.character(source_row_id),
+            PATID = as.character(PATID),
+            EVTID = as.character(EVTID),
+            ELTID = as.character(ELTID),
+            .ee_t_start = .clinical_date(.data[[start_col]]),
+            .ee_t_end = .clinical_date(.data[[end_col]]))
+    for (predicate in list(filter_rows = filter_rows,
+                           filter_groups = filter_groups)) {
+        if (is.null(predicate)) next
+        missing <- setdiff(names(formals(predicate)), source_columns)
+        if (length(missing)) {
+            stop("Activation predicate for channel '", field,
+                 "' names column(s) ",
+                 paste(missing, collapse = ", "),
+                 " that the prepared source does not carry.", call. = FALSE)
+        }
+    }
     tkeys <- tasks %>%
         transmute(task_id = as.character(task_id), PATID = as.character(PATID))
     for (k in setdiff(grain_keys, "PATID")) tkeys[[k]] <- as.character(tasks[[k]])
@@ -251,7 +281,8 @@ measure_code_presence <- function(source_table, tasks, codes,
         inner_join(tkeys, by = grain_keys, relationship = "many-to-many")
     if (windowed) {
         scoped <- scoped %>% filter(.overlaps_interval(
-            t_start, t_end, anchor_date + from_days, anchor_date + to_days,
+            .data$.ee_t_start, .data$.ee_t_end,
+            anchor_date + from_days, anchor_date + to_days,
             missing_datsort = missing_end))
     }
     observations <- scoped %>%
@@ -259,12 +290,11 @@ measure_code_presence <- function(source_table, tasks, codes,
             field = field,
             source = source,
             in_scope = TRUE,
-            is_target = .code_matches(code, codes, match))
+            is_target = .code_matches(.data[[code_col]], codes, match))
 
-    # Group predicate over the CODES (e.g. a frequency rule: >=2 acts in one
-    # stay); qualifying groups keep their original rows.
+    observations <- .apply_row_predicate(observations, filter_rows, field)
     observations <- .apply_group_predicate(
-        observations, group_at_level, keep_group_when, "code", field)
+        observations, group_by, filter_groups, field)
 
     observations <- observations %>%
         mutate(
@@ -272,8 +302,9 @@ measure_code_presence <- function(source_table, tasks, codes,
             scope_reason = if (windowed) "in scope for the task window"
                            else "whole history (no window)",
             observation_reason = case_when(
-                is_target ~ "code matches the declared family",
-                group_demoted ~ "group aggregate predicate not satisfied",
+                .data$is_target ~ "code matches the declared family",
+                .data$group_demoted ~ "group aggregate predicate not satisfied",
+                .data$row_demoted ~ "row predicate not satisfied",
                 TRUE ~ "code outside the declared family"))
 
     counts <- observations %>%
@@ -301,18 +332,25 @@ measure_code_presence <- function(source_table, tasks, codes,
             field = field,
             normalized_value,
             accepted_value = normalized_value,
-            measurement_value = NA_real_,
-            measurement_time = as.Date(NA),
             n_scope_rows,
             n_matching_rows)
 
+    candidate_columns <- unique(c("task_id", source_columns))
+    candidates <- observations %>%
+        filter(is_target) %>%
+        arrange(task_id, .data$.ee_t_start, source_row_id) %>%
+        select(all_of(candidate_columns))
+
+    evidence_columns <- unique(c(
+        "task_id", "field", "source", "source_row_id", "evidence_ref",
+        "evidence_summary", setdiff(source_columns, "source_row_id")))
     evidence <- observations %>%
         filter(selected_evidence) %>%
-        transmute(
-            task_id, field, source, source_row_id,
+        mutate(
             evidence_ref = source_row_id,
-            evidence_summary = sprintf("%s (%s)", code, t_start),
-            PATID, EVTID, ELTID, code, t_start, t_end)
+            evidence_summary = sprintf(
+                "%s (%s)", .data[[code_col]], .data$.ee_t_start)) %>%
+        select(all_of(evidence_columns))
 
     rule <- if (windowed) {
         sprintf("same_subject; interval_overlap[%g,%+g]; %s match {%s}",
@@ -321,9 +359,12 @@ measure_code_presence <- function(source_table, tasks, codes,
     } else {
         sprintf("whole_history; %s match {%s}", match, paste(codes, collapse = ","))
     }
-    if (!is.null(keep_group_when)) {
+    if (!is.null(filter_rows)) {
+        rule <- sprintf("%s; rows kept when predicate holds", rule)
+    }
+    if (!is.null(filter_groups)) {
         rule <- sprintf("%s; group(%s) kept when predicate holds",
-                        rule, group_at_level)
+                        rule, group_by)
     }
     derivation <- coverage %>%
         transmute(
@@ -336,13 +377,11 @@ measure_code_presence <- function(source_table, tasks, codes,
             status = processing_state,
             error = NA_character_)
 
-    # No candidates frame: a coded/act row's payload value IS its code, which already
-    # rides `evidence` (one row per matching source row) -- the payload path
-    # (.payload_values) reads it there, and a count is reduce = length over the codes.
     .assert_evidence_resolves(evidence, observations, rows)
     list(
         coverage = coverage,
         values = values,
+        candidates = candidates,
         evidence = evidence,
         observations = observations,
         derivation = derivation)
@@ -352,16 +391,16 @@ measure_code_presence <- function(source_table, tasks, codes,
 # Neutral executor behind the run_variable() doc branch: a document's EXISTENCE is
 # the hit, selected on docs_index METADATA (exact any-of filters per column) -- no
 # content, no Lucene, no LLM. Same present/absent membership contract as the code
-# executor, so a doc hit means the same thing inside a hit-set expression. The
-# CANDIDATES frame carries value = the document's clock (RECDATE), so date_output
-# reduces "when" the same way num_output reduces a measurement (DESIGN §8).
+# executor, so a doc hit means the same thing inside a hit-set expression. Matching
+# candidates retain the full metadata row for explicit from_channel() projection.
 #
 # docs_index: ELTID (unique), PATID, EVTID, <date_col>, plus the filter columns.
 # tasks: task_id, PATID (+ grain keys); anchor_date only when windowed.
 measure_doc_presence <- function(docs_index, tasks, filters,
+                                 filter_rows = NULL,
                                  grain_keys = "PATID",
                                  from_days = NULL, to_days = NULL,
-                                 group_at_level = NULL, keep_group_when = NULL,
+                                 group_by = NULL, filter_groups = NULL,
                                  date_col = "RECDATE",
                                  field = "doc_presence", source = "documents") {
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> whole history
@@ -369,15 +408,27 @@ measure_doc_presence <- function(docs_index, tasks, filters,
                      unique(c("ELTID", "PATID", "EVTID", date_col, names(filters))),
                      "docs index")
 
-    rows <- docs_index %>% mutate(
+    source_columns <- names(docs_index)
+    rows <- tibble::as_tibble(docs_index) %>% mutate(
         source_row_id = as.character(ELTID),
         PATID = as.character(PATID),
         EVTID = as.character(EVTID),
         ELTID = as.character(ELTID),
-        doc_date = .clinical_date(.data[[date_col]]))
+        .ee_doc_date = .clinical_date(.data[[date_col]]))
     .validate_structured_inputs(
-        tasks, rows, c("source_row_id", "PATID", "EVTID", "ELTID", "doc_date"),
+        tasks, rows,
+        c("source_row_id", "PATID", "EVTID", "ELTID", ".ee_doc_date"),
         "docs index", require_anchor = windowed)
+    for (predicate in list(filter_rows = filter_rows,
+                           filter_groups = filter_groups)) {
+        if (is.null(predicate)) next
+        missing <- setdiff(names(formals(predicate)), source_columns)
+        if (length(missing)) {
+            stop("Activation predicate for channel '", field,
+                 "' names column(s) ", paste(missing, collapse = ", "),
+                 " that the document index does not carry.", call. = FALSE)
+        }
+    }
 
     tkeys <- tasks %>%
         transmute(task_id = as.character(task_id), PATID = as.character(PATID))
@@ -393,7 +444,8 @@ measure_doc_presence <- function(docs_index, tasks, filters,
         inner_join(tkeys, by = grain_keys, relationship = "many-to-many")
     if (windowed) {
         scoped <- scoped %>% filter(.within_point(
-            doc_date, anchor_date + from_days, anchor_date + to_days))
+            .data$.ee_doc_date,
+            anchor_date + from_days, anchor_date + to_days))
     }
     matches <- rep(TRUE, nrow(scoped))
     for (cl in names(filters)) {
@@ -406,10 +458,9 @@ measure_doc_presence <- function(docs_index, tasks, filters,
             in_scope = TRUE,
             is_target = matches & !is.na(matches))
 
-    # Group predicate over the doc ids (frequency rules, e.g. >=2 consults in one
-    # stay); qualifying groups keep their original rows.
+    observations <- .apply_row_predicate(observations, filter_rows, field)
     observations <- .apply_group_predicate(
-        observations, group_at_level, keep_group_when, "source_row_id", field)
+        observations, group_by, filter_groups, field)
 
     observations <- observations %>%
         mutate(
@@ -417,8 +468,9 @@ measure_doc_presence <- function(docs_index, tasks, filters,
             scope_reason = if (windowed) "in scope for the task window"
                            else "whole history (no window)",
             observation_reason = case_when(
-                is_target ~ "document metadata matches the declared filters",
-                group_demoted ~ "group aggregate predicate not satisfied",
+                .data$is_target ~ "document metadata matches the declared filters",
+                .data$group_demoted ~ "group aggregate predicate not satisfied",
+                .data$row_demoted ~ "row predicate not satisfied",
                 TRUE ~ "document metadata outside the declared filters"))
 
     counts <- observations %>%
@@ -453,20 +505,23 @@ measure_doc_presence <- function(docs_index, tasks, filters,
         sprintf("%s in {%s}", cl, paste(filters[[cl]], collapse = ","))
     }, character(1)), collapse = "; ")
 
-    # The document's clock is its payload value (date_output): one candidate row
-    # per matching document, spine kept for sub-output-grain scoping (§7).
+    candidate_columns <- unique(c(
+        "task_id", "source_row_id", source_columns))
     candidates <- observations %>%
         filter(is_target) %>%
-        arrange(task_id, doc_date, source_row_id) %>%
-        transmute(task_id, source_row_id, PATID, EVTID, ELTID, value = doc_date)
+        arrange(task_id, .data$.ee_doc_date, source_row_id) %>%
+        select(all_of(candidate_columns))
 
+    evidence_columns <- unique(c(
+        "task_id", "field", "source", "source_row_id", "evidence_ref",
+        "evidence_summary", source_columns))
     evidence <- observations %>%
         filter(selected_evidence) %>%
-        transmute(
-            task_id, field, source, source_row_id,
+        mutate(
             evidence_ref = source_row_id,
-            evidence_summary = sprintf("%s (%s)", filter_txt, doc_date),
-            PATID, EVTID, ELTID, doc_date)
+            evidence_summary = sprintf(
+                "%s (%s)", filter_txt, .data$.ee_doc_date)) %>%
+        select(all_of(evidence_columns))
 
     rule <- if (windowed) {
         sprintf("same_subject; point_window[%g,%+g]; %s", from_days, to_days,
@@ -474,9 +529,12 @@ measure_doc_presence <- function(docs_index, tasks, filters,
     } else {
         sprintf("whole_history; %s", filter_txt)
     }
-    if (!is.null(keep_group_when)) {
+    if (!is.null(filter_rows)) {
+        rule <- sprintf("%s; rows kept when predicate holds", rule)
+    }
+    if (!is.null(filter_groups)) {
         rule <- sprintf("%s; group(%s) kept when predicate holds",
-                        rule, group_at_level)
+                        rule, group_by)
     }
     derivation <- coverage %>%
         transmute(
@@ -499,79 +557,61 @@ measure_doc_presence <- function(docs_index, tasks, filters,
         derivation = derivation)
 }
 
-# --- generic analyte candidates: valued rows of an analyte in a point-window -----
-# Neutral lab/analyte executor behind the run_variable() lab branch, serving BOTH lab
-# faces (DESIGN §8). Per task it SCOPES the declared analyte's rows to a point-window
-# around the anchor. A thresholded selector (analyte_value(gt/lt)) folds a value
-# predicate into the target set, so the target rows are the measurements past the
-# threshold. It returns those targets two ways: as CANDIDATES (source_row_id + numeric
-# value) for the VALUE face, and as a present/absent `values` frame for the MEMBERSHIP
-# face (bin_output / combine) -- it does NOT reduce the value face itself.
-# The reduction is a plain function on the value vector, supplied on the variable's
-# OUTPUT (num_output(values_from =, reduce = function(x) max(x, na.rm = TRUE)),
-# DESIGN §8) and applied downstream in assembly; a bespoke "max" executor /
-# max_value() operator would be ad-hoc for a one-line base reduction. No usability/validity check:
-# HDW numeric results live in a numeric field (NUMRES; qualitative results are STRRES,
-# which BIOL_SOURCE does not read), so a target row always has a value. Evidence =
-# every candidate row (the inputs to the reduction), so provenance shows the whole
-# window the number was reduced from, whatever the reducer.
+# --- generic analyte candidates: selected prepared rows in a point-window -------
+# The lab executor selects rows by the source's analyte role only. NUMRES, STRRES,
+# DATEXAM, identifiers, units, qualifiers and role-less predicate columns remain
+# ordinary prepared-source columns; `from_channel(column =)` chooses the payload
+# downstream. A row may therefore carry either, both, or neither result column.
 #
-# source_table: normalized result rows
-#   source_row_id, PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw.
-# tasks: task_id + the grain_keys columns (PATID, or PATID+EVTID for stay grain);
-#   anchor_date only when windowed (a NULL window is event-scoped, no anchor needed).
+# filter_rows is evaluated on analyte matches separately for each task after grain and
+# window scoping. filter_groups then sees the surviving rows in each task + group_by
+# group. Both filters demote rows in observations without stripping source payload.
 measure_analyte_values <- function(source_table, tasks, analytes,
-                                   gt = NULL, lt = NULL, keep_when = NULL,
+                                   filter_rows = NULL,
                                    grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
-                                   group_at_level = NULL, keep_group_when = NULL,
-                                   result_id_col = "BIOL_ID",
+                                   group_by = NULL, filter_groups = NULL,
+                                   result_id_col = "biol_ID",
                                    date_col = "DATEXAM",
-                                   analyte_col = "analyte",
-                                   value_col = "value",
-                                   value_raw_col = "value_raw",
-                                   field = "analyte_value", source = "biology") {
+                                   analyte_col = "TYPEANA",
+                                   field = "analyte", source = "biology") {
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> event scope
     .validate_structured_inputs(
         tasks, source_table,
-        c("source_row_id", "PATID", "EVTID", "ELTID", result_id_col, date_col,
-          analyte_col, value_col, value_raw_col),
+        unique(c("source_row_id", "PATID", "EVTID", "ELTID", result_id_col,
+                 date_col, analyte_col)),
         "biology rows", require_anchor = windowed)
-    if (!is.numeric(source_table[[value_col]])) {
-        stop("biology rows value column must be numeric in the prepared view: ",
-             value_col, ".", call. = FALSE)
-    }
 
-    biol <- source_table %>% transmute(
-        source_row_id = as.character(source_row_id),
-        PATID = as.character(PATID),
-        EVTID = as.character(EVTID),
-        ELTID = as.character(ELTID),
-        BIOL_ID = as.character(.data[[result_id_col]]),
-        DATEXAM = .clinical_date(.data[[date_col]]),
-        analyte = as.character(.data[[analyte_col]]),
-        value = .data[[value_col]],
-        value_raw = as.character(.data[[value_raw_col]]))
-    # A subject-context predicate (keep_when) names raw columns beyond this fixed
-    # set (e.g. PATSEX/PATAGE); carry them through untouched so they reach the
-    # observation rows. transmute preserves row order, so source_table aligns 1:1.
-    if (!is.null(keep_when)) {
-        extra <- setdiff(names(formals(keep_when)), names(biol))
-        miss <- setdiff(extra, names(source_table))
-        if (length(miss)) {
-            stop("analyte_value() keep_when for '", field, "' names column(s) ",
-                 paste(miss, collapse = ", "), " that the biology source does not ",
-                 "carry; declare them on the source_spec so normalization keeps them.",
+    # Preserve the complete prepared row. Only identifier/date role columns are
+    # normalized for joins and window arithmetic; result columns are never inferred
+    # or collapsed into a synthetic `value` lane.
+    biol <- tibble::as_tibble(source_table)
+    source_columns <- names(biol)
+    for (column in unique(c("source_row_id", "PATID", "EVTID", "ELTID",
+                            result_id_col))) {
+        biol[[column]] <- as.character(biol[[column]])
+    }
+    biol$.ee_point_date <- .clinical_date(biol[[date_col]])
+    biol$.ee_analyte <- as.character(biol[[analyte_col]])
+
+    for (predicate in list(filter_rows = filter_rows,
+                           filter_groups = filter_groups)) {
+        if (is.null(predicate)) next
+        missing <- setdiff(names(formals(predicate)), names(biol))
+        if (length(missing)) {
+            stop("Lab activation predicate for '", field, "' names column(s) ",
+                 paste(missing, collapse = ", "), " that the prepared source ",
+                 "does not carry; declare them on source_spec() to preserve them.",
                  call. = FALSE)
         }
-        for (cc in extra) biol[[cc]] <- source_table[[cc]]
     }
-    # Grain is DECLARED by the variable (output_one_row_per) and passed as grain_keys:
-    # "PATID" scopes by subject; c("PATID","EVTID") scopes each task to its OWN stay
-    # (stay grain), the DESIGN §7 executor gap ("EVTID is invariant across HDW rows").
+
+    # Grain is declared by the variable and carried by the task universe.
     tkeys <- tasks %>%
         transmute(task_id = as.character(task_id), PATID = as.character(PATID))
-    for (k in setdiff(grain_keys, "PATID")) tkeys[[k]] <- as.character(tasks[[k]])
+    for (key in setdiff(grain_keys, "PATID")) {
+        tkeys[[key]] <- as.character(tasks[[key]])
+    }
     if (windowed) tkeys$anchor_date <- .clinical_date(tasks$anchor_date)
     target_analytes <- toupper(trimws(as.character(analytes)))
 
@@ -583,46 +623,31 @@ measure_analyte_values <- function(source_table, tasks, analytes,
     scoped <- biol %>%
         inner_join(tkeys, by = grain_keys, relationship = "many-to-many")
     if (windowed) {
-        scoped <- scoped %>% filter(.within_point(
-            DATEXAM, anchor_date + from_days, anchor_date + to_days))
+        scoped <- scoped %>%
+            filter(.within_point(.data$.ee_point_date,
+                                 anchor_date + from_days,
+                                 anchor_date + to_days))
     }
     observations <- scoped %>%
-        mutate(
-            field = field,
-            source = source,
-            in_scope = TRUE)
-    analyte_match <- !is.na(observations$analyte) &
-        toupper(trimws(observations$analyte)) %in% target_analytes
-    # The value predicate: a subject-context closure (keep_when) if given, else the
-    # fixed gt/lt bounds. Evaluated only on the analyte's own rows, so `value` in the
-    # closure is always this analyte's measurement.
-    predicate_ok <- rep(FALSE, nrow(observations))
-    if (!is.null(keep_when)) {
-        if (any(analyte_match)) {
-            predicate_ok[analyte_match] <- .eval_row_predicate(
-                observations[analyte_match, , drop = FALSE], keep_when, field)
-        }
-    } else {
-        predicate_ok <- .passes_threshold(observations$value, gt, lt)
-    }
-    observations$is_target <- analyte_match & predicate_ok
+        mutate(field = field, source = source, in_scope = TRUE)
+    analyte_match <- !is.na(observations$.ee_analyte) &
+        toupper(trimws(observations$.ee_analyte)) %in% target_analytes
 
+    observations$is_target <- analyte_match
+    observations <- .apply_row_predicate(observations, filter_rows, field)
     observations <- .apply_group_predicate(
-        observations, group_at_level, keep_group_when, "value", field)
-
+        observations, group_by, filter_groups, field)
     observations <- observations %>%
         mutate(
-            selected_evidence = is_target,     # every candidate is evidence
+            selected_evidence = is_target,
             scope_reason = if (windowed) "point time inside the task window"
                            else "same grain unit (no window)",
             observation_reason = case_when(
-                is_target ~ "analyte matches the declared concept",
-                group_demoted ~ "group aggregate predicate not satisfied",
-                TRUE ~ "analyte outside the declared concept"),
-            # Non-target rows establish source/scope coverage; their unrelated
-            # result values are unnecessary in persisted structured artifacts.
-            value_raw = if_else(is_target, value_raw, NA_character_),
-            value = if_else(is_target, value, NA_real_))
+                .data$is_target ~ "analyte matches the declared concept",
+                .data$group_demoted ~ "group aggregate predicate not satisfied",
+                .data$row_demoted ~ "row predicate not satisfied",
+                analyte_match ~ "analyte match demoted by activation rules",
+                TRUE ~ "analyte outside the declared concept"))
 
     counts <- observations %>%
         group_by(task_id) %>%
@@ -635,23 +660,19 @@ measure_analyte_values <- function(source_table, tasks, analytes,
         left_join(source_counts, by = grain_keys) %>%
         left_join(counts, by = "task_id") %>%
         mutate(
-            across(
-                c(n_source_rows, n_scope_rows, n_candidate_rows),
-                ~ coalesce(as.integer(.x), 0L)),
+            across(c(n_source_rows, n_scope_rows, n_candidate_rows),
+                   ~ coalesce(as.integer(.x), 0L)),
             processing_state = case_when(
                 n_source_rows == 0L ~ "no_eligible_source",
                 n_candidate_rows == 0L ~ "no_candidate",
                 TRUE ~ "measured"))
 
-    # Membership face (bin_output / combine): a task is "present" iff it has >=1
-    # thresholded candidate. A subject with in-scope measurements but none past the
-    # threshold is no_candidate -> the assembler reads that as an observed FALSE
-    # (complete coverage); a subject with no biology at all is no_eligible_source
-    # -> unevaluable (NA / partial). Same present/absent contract as the code executor,
-    # so a lab hit means the same thing as a code hit inside a hit-set expression.
+    # Membership face (bin_output / combine): a task is present iff at least one
+    # analyte row survives the activation filters.
     values <- coverage %>%
         filter(processing_state == "measured") %>%
-        mutate(normalized_value = if_else(n_candidate_rows > 0L, "present", "absent")) %>%
+        mutate(normalized_value = if_else(n_candidate_rows > 0L,
+                                          "present", "absent")) %>%
         transmute(
             task_id,
             field = field,
@@ -660,48 +681,44 @@ measure_analyte_values <- function(source_table, tasks, analytes,
             n_scope_rows,
             n_candidate_rows)
 
-    # The value vector the output's reduce collapses to one number, ordered so the
-    # assembler can carry a stable measurement_time alongside the reduced value.
-    # Candidates keep the identity spine: a sub-output-grain gate (combine_at_level,
-    # DESIGN §7) scopes the payload to qualifying keys by joining on these columns.
+    # Candidates are task identity + the complete prepared source row. Reducers and
+    # projections consume real column names rather than a hidden `value` alias.
+    candidate_columns <- unique(c("task_id", source_columns))
     candidates <- observations %>%
         filter(is_target) %>%
-        arrange(task_id, desc(value), DATEXAM, source_row_id) %>%
-        transmute(task_id, source_row_id, PATID, EVTID, ELTID,
-                  value, measurement_time = DATEXAM)
+        arrange(task_id, .data$.ee_point_date, source_row_id) %>%
+        select(all_of(candidate_columns))
 
+    # Evidence uses the same complete row and adds only stable engine provenance.
+    evidence_columns <- unique(c(
+        "task_id", "field", "source", "source_row_id", "evidence_ref",
+        "evidence_summary", setdiff(source_columns, "source_row_id")))
     evidence <- observations %>%
         filter(selected_evidence) %>%
-        transmute(
-            task_id, field, source, source_row_id,
+        mutate(
             evidence_ref = source_row_id,
             evidence_summary = sprintf(
-                "%s = %s on %s", analyte,
-                ifelse(is.na(value_raw) | !nzchar(value_raw), value, value_raw),
-                DATEXAM),
-            PATID, EVTID, ELTID, BIOL_ID, DATEXAM, analyte, value, value_raw)
+                "%s on %s", .data$.ee_analyte, .data$.ee_point_date)) %>%
+        select(all_of(evidence_columns))
 
-    threshold_txt <- paste0(
-        if (!is.null(gt)) sprintf("value>%g; ", gt) else "",
-        if (!is.null(lt)) sprintf("value<%g; ", lt) else "",
-        if (!is.null(keep_when)) {
-            sprintf("row kept when %s; ",
-                    paste(deparse(keep_when), collapse = " "))
+    filter_txt <- paste0(
+        if (!is.null(filter_rows)) {
+            sprintf("row kept when %s; ", paste(deparse(filter_rows), collapse = " "))
         } else "",
-        if (!is.null(keep_group_when)) {
-            sprintf("group(%s) kept when predicate holds; ", group_at_level)
+        if (!is.null(filter_groups)) {
+            sprintf("group(%s) kept when %s; ", group_by,
+                    paste(deparse(filter_groups), collapse = " "))
         } else "")
     scope_txt <- paste(grain_keys, collapse = "+")
     window_txt <- if (windowed) {
-        sprintf("point_window[%g,%+g]; ", from_days, to_days)   # %g: c(-Inf, 0) legal
+        sprintf("point_window[%g,%+g]; ", from_days, to_days)
     } else {
         "event_scope (no window); "
     }
     rule <- sprintf(
-        paste0(
-            "grain=%s; %sanalyte=%s; %s",
-            "candidates reduced by the output's reduce function; unit ignored"),
-        scope_txt, window_txt, paste(analytes, collapse = ","), threshold_txt)
+        paste0("grain=%s; %sanalyte=%s; %s",
+               "candidates preserve complete prepared-source rows"),
+        scope_txt, window_txt, paste(analytes, collapse = ","), filter_txt)
     derivation <- coverage %>%
         transmute(
             task_id,

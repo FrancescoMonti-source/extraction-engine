@@ -9,15 +9,17 @@
 # =============================================================================
 
 # --- relative windows ---------------------------------------------------------
-# The ratified spelling is a plain vector on the variable: window = c(from_days,
-# to_days) relative to the anchor (0 = the anchor day; negative = lookback;
+# The ratified spelling is a plain vector on each use_channel() activation:
+# window = c(from_days, to_days) relative to the variable anchor (0 = the anchor
+# day; negative = lookback;
 # c(-Inf, 0) = unbounded lookback; NULL = no window at all). The old ctors
 # (days_after / before_anchor) were wrapper-razor casualties (DESIGN invariant
-# 33): they interpreted nothing the two numbers do not already say. variable_spec
+# 33): they interpreted nothing the two numbers do not already say. use_channel()
 # normalizes the vector into the internal ee_window record the runner reads.
 
 # --- derived anchors ----------------------------------------------------------
-# An anchor may be a task COLUMN (anchor = "inclusion_date", one date supplied per task)
+# An anchor may be a cohort COLUMN (anchor = "inclusion_date", one date supplied
+# per output unit)
 # or DERIVED from an event. index_event() is the GENERIC derived anchor -- DESIGN §14's
 # transplant_date()/surgery_date() are domain-specific forms of it: per subject, find the
 # event in `source` whose `code` matches `selector`, and anchor at its `at` date
@@ -34,15 +36,17 @@
 # rows (columns PATID, EVTID, and the `at` date column, e.g. DATEACTE), returning
 # the row(s) that anchor the clock -- e.g. \(d) dplyr::slice_min(d, DATEACTE,
 # n = 1) for "the first surgery", or identity for "every surgery starts its own
-# clock" (one task per selected event; output_one_row_per must then be the event
-# key). Without it, multiple matches stay a loud error: the engine never picks.
+# clock" (one task per selected event; output$group_by must then be the event key).
+# Without it, multiple matches stay a loud error: the engine never picks.
 index_event <- function(source, selector, at = NULL,
                         select_event = NULL) {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
         stop("index_event() needs one source name.", call. = FALSE)
     }
-    if (!inherits(selector, "ee_selector")) {
-        stop("index_event() needs a selector (e.g. icd10()/ccam()).", call. = FALSE)
+    if (!inherits(selector, "ee_selector") ||
+        !identical(selector$kind, "code")) {
+        stop("index_event() needs a code selector created with icd10() or ccam().",
+             call. = FALSE)
     }
     if (!is.null(at) &&
         (!is.character(at) || length(at) != 1L || !nzchar(at))) {
@@ -60,31 +64,23 @@ index_event <- function(source, selector, at = NULL,
                        "ee_index_event")
 }
 
-# --- payload reduction ----------------------------------------------------------
-# Reduction lives on the OUTPUT, not the activation (DESIGN §8, wired 2026-07-05):
-# num_output(values_from =, reduce =) / cat_output(levels, values_from =, reduce =)
-# collapse the surviving payload rows' values with a plain function values -> scalar.
-# No bespoke operator wraps trivial base reductions (max/min/mean/length) and no
-# engine tie-break exists for categorical payloads -- the researcher's closure IS
-# the rule. use_channel(reducer =) is retired (rejected loudly in spec.R).
+# --- payload reduction ---------------------------------------------------------
+# Reduction lives on from_channel(), not the activation. It collapses the selected
+# real source column with a plain values -> scalar function; no bespoke operator
+# wraps trivial base reductions or invents tie-breaks.
 
 # --- cross-channel combiner ---------------------------------------------------
-# The ONLY cross-channel combine is hit-set algebra (hit_set_expr); a single
-# channel has no hit-algebra, so it carries combine = NULL and its value is shaped
-# by output() (documented status, multi-field, numeric, or membership). There is no
-# documented_status()/collect_fields() combiner: those were single-channel OUTPUT
-# assembly mislabelled as combines, now reached via output = cat_output()/
-# struct_output() with combine = NULL (see run_variable()'s output dispatch).
+# The ONLY cross-channel combine is hit-set algebra. A single channel has no
+# hit-algebra, so it carries combine = NULL and its value is shaped by output (a
+# channel payload or membership). There is no separate reconciliation combiner:
+# single-channel assembly is reached with from_channel().
 #
-# any_positive() is sugar: at variable_spec() build it LOWERS to the raw hit-set
-# expression "a | b | ..." over the activated channels (>=2). It is not a distinct
-# evaluator -- it produces a hit_set_expr like any other boolean combine.
-any_positive <- function() {
-    .new_spec(list(kind = "any_positive"), "ee_combiner")
-}
-
-# String boolean hit-set expression -- the public boolean-combine surface:
-#   combine = "(transplant_act | transplant_status) & !dialysis_signal"
+# The expression and the identity level where its signals must coexist form one
+# contract:
+#   combine = combine_channels(
+#       "(transplant_act | transplant_status) & !dialysis_signal",
+#       by = "EVTID"
+#   )
 # Channel-name symbols + the operators | (union) & (intersection) ! (complement)
 # + parentheses; nothing else. Parsed + grammar-checked at construction; channel
 # symbols are checked against the variable's activated channels at variable_spec
@@ -92,150 +88,79 @@ any_positive <- function() {
 # set iff hit == TRUE; FALSE and NA both mean "no observed hit"), so it is always
 # determined (included / excluded) -- an unavailable channel is reported via
 # channel_coverage, not propagated into the decision. The per-channel audit keeps the
-# raw TRUE/FALSE/NA. The pure parser/evaluator/overlap live in R/hitset.R. A bare
-# string passed as `combine` is coerced to this operator, so callers write
-# combine = "...".
-hit_set_expr <- function(expr) {
+# raw TRUE/FALSE/NA. The pure parser/evaluator/overlap live in R/hitset.R.
+combine_channels <- function(expr, by) {
+    if (!is.character(expr) || length(expr) != 1L || is.na(expr) ||
+        !nzchar(trimws(expr))) {
+        stop("combine_channels() expr must be one non-empty boolean expression.",
+             call. = FALSE)
+    }
+    if (!is.character(by) || length(by) != 1L || is.na(by) ||
+        !by %in% c("PATID", "EVTID", "ELTID")) {
+        stop("combine_channels() by must be PATID, EVTID, or ELTID.",
+             call. = FALSE)
+    }
     ast <- .parse_hitset_expr(expr)
     channels <- .check_hitset_grammar(ast)
     if (!length(channels)) {
         stop("A hit-set expression must reference >=1 channel.", call. = FALSE)
     }
     .new_spec(
-        list(kind = "hit_set_expr", expr = expr, ast = ast, channels = channels),
+        list(kind = "hit_set_expr", expr = expr, ast = ast, channels = channels,
+             by = by),
         "ee_combiner")
 }
 
-# Backward-compatible sugar that LOWERS to a hit_set_expr. It is NOT a parallel
-# boolean system: hit_set_difference(include = a, exclude = b) is exactly the string
-# expression `a & !b` (with OR-within-role unions for multiple channels). The string
-# expression DSL is the primary, documented surface; this just spares a caller the
-# string for the common "include minus exclude" case.
-hit_set_difference <- function(include, exclude = character()) {
-    include <- as.character(include)
-    exclude <- as.character(exclude)
-    if (!length(include) || anyNA(include) || any(!nzchar(include))) {
-        stop("hit_set_difference() needs >=1 non-empty include channel.",
-             call. = FALSE)
+# --- output contract ----------------------------------------------------------
+# Membership is the one output that does not publish a channel payload. Every
+# payload output names its activation alias and, for deterministic channels, the
+# real prepared-source column to publish. Reduction is deliberately an ordinary
+# values -> scalar function supplied by the study author.
+
+.check_output_group_by <- function(group_by, what) {
+    if (!is.character(group_by) || length(group_by) != 1L || is.na(group_by) ||
+        !group_by %in% c("PATID", "EVTID", "ELTID")) {
+        stop(what, " group_by must be PATID, EVTID, or ELTID.", call. = FALSE)
     }
-    if (length(exclude) && (anyNA(exclude) || any(!nzchar(exclude)))) {
-        stop("hit_set_difference() exclude channels must be non-empty names.",
-             call. = FALSE)
-    }
-    if (length(intersect(include, exclude))) {
-        stop("A channel cannot be both an include and an exclude channel.",
-             call. = FALSE)
-    }
-    grp <- function(chs) {
-        if (length(chs) == 1L) chs else sprintf("(%s)", paste(chs, collapse = " | "))
-    }
-    expr <- if (length(exclude)) {
-        sprintf("%s & !%s", grp(include), grp(exclude))
-    } else {
-        grp(include)
-    }
-    hit_set_expr(expr)
+    group_by
 }
 
-# --- output (cohort column) types ---------------------------------------------
-# Constructor names are short: bin_output() / num_output() / cat_output() /
-# struct_output(). Each is a thin tagged record; the internal $kind the runner
-# dispatches on (binary/number/categorical/fields) is unchanged. num/cat carry the
-# PAYLOAD spec (DESIGN §8): values_from = the channel whose surviving rows' values
-# feed the reduction (defaults to the sole channel of a single-channel variable;
-# required with a combine expression), reduce = the plain values -> scalar rule.
-.check_payload_args <- function(what, values_from, reduce, reduce_required) {
-    if (!is.null(values_from) &&
-        (!is.character(values_from) || length(values_from) != 1L ||
-         !nzchar(values_from))) {
-        stop(what, " values_from must be one channel name.", call. = FALSE)
-    }
-    if (is.null(reduce)) {
-        if (reduce_required) {
-            stop(what, " requires reduce = <function values -> scalar> ",
-                 "(e.g. function(x) max(x, na.rm = TRUE)).", call. = FALSE)
-        }
-    } else if (!is.function(reduce)) {
-        stop(what, " reduce must be a function.", call. = FALSE)
-    }
-    invisible(TRUE)
+bin_output <- function(group_by) {
+    group_by <- .check_output_group_by(group_by, "bin_output()")
+    .new_spec(list(kind = "binary", group_by = group_by), "ee_output_type")
 }
 
-bin_output <- function() {
-    .new_spec(list(kind = "binary"), "ee_output_type")
-}
+DEFAULT_RATIONALE_DESCRIPTION <- paste(
+    "Justification br\u00e8ve du choix, fond\u00e9e uniquement sur les extraits",
+    "et sans ajouter d'information non document\u00e9e.")
 
-num_output <- function(values_from = NULL, reduce = NULL) {
-    .check_payload_args("num_output()", values_from, reduce,
-                        reduce_required = TRUE)
+from_channel <- function(channel, column = NULL, filter_by_qualified = NULL,
+                         group_by, reduce = NULL) {
+    if (!is.character(channel) || length(channel) != 1L || is.na(channel) ||
+        !nzchar(channel)) {
+        stop("from_channel() channel must be one activation alias.", call. = FALSE)
+    }
+    if (!is.null(column) &&
+        (!is.character(column) || length(column) != 1L || is.na(column) ||
+         !nzchar(column))) {
+        stop("from_channel() column must be one prepared-source column name or NULL.",
+             call. = FALSE)
+    }
+    if (!is.null(reduce) && !is.function(reduce)) {
+        stop("from_channel() reduce must be a function or NULL.", call. = FALSE)
+    }
+    if (!is.null(filter_by_qualified) &&
+        (!is.character(filter_by_qualified) ||
+         length(filter_by_qualified) != 1L ||
+         is.na(filter_by_qualified) ||
+         !filter_by_qualified %in% c("PATID", "EVTID", "ELTID"))) {
+        stop("from_channel() filter_by_qualified must be PATID, EVTID, ",
+             "ELTID, or NULL.", call. = FALSE)
+    }
+    group_by <- .check_output_group_by(group_by, "from_channel()")
     .new_spec(
-        list(kind = "number", values_from = values_from, reduce = reduce),
+        list(kind = "from_channel", channel = channel, column = column,
+             filter_by_qualified = filter_by_qualified,
+             group_by = group_by, reduce = reduce),
         "ee_output_type")
-}
-
-# A categorical cohort column over a fixed level set. Two flavors, one ctor:
-# with reduce = (payload flavor) the level is computed from the surviving payload
-# rows' values and MUST be one of `levels`; without it (extraction flavor, e.g.
-# smoking statuses) the level is a text channel's accepted documented status.
-cat_output <- function(levels, values_from = NULL, reduce = NULL,
-                       description = NULL, rationale = NULL) {
-    levels <- as.character(levels)
-    if (!length(levels) || anyNA(levels) || any(!nzchar(levels)) ||
-        anyDuplicated(levels)) {
-        stop("cat_output() needs unique non-empty levels.", call. = FALSE)
-    }
-    if (!is.null(description) &&
-        (!is.character(description) || length(description) != 1L ||
-         is.na(description) || !nzchar(trimws(description)))) {
-        stop("cat_output() description must be one non-empty string or NULL.",
-             call. = FALSE)
-    }
-    if (!is.null(rationale) &&
-        (!is.character(rationale) || length(rationale) != 1L ||
-         is.na(rationale) || !nzchar(trimws(rationale)))) {
-        stop("cat_output() rationale must be one non-empty string or NULL.",
-             call. = FALSE)
-    }
-    .check_payload_args("cat_output()", values_from, reduce,
-                        reduce_required = FALSE)
-    if (!is.null(rationale) &&
-        (!is.null(values_from) || !is.null(reduce))) {
-        stop("cat_output() rationale is available only for LLM extraction, not ",
-             "for a reduced categorical payload.", call. = FALSE)
-    }
-    if (!is.null(values_from) && is.null(reduce)) {
-        stop("cat_output() values_from without reduce has no meaning: the payload ",
-             "flavor needs both.", call. = FALSE)
-    }
-    .new_spec(
-        list(kind = "categorical", levels = levels,
-             values_from = values_from, reduce = reduce,
-             description = description, rationale = rationale),
-        "ee_output_type")
-}
-
-# A DATE cohort column: the value of a hit row is its CLOCK (the same date column
-# the engine windows the channel on -- RECDATE for a doc, DATEACTE for an act,
-# DATEXAM for a lab result), and reduce picks which one survives (min = first
-# occurrence, max = last). Consumer 2026-07-07: date of the pre-op anesthesia
-# consult (a doc_channel's RECDATE, reduce = max). An `at =` override naming a
-# non-default clock column (e.g. DATSORT) is designed but waits for its consumer.
-date_output <- function(values_from = NULL, reduce = NULL) {
-    .check_payload_args("date_output()", values_from, reduce,
-                        reduce_required = TRUE)
-    .new_spec(
-        list(kind = "date", values_from = values_from, reduce = reduce),
-        "ee_output_type")
-}
-
-# A SET of cohort columns produced by one extraction task (e.g. the several
-# anastomosis durations / types / locations from one operative report). The output
-# contract belongs to the task, not to one scalar column.
-struct_output <- function(fields) {
-    fields <- as.character(fields)
-    if (!length(fields) || anyNA(fields) || any(!nzchar(fields)) ||
-        anyDuplicated(fields)) {
-        stop("struct_output() needs unique non-empty fields.", call. = FALSE)
-    }
-    .new_spec(list(kind = "fields", fields = fields), "ee_output_type")
 }
