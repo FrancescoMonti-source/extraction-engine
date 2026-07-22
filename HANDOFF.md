@@ -1540,3 +1540,27 @@ build and built-tarball `R CMD check --no-manual --no-build-vignettes` finish wi
 `Status: OK`; `git diff --check` passes. Repository-index warnings reflect the
 restricted network and did not produce a package warning or note. No commit was
 created.
+
+## First deterministic onboarding vignette -- Codex (2026-07-22)
+
+The vignette tranche deferred after the Desktop-demo validation is now
+implemented as `vignettes/getting-started.Rmd`. It is a standalone synthetic
+ionic-balance example rather than a copy of the real-data demo. Its progressive
+path covers concept/channel naming, a simple deterministic output, boolean
+qualification, the cross-grain `filter_by_qualified` distinction, the equivalent
+`semi_join() -> group_by() -> summarise()` flow, and guided reading of `values`,
+`channel_status`, `evidence`, `execution_manifest`, `combine_keys`, and `counts`.
+The README links it as the first user onboarding entry point.
+
+The vignette deliberately excludes external data and model calls. LLM authoring
+remains linked from the README, and lazy execution of payload-only LLM
+activations remains a separate runtime tranche. `knitr` and `rmarkdown` are
+Suggests-only dependencies; `VignetteBuilder: knitr` makes the HTML vignette part
+of the ordinary source-package build. Two fresh renders are byte-identical after
+omitting only the manifest's execution timestamp from rendered output.
+
+Verification uses the Positron-bundled Pandoc 3.8.3 with R 4.5.2. All 30 existing
+test expectations pass; `R CMD build` creates the vignette; built-tarball
+`R CMD check --no-manual` checks and rebuilds it with `Status: OK`; and
+`git diff --check` passes. No runtime API or sentinel test changed. No commit was
+created.

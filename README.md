@@ -13,6 +13,13 @@ The package is experimental and currently intended for internal use. Its API is
 allowed to break when a clearer execution contract is found. It contains no
 patient data or exported clinical concepts.
 
+## Start here
+
+New users should begin with
+[`vignette("getting-started", package = "extractionengine")`](vignettes/getting-started.Rmd).
+It builds one auditable variable from synthetic data, translates the relational
+contract to dplyr, and explains the result and audit objects.
+
 ## One complete authoring workflow
 
 Assume `cohort` contains `PATID + EVTID`, `bio` is a prepared biology view, and

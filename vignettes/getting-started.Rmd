@@ -1,0 +1,488 @@
+---
+title: "From a clinical question to an auditable variable"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{From a clinical question to an auditable variable}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align = "center"
+)
+options(tibble.width = Inf)
+```
+
+`extractionengine` executes a study variable that **you** define. It does not
+choose the clinical definition, interpret missing evidence as clinical absence,
+or decide which source column is the result.
+
+This vignette follows one small, fully synthetic example. By the end, you will
+be able to:
+
+- separate a reusable concept from a variable-specific activation;
+- read `combine by -> filter by qualified -> group by -> reduce` as a relational
+  data flow;
+- predict which rows reach a reducer; and
+- find the published value, execution status, evidence, and audit trail.
+
+The analyte codes, values, and thresholds below are illustrative. They are not a
+recommended clinical definition.
+
+```{r libraries, message = FALSE, warning = FALSE}
+library(extractionengine)
+library(dplyr)
+library(tibble)
+```
+
+## 1. Begin with the row universe
+
+The cohort is the set of units the study asks the engine to evaluate. Here it
+contains four stays belonging to two patients. The biology table is a prepared
+source: in a real study, `redsan` owns that preparation step.
+
+```{r synthetic-data}
+cohort <- tribble(
+  ~PATID, ~EVTID,
+  "P1",   "E1",
+  "P1",   "E2",
+  "P2",   "E3",
+  "P2",   "E4"
+)
+
+biology <- tribble(
+  ~PATID, ~EVTID, ~ELTID, ~biol_ID, ~DATEXAM,    ~TYPEANA, ~NUMRES, ~STRRES,
+  "P1",   "E1",   "L1",   "B1",     "2026-01-01", "K.K",       5.8, NA_character_,
+  "P1",   "E1",   "L2",   "B2",     "2026-01-02", "K.K",       5.6, NA_character_,
+  "P1",   "E1",   "L3",   "B3",     "2026-01-02", "NA.NA",   130,   NA_character_,
+  "P1",   "E2",   "L4",   "B4",     "2026-02-01", "K.K",       4.0, NA_character_,
+  "P1",   "E2",   "L5",   "B5",     "2026-02-02", "K.K",       4.2, NA_character_,
+  "P1",   "E2",   "L6",   "B6",     "2026-02-02", "NA.NA",   140,   NA_character_,
+  "P2",   "E3",   "L7",   "B7",     "2026-03-01", "K.K",       5.5, NA_character_,
+  "P2",   "E3",   "L8",   "B8",     "2026-03-01", "NA.NA",   141,   NA_character_,
+  "P2",   "E4",   "L9",   "B9",     "2026-04-01", "K.K",       5.9, NA_character_,
+  "P2",   "E4",   "L10",  "B10",    "2026-04-01", "NA.NA",   129,   NA_character_
+) |>
+  mutate(DATEXAM = as.Date(DATEXAM))
+
+cohort
+biology |>
+  select(PATID, EVTID, DATEXAM, TYPEANA, NUMRES)
+```
+
+Before reading further, inspect the rows and try to answer two questions:
+
+1. Which stays have both potassium above 5.2 and sodium below 135?
+2. For each patient, how would the mean potassium change if it used only those
+   stays rather than every stay of a patient who qualifies at least once?
+
+## 2. A concept only locates possible evidence
+
+The concept declares where potassium and sodium rows are found. `analyte()`
+matches `TYPEANA`; it does not choose `NUMRES`, `STRRES`, or `DATEXAM` as the
+result.
+
+```{r concept}
+ionic_balance <- concept_spec(
+  name = "ionic_balance",
+  channels = list(
+    potassium = lab_channel(
+      selector = analyte("K.K")
+    ),
+    sodium = lab_channel(
+      selector = analyte("NA.NA")
+    )
+  )
+)
+```
+
+The names connect the authoring layers explicitly:
+
+- `lab_channel()` uses the logical source name `"biology"` by default;
+  `sources = list(biology = biology)` supplies that source at runtime;
+- `potassium` and `sodium`, on the left of the concept's `channels` list, are
+  concept-channel names; and
+- inside a variable, the name on the left of `channels = list(...)` is an
+  activation alias, while `use_channel(channel = "potassium")` points back to
+  the concept channel it activates.
+
+Combine expressions, outputs, evidence, and audit tables refer to activation
+aliases. An alias may reuse its origin's name, as in the first example, or give
+the same origin a variable-specific role such as `potassium_high`.
+
+The authoring layers answer different questions:
+
+| Layer | Question |
+|---|---|
+| `concept_spec()` | Where can relevant source rows be found? |
+| `use_channel()` | How does this variable use those rows? |
+| `combine_channels()` | Which relational units satisfy the signal rule? |
+| `from_channel()` / `bin_output()` | What is published, at which key, and how is it reduced? |
+
+## 3. Activate one channel and publish one value
+
+Start with a simple question: *what is the mean potassium for each stay?*
+
+```{r simple-variable}
+mean_potassium_by_stay <- variable_spec(
+  name = "mean_potassium_by_stay",
+  concept = ionic_balance,
+
+  channels = list(
+    potassium = use_channel(
+      channel = "potassium"
+    )
+  ),
+
+  output = from_channel(
+    channel = "potassium",
+    column = "NUMRES",
+    group_by = "EVTID",
+    reduce = mean
+  )
+)
+
+potassium_run <- run_variable(
+  mean_potassium_by_stay,
+  cohort = cohort,
+  sources = list(biology = biology)
+)
+
+potassium_run$values
+```
+
+Read the output declaration from top to bottom:
+
+- take the activated channel called `potassium`;
+- read its real prepared-source column `NUMRES`;
+- group the remaining rows by `EVTID`; and
+- call `mean()` once for each group.
+
+The runner calls each final output unit a **task**. A task is not specific to an
+LLM: with `group_by = "EVTID"`, the engine creates one task per stay; with
+`group_by = "PATID"`, it creates one task per patient.
+
+The reducer is optional. With `reduce = NULL`, zero non-missing values produce a
+typed `NA`, one value is published directly, and more than one is a cardinality
+error. Supplying `reduce = mean` explicitly defines how multiple values become
+one scalar.
+
+## 4. Qualify stays without publishing a laboratory value
+
+Now define an observed alert as potassium above 5.2 **and** sodium below 135 in
+the same stay. `filter_rows` has dplyr `filter()` semantics and is evaluated
+separately inside each task: its named source columns arrive as vectors, and it
+returns one logical value per candidate row. Each activation keeps the complete
+surviving source rows; the combine then tests whether both signals coexist at
+`EVTID`.
+
+```{r binary-variable}
+ionic_alert_by_stay <- variable_spec(
+  name = "ionic_alert_by_stay",
+  concept = ionic_balance,
+
+  channels = list(
+    potassium_high = use_channel(
+      channel = "potassium",
+      filter_rows = function(NUMRES) NUMRES > 5.2
+    ),
+    sodium_low = use_channel(
+      channel = "sodium",
+      filter_rows = function(NUMRES) NUMRES < 135
+    )
+  ),
+
+  combine = combine_channels(
+    "potassium_high & sodium_low",
+    by = "EVTID"
+  ),
+
+  output = bin_output(group_by = "EVTID")
+)
+```
+
+`combine_channels(..., by = "EVTID")` determines **where qualification is
+decided**. It does not calculate a mean or choose the final output key.
+`bin_output(group_by = "EVTID")` publishes the observed membership directly:
+one `1` or `0` for each cohort stay.
+
+## 5. Qualification and reducer input are separate decisions
+
+Suppose the scientific question changes:
+
+> Among patients with at least one alert stay, what is their mean potassium?
+
+That sentence is incomplete. It can mean either:
+
+- mean potassium from the alert stays only; or
+- mean potassium from all stays of a patient who has at least one alert stay.
+
+The combine is identical in both cases. A third activation, `potassium_rows`, is
+payload-only: it supplies values to the output without participating in the
+boolean expression.
+
+The cohort still declares which `PATID + EVTID` stays are eligible. The output's
+`group_by = "PATID"` projects those eligible units to one final task per patient;
+the source `EVTID` remains available to the finer combine relation.
+
+First, retain only potassium rows belonging to alert stays:
+
+```{r qualified-stays-variable}
+mean_k_in_qualified_stays <- variable_spec(
+  name = "mean_k_in_qualified_stays",
+  concept = ionic_balance,
+
+  channels = list(
+    potassium_high = use_channel(
+      channel = "potassium",
+      filter_rows = function(NUMRES) NUMRES > 5.2
+    ),
+    sodium_low = use_channel(
+      channel = "sodium",
+      filter_rows = function(NUMRES) NUMRES < 135
+    ),
+    potassium_rows = use_channel(
+      channel = "potassium"
+    )
+  ),
+
+  combine = combine_channels(
+    "potassium_high & sodium_low",
+    by = "EVTID"
+  ),
+
+  output = from_channel(
+    channel = "potassium_rows",
+    column = "NUMRES",
+    filter_by_qualified = "EVTID",
+    group_by = "PATID",
+    reduce = mean
+  )
+)
+```
+
+The second specification is deliberately repeated so that its complete contract
+remains visible. Only its canonical name and `filter_by_qualified` change:
+
+```{r qualified-patients-variable}
+mean_k_in_qualified_patients <- variable_spec(
+  name = "mean_k_in_qualified_patients",
+  concept = ionic_balance,
+
+  channels = list(
+    potassium_high = use_channel(
+      channel = "potassium",
+      filter_rows = function(NUMRES) NUMRES > 5.2
+    ),
+    sodium_low = use_channel(
+      channel = "sodium",
+      filter_rows = function(NUMRES) NUMRES < 135
+    ),
+    potassium_rows = use_channel(
+      channel = "potassium"
+    )
+  ),
+
+  combine = combine_channels(
+    "potassium_high & sodium_low",
+    by = "EVTID"
+  ),
+
+  output = from_channel(
+    channel = "potassium_rows",
+    column = "NUMRES",
+    filter_by_qualified = "PATID",
+    group_by = "PATID",
+    reduce = mean
+  )
+)
+```
+
+Run the three related variables together. `run_protocol()` returns a lossless
+named list; each result name comes from `variable_spec(name = ...)`.
+
+```{r run-protocol}
+results <- run_protocol(
+  list(
+    ionic_alert_by_stay,
+    mean_k_in_qualified_stays,
+    mean_k_in_qualified_patients
+  ),
+  cohort = cohort,
+  sources = list(biology = biology)
+)
+
+results$ionic_alert_by_stay$values
+
+bind_rows(
+  results$mean_k_in_qualified_stays$values,
+  results$mean_k_in_qualified_patients$values
+) |>
+  select(PATID, variable, value)
+```
+
+The execution order explains the difference:
+
+1. `combine by EVTID`: identify alert stays;
+2. `filter by qualified EVTID` or `PATID`: choose which native potassium rows
+   may enter the output;
+3. `group by PATID`: form one final group per patient;
+4. `reduce with mean`: calculate one scalar from each group's remaining values.
+
+There is no hidden mean per stay. The reducer is called once at the final
+`group_by` key.
+
+For `P1`, filtering by `EVTID` keeps only the two potassium values from alert
+stay `E1`, so the result is `(5.8 + 5.6) / 2 = 5.7`. Filtering by `PATID` keeps
+all four potassium values from `E1` and `E2`, so the result becomes `4.9`.
+
+## 6. The same distinction in dplyr
+
+The engine declaration is compact, but its relational meaning should be
+translatable to familiar data manipulation.
+
+```{r dplyr-equivalent}
+potassium_high <- biology |>
+  filter(TYPEANA == "K.K", NUMRES > 5.2) |>
+  distinct(PATID, EVTID)
+
+sodium_low <- biology |>
+  filter(TYPEANA == "NA.NA", NUMRES < 135) |>
+  distinct(PATID, EVTID)
+
+qualified_evtids <- potassium_high |>
+  inner_join(sodium_low, by = c("PATID", "EVTID"))
+
+potassium_rows <- biology |>
+  filter(TYPEANA == "K.K")
+
+# filter_by_qualified = "EVTID"
+potassium_rows |>
+  semi_join(qualified_evtids, by = c("PATID", "EVTID")) |>
+  group_by(PATID) |>
+  summarise(value = mean(NUMRES), .groups = "drop")
+
+# filter_by_qualified = "PATID"
+qualified_patients <- qualified_evtids |>
+  distinct(PATID)
+
+potassium_rows |>
+  semi_join(qualified_patients, by = "PATID") |>
+  group_by(PATID) |>
+  summarise(value = mean(NUMRES), .groups = "drop")
+```
+
+`filter_by_qualified` therefore chooses the key used by the conceptual
+`semi_join()` **before** terminal grouping. It does not choose the level at which
+the reducer operates; `output$group_by` does that.
+
+## 7. Read the result as an audit package
+
+Every run has four top-level components:
+
+```{r result-components}
+names(results$mean_k_in_qualified_stays)
+```
+
+### What was published?
+
+`values` is the study variable at the declared output key.
+
+```{r audit-values}
+results$mean_k_in_qualified_stays$values
+```
+
+### Did execution finish, and was a signal observed?
+
+`channel_status` separates processing from signal membership.
+
+```{r audit-status}
+results$ionic_alert_by_stay$channel_status |>
+  select(PATID, EVTID, channel, status, hit, contribution)
+```
+
+`status = "complete"` means ascertainment finished; it does not mean that the
+channel hit. `hit` records the observed signal. A contribution labelled
+`negative` means "ascertained without an observed hit", not a clinical negative
+finding.
+
+### Which source rows remain inspectable?
+
+`evidence` contains public, resolvable source evidence. Here we inspect only the
+payload rows that reached the patient result after qualification.
+
+```{r audit-evidence}
+results$mean_k_in_qualified_stays$evidence |>
+  filter(channel == "potassium_rows") |>
+  select(PATID, source_EVTID, TYPEANA, NUMRES, evidence_ref)
+```
+
+The final output key is `PATID`, while `source_EVTID` records the stay to which a
+source row natively belonged. The two identifiers answer different questions in
+a cross-grain result. `evidence_ref` is the canonical public reference assigned
+to that evidence row; private executor coordinates are kept out of this table.
+
+### What recipe ran, and why did a stay qualify?
+
+The execution manifest is the resolved configuration snapshot, not a
+chronological log.
+
+```{r audit-manifest}
+manifest_lines <- capture.output(
+  print(results$mean_k_in_qualified_stays$audit$execution_manifest)
+)
+
+# Omit only the run timestamp so that the rendered vignette is reproducible.
+cat(manifest_lines[!startsWith(manifest_lines, "Executed at:")], sep = "\n")
+```
+
+`combine_keys` exposes the boolean relation evaluated at `combine$by` for keys
+observed in at least one combine activation. It is not a complete cohort roster:
+an all-false stay may be absent here even though `bin_output()` publishes its
+final `0` in `values`.
+
+```{r audit-combine-keys}
+results$mean_k_in_qualified_stays$audit$combine_keys
+```
+
+`counts` helps locate where rows were removed. Its stages count rows or values;
+they are not clinical outcomes.
+
+```{r audit-counts}
+results$mean_k_in_qualified_stays$audit$counts |>
+  filter(PATID == "P1", channel == "potassium_rows")
+```
+
+Low-level executor objects live under `audit$internal`. They are useful for
+debugging, but they are not the normal onboarding surface.
+
+## 8. A checklist for authoring a new variable
+
+Before running a new definition, you should be able to answer these questions in
+plain language:
+
+1. Which cohort keys form the row universe?
+2. Which source rows does each concept channel locate?
+3. Which row or group filters does each activation apply?
+4. At which key must signals coexist?
+5. Which qualified rows feed the published value?
+6. Which key defines one final output row?
+7. What must the reducer return when it receives the remaining values?
+
+As small exercises, change one declaration at a time and predict the result
+before rerunning:
+
+- publish the ionic alert once per `PATID` rather than per `EVTID`;
+- change the combine from `&` to `|`; or
+- replace `mean` with `max` and explain which rows it receives.
+
+Text retrieval and structured LLM extraction use the same
+concept--activation--output separation, but add retrieval scope, prompts, and an
+`ellmer::TypeObject`. They are intentionally kept out of this deterministic
+onboarding path. See `?use_channel` for windows, grouped filters, and text search,
+and the README's
+[Structured text extraction](https://github.com/FrancescoMonti-source/extraction-engine#structured-text-extraction)
+section for the LLM contract.
