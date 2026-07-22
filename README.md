@@ -109,8 +109,10 @@ the internal task clock; it does not look for that column in a channel source.
 Alternatively, `index_event()` derives the clock from the registered source it
 names, before any channel runs. It currently accepts a code selector created by
 `icd10()` or `ccam()`; `at` names the source's real date column (or defaults to
-its registered clock), and `select_event` must resolve multiple matches. This
-anchor resolution is independent of the variable's activated channels.
+its registered clock), and `select_event` must resolve multiple matches by
+selecting rows from that matched relation. It may filter or reorder those rows,
+but cannot alter or invent an `EVTID`/date pair. This anchor resolution is
+independent of the variable's activated channels.
 
 The relational declarations answer different questions:
 
@@ -204,6 +206,10 @@ declarations answer separate questions:
 - `combine$by`: where is qualification decided?
 - `filter_by_qualified`: rows from which qualified units feed the reducer?
 - `output$group_by`: at which key is the final result grouped and published?
+
+The payload channel's public evidence follows the same qualified-row relation:
+it cannot include rows from units excluded before grouping. The complete
+pre-gate channel intermediate remains available under `audit$internal`.
 
 The filter must be `NULL` when there is no combine, when
 `bin_output(group_by = ...)` publishes membership directly, when combine and
@@ -300,6 +306,22 @@ limited to the snippets actually shown. Those names, grain keys, and audit field
 are reserved and cannot collide with authored fields. Evidence identifiers are
 resolved to the evidence table rather than published as JSON columns. No manual
 `json_format` is used.
+
+A completed response is valid only when at least one returned evidence ID
+resolves to a supplied snippet. Mixed real and invented IDs keep the grounded
+result, discard the invented IDs, and raise a citation warning. A response with
+no real ID is invalid and publishes typed missing fields plus review state while
+retaining its raw response in the audit.
+
+Retrieval retains identical wording from distinct native source units for
+relational evidence. Before applying `max_candidates`, the LLM prompt separately
+keeps one canonical occurrence of each normalized hit sentence per task (or
+normalized snippet text for pre-retrieved inputs without `hit_text`), so repeated
+documents do not crowd distinct excerpts out of a bounded prompt.
+
+Pre-retrieved text inputs are a test/debug boundary and must describe a possible
+retrieval result: `coverage_state` uses the three canonical states, and a task has
+candidate rows if and only if its state is `candidate`.
 
 An LLM response does not implicitly define boolean channel membership. A
 `lucene_llm` activation may be published with `from_channel()` (including as a

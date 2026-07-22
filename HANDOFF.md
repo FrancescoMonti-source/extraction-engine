@@ -1,14 +1,15 @@
 # Collaboration & handoff log
 
-This repo is the **shared coordination layer** between two assistants (Claude,
-GPT-5.5) and the human owner. It exists so neither model depends on its own chat
-memory — anyone can re-enter cold by reading `DESIGN.md` and this file.
+This repo is the **shared coordination layer** between the human owner and AI
+collaborators. It exists so no collaborator depends on its own chat memory —
+anyone can re-enter cold by reading `DESIGN.md` and this file.
 
 ## Protocol
 
-- **Roles.** The human owns product & clinical decisions. Claude and GPT-5.5
-  **both draft and both review** (mutual, not one-directional). The human is the
-  relay between the two models and the decision-maker.
+- **Roles.** The human owns product and clinical decisions. AI collaborators
+  **both draft and review** (mutual, not one-directional). The human remains the
+  decision-maker and coordinates exchanges when collaborators do not share a
+  session.
 - **Source of truth.** `DESIGN.md` = target architecture and vocabulary
   (§16 = deferred capabilities gated on a consumer). `HANDOFF.md`
   (this file) = the review/coordination frame and chronological log.
@@ -1478,3 +1479,64 @@ define an explicit audit state for payload calls skipped by the gate and ensure
 that their nonexistent evidence is not confused with retrieval failure. Preserve
 the current published-value semantics and cover the change inside the existing
 LLM sentinel rather than adding another `test_that()` block.
+
+## Relational evidence and LLM grounding regressions repaired -- Codex (2026-07-21)
+
+This bounded correctness tranche repairs three review findings without changing
+the public API. Text retrieval now deduplicates normalized hit sentences only
+within the same native `EVTID`/`ELTID` identity, so identical wording in distinct
+documents cannot erase stay/document membership before relational combination.
+The LLM candidate view separately deduplicates normalized hit text per task
+before applying `max_candidates`, preserving prompt diversity without changing
+the retrieval relation.
+A completed LLM response is valid only when at least one citation resolves to a
+supplied snippet: mixed real/invented citations remain grounded and flagged,
+whereas invented-only and uncited responses publish typed missing fields with an
+invalid/review state while retaining the raw response in audit. Finally, public
+evidence for a gated deterministic payload is restricted to the same qualifying
+row relation as its value calculation; the full pre-gate intermediate remains in
+`audit$internal`.
+
+The existing three sentinel `test_that()` blocks now contain 70 passing
+expectations. `testthat::test_local(".")`, source-package build, built-tarball
+`R CMD check --no-manual --no-build-vignettes` (`Status: OK`), and
+`git diff --check` pass. Repository-index warnings during check reflect the
+restricted network and did not produce a package warning or note.
+
+The medium-priority validation and housekeeping findings remain a separate
+reviewable tranche: contradictory pre-retrieved text states, unconstrained
+`index_event(select_event =)`, and historical handoff cleanup.
+
+## Medium input boundaries and protected test floor -- Codex (2026-07-21)
+
+The remaining medium findings are closed at their existing ownership boundaries.
+Pre-retrieved text validation now accepts only the three states produced by real
+retrieval and requires the task sets on the two sides of the relation to agree:
+candidate rows exist if and only if `coverage_state == "candidate"`. This prevents
+the previously accepted public contradiction `value = 0` plus positive evidence.
+`index_event(select_event =)` is now selection-only: every returned composite
+`EVTID`/date tuple must already occur in that patient's matched event relation.
+Filtering, reordering, valid multi-row event emission, and Date/POSIXct inputs
+remain supported; crossed or fabricated tuples fail before channel execution.
+
+The test suite was then reviewed assertion by assertion using the established
+gate: keep a test only when it protects an engine invariant, an external/source
+contract, or a known silent regression we would intentionally defend today.
+The three sentinel blocks fell from 70 to 30 expectations. Removed checks were
+mainly exact stage counts, `formals()` introspection, deterministic naming and
+toggle behavior, wording snapshots, duplicate class/value checks, and internal
+layout assertions. Retained checks cover explicit source-column semantics,
+fail-closed cardinality, cross-grain row qualification and broadcast, truthful
+evidence/provenance, native text identity, no-candidate call skipping, bounded
+prompt diversity, citation grounding, and the two repaired trust boundaries.
+Each retained assertion cluster now states the invariant it protects, and exact
+row comparisons canonicalize order rather than making incidental execution order
+part of the contract.
+
+The collaboration header is model-agnostic again; it no longer goes stale when a
+named assistant or model version changes. No unexpected worktree artifacts were
+created. `testthat::test_local(".")` passes all 30 expectations; source-package
+build and built-tarball `R CMD check --no-manual --no-build-vignettes` finish with
+`Status: OK`; `git diff --check` passes. Repository-index warnings reflect the
+restricted network and did not produce a package warning or note. No commit was
+created.

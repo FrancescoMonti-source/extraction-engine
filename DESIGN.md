@@ -70,7 +70,9 @@ A character `anchor` is the exact date column supplied by the cohort. The engine
 copies it to the internal task clock only when a window consumes it; it never
 looks for that column in a channel source. `index_event()` is the alternative
 pre-channel resolution: it names its own registered source, code selector, and
-physical date column independently of the activated channels.
+physical date column independently of the activated channels. Its `select_event`
+closure may filter or reorder the matched event rows but cannot synthesize or
+alter an `EVTID`/date tuple.
 
 An activation may be used only by `from_channel()`; it need not occur in a
 combine expression.
@@ -125,7 +127,9 @@ coarse-to-fine broadcast. The filter never creates an intermediate aggregation.
 
 Payload execution is ordered: `combine by -> filter by qualified -> group by ->
 reduce`. The reducer is called once per final group on non-missing raw values;
-there is no implicit lower-grain aggregation.
+there is no implicit lower-grain aggregation. Public evidence for the payload
+channel is restricted by the same qualified-row relation; its complete pre-gate
+intermediate remains internal audit data.
 
 LLM responses are compiled as one row per output task. Consequently, an LLM
 activation used as a fine-to-coarse payload may set `filter_by_qualified` only
@@ -136,7 +140,18 @@ invalid for an LLM output.
 `search_within = "EVTID"` requires tasks carrying both `PATID` and `EVTID`,
 through stay-grain output or an `index_event()`. When stay-grain output searches
 within the patient, the target stay remains public `EVTID`; an evidence row's
-native stay is kept separately as `source_EVTID`.
+native stay is kept separately as `source_EVTID`. Text retrieval may collapse a
+repeated normalized sentence only within the same native `EVTID`/`ELTID`
+identity; identical wording in distinct source units remains distinct relational
+evidence. For an LLM activation, task-level normalized-text deduplication is then
+applied to the model-candidate view before `max_candidates`, using `snippet_text`
+when a pre-retrieved input has no usable `hit_text`; it does not alter the
+identity-preserving retrieval view.
+
+A pre-retrieved text fixture must be relationally coherent with real retrieval:
+one coverage row per task, only `candidate`, `no_candidate`, or
+`no_eligible_document`, and candidate rows exactly for the tasks whose state is
+`candidate`.
 
 ## LLM contract
 
@@ -153,7 +168,10 @@ overrides that description; `FALSE` or `NULL` omits the field. The engine also
 adds `evidence_ids`, constrained to the snippets actually shown, then resolves
 those identifiers into the evidence table rather than publishing them as a JSON
 field. Authored collisions with engine, grain, or audit fields fail at compile
-time.
+time. A completed response is valid only if at least one ID resolves. Mixed real
+and invented IDs retain the grounded result with a citation warning and discard
+invented IDs; zero resolved IDs make the result invalid, typed-missing, and
+reviewable while preserving the raw response in audit.
 
 `ellmer::chat_structured()` owns structured generation; the engine does not
 construct a manual JSON format. One successful named-list response becomes one

@@ -110,6 +110,12 @@
         stop("Pre-retrieved text coverage must contain exactly one row for ",
              "every task.", call. = FALSE)
     }
+    coverage_state <- as.character(coverage$coverage_state)
+    allowed_states <- c("candidate", "no_candidate", "no_eligible_document")
+    if (anyNA(coverage_state) || any(!coverage_state %in% allowed_states)) {
+        stop("Pre-retrieved text coverage_state must use only: ",
+             paste(allowed_states, collapse = ", "), ".", call. = FALSE)
+    }
     scope_columns <- if (identical(search_within, "EVTID")) {
         c("PATID", "EVTID")
     } else {
@@ -129,9 +135,12 @@
              "' requires task key(s): ", paste(scope_columns, collapse = ", "),
              ".", call. = FALSE)
     }
-    candidate_tasks <- unique(as.character(
-        coverage$task_id[coverage$coverage_state == "candidate"]))
-    candidate_tasks <- candidate_tasks[!is.na(candidate_tasks)]
+    candidate_tasks <- unique(coverage_ids[coverage_state == "candidate"])
+    candidate_row_tasks <- unique(as.character(candidates$task_id))
+    if (!setequal(candidate_tasks, candidate_row_tasks)) {
+        stop("Pre-retrieved text coverage_state must be 'candidate' if and only ",
+             "if candidate rows exist for that task.", call. = FALSE)
+    }
     if (!length(candidate_tasks)) return(invisible(TRUE))
 
     role_columns <- c(
@@ -145,13 +154,7 @@
         stop("Pre-retrieved text candidates are missing required column(s): ",
              paste(missing, collapse = ", "), ".", call. = FALSE)
     }
-    relevant <- candidates[as.character(candidates$task_id) %in% candidate_tasks,
-                           , drop = FALSE]
-    missing_tasks <- setdiff(candidate_tasks, as.character(relevant$task_id))
-    if (length(missing_tasks)) {
-        stop("Pre-retrieved text coverage declares ", length(missing_tasks),
-             " candidate task(s) without candidate rows.", call. = FALSE)
-    }
+    relevant <- candidates
     for (column in setdiff(required_columns, "task_id")) {
         value <- relevant[[column]]
         if (anyNA(value) || any(!nzchar(as.character(value)))) {
@@ -519,6 +522,8 @@
     # picks -- loud error. The closure sees the subject's matched rows with the
     # date under the source's own COLUMN name (the resolved `at`), exactly as
     # written in the spec: select_event = \(d) dplyr::slice_min(d, DATEACTE, n = 1).
+    # It is a selector, not a transformer: every returned EVTID/date tuple must
+    # already exist in this patient's matched relation.
     select_event <- anchor$select_event
     dup <- matched %>% count(PATID) %>% filter(n > 1L)
     if (nrow(dup) && is.null(select_event)) {
@@ -532,11 +537,25 @@
         selected <- view %>%
             group_by(PATID) %>%
             group_modify(function(d, key) {
-                out <- select_event(dplyr::bind_cols(key, d))
+                available <- dplyr::bind_cols(key, d)
+                out <- select_event(available)
                 if (!is.data.frame(out) ||
                     !all(c("EVTID", date_col) %in% names(out))) {
                     stop("select_event must return matched event row(s) ",
                          "keeping the EVTID and ", date_col, " columns.",
+                         call. = FALSE)
+                }
+                available_keys <- tibble::tibble(
+                    EVTID = as.character(available$EVTID),
+                    anchor_date = .clinical_date(available[[date_col]]))
+                selected_keys <- tibble::tibble(
+                    EVTID = as.character(out$EVTID),
+                    anchor_date = .clinical_date(out[[date_col]]))
+                if (nrow(dplyr::anti_join(
+                    selected_keys, available_keys,
+                    by = c("EVTID", "anchor_date")))) {
+                    stop("select_event must return only rows from the matched ",
+                         "event set; it cannot alter EVTID or ", date_col, ".",
                          call. = FALSE)
                 }
                 out[setdiff(names(out), "PATID")]
@@ -1058,6 +1077,24 @@
     payload <- .deterministic_payload(result, output, channel_name)
     payload <- .filter_payload_by_qualified(variable, output, out, payload)
     gate <- out$values
+    qualified_task_ids <- as.character(gate$task_id[gate$value %in% 1L])
+    payload <- payload[
+        as.character(payload$task_id) %in% qualified_task_ids, , drop = FALSE]
+
+    # Public payload evidence follows the same relational gate as the reducer.
+    # Other channels retain their complete hit evidence, and the unfiltered
+    # payload intermediate remains available under audit$internal.
+    payload_keys <- paste(
+        as.character(payload$task_id), as.character(payload$source_row_id),
+        sep = "\r")
+    evidence_keys <- paste(
+        as.character(out$evidence$task_id),
+        as.character(out$evidence$evidence_ref), sep = "\r")
+    is_payload_evidence <- out$evidence$channel == channel_name
+    out$evidence <- out$evidence[
+        !is_payload_evidence | evidence_keys %in% payload_keys,
+        , drop = FALSE]
+
     value_rows <- vector("list", nrow(gate))
     n_payload <- integer(nrow(gate))
     for (i in seq_len(nrow(gate))) {

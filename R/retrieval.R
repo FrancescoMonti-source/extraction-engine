@@ -72,16 +72,21 @@ untokenize <- function(tokens) {
         )
 }
 
-# Deduplicate by NORMALIZED HIT SENTENCE within a task (not the full snippet),
-# keeping the canonical occurrence (min |days_from_anchor| -> earliest RECDATE ->
-# smallest ELTID -> smallest sentence) and retaining removed refs/dates as audit.
+# Deduplicate by NORMALIZED HIT SENTENCE within one native evidence unit (not the
+# full snippet). A task may span several stays/documents, and collapsing identical
+# wording across those units would erase EVTID/ELTID membership before relational
+# combine. Within one unit, keep the canonical occurrence (min
+# |days_from_anchor| -> earliest RECDATE -> smallest sentence) and retain removed
+# refs/dates as audit.
 .deduplicate <- function(candidates) {
     if (!nrow(candidates)) return(candidates)
+    identity_keys <- intersect(c("EVTID", "ELTID"), names(candidates))
+    dedup_keys <- c("task_id", identity_keys, ".norm_hit")
     candidates %>%
         mutate(.norm_hit = tolower(str_squish(hit_text)),
                .abs_days = abs(days_from_anchor)) %>%
         arrange(task_id, .norm_hit, .abs_days, RECDATE, ELTID, sentence) %>%
-        group_by(task_id, .norm_hit) %>%
+        group_by(across(all_of(dedup_keys))) %>%
         group_modify(function(.x, .y) {
             keep <- .x[1L, , drop = FALSE]
             dup  <- if (nrow(.x) > 1L) .x[-1L, , drop = FALSE] else .x[0, ]

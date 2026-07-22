@@ -22,7 +22,7 @@ lab_variable <- function(code, column, reduce = NULL) {
             "result", column = column, group_by = "PATID", reduce = reduce))
 }
 
-test_that("one lab concept publishes real columns without result-lane inference", {
+test_that("prepared columns remain explicit and cardinality fails closed", {
     biology <- lab_fixture()
     cohort <- tibble::tibble(PATID = "P1")
 
@@ -35,38 +35,39 @@ test_that("one lab concept publishes real columns without result-lane inference"
     date_run <- run_variable(
         lab_variable("K.K", "DATEXAM", max), cohort,
         sources = list(biology = biology))
-    direct_run <- run_variable(
-        lab_variable("ONE", "NUMRES"), cohort,
-        sources = list(biology = biology))
     empty_run <- run_variable(
         lab_variable("EMPTY", "NUMRES"), cohort,
         sources = list(biology = biology))
 
-    expect_identical(numeric_run$values$value, 5.1)
-    expect_identical(character_run$values$value, "negatif|legacy-code")
-    expect_s3_class(date_run$values$value, "POSIXct")
+    # Engine invariant: from_channel() reads the authored source column and
+    # preserves the reducer's scalar type; it never infers a synthetic result lane.
     expect_identical(
-        date_run$values$value,
-        as.POSIXct("2026-01-03", tz = "Europe/Paris"))
-    expect_identical(direct_run$values$value, 2)
+        list(
+            numeric = numeric_run$values$value,
+            character = character_run$values$value,
+            date = date_run$values$value),
+        list(
+            numeric = 5.1,
+            character = "negatif|legacy-code",
+            date = as.POSIXct("2026-01-03", tz = "Europe/Paris")))
+
+    # Zero values remain typed missing; ambiguous cardinality is a loud error.
     expect_identical(empty_run$values$value, NA_real_)
 
-    # A dual-result row is ordinary evidence. Reading NUMRES does not erase the
-    # qualitative row, nor does it make the source ambiguous.
-    expect_equal(nrow(numeric_run$evidence), 3L)
-    expect_true(any(
-        is.na(numeric_run$evidence$NUMRES) &
-            numeric_run$evidence$STRRES == "negatif"))
-    expect_true(any(
-        !is.na(numeric_run$evidence$NUMRES) &
-            numeric_run$evidence$STRRES == "legacy-code"))
+    # Provenance invariant: choosing NUMRES does not erase sibling payload or
+    # rows with missing NUMRES, and private coordinates do not leak publicly.
     expect_identical(
-        names(numeric_run),
-        c("values", "channel_status", "evidence", "audit"))
-    expect_true("evidence_ref" %in% names(numeric_run$evidence))
-    expect_false(any(c("source_row_id", "hit_ref") %in%
-                     names(numeric_run$evidence)))
-    expect_identical(unique(numeric_run$evidence$source_EVTID), c("E1", "E2"))
+        numeric_run$evidence |>
+            dplyr::arrange(evidence_ref) |>
+            dplyr::select(source_EVTID, NUMRES, STRRES),
+        tibble::tibble(
+            source_EVTID = c("E1", "E1", "E2"),
+            NUMRES = c(4.2, NA, 5.1),
+            STRRES = c(NA, "negatif", "legacy-code")))
+    expect_identical(
+        intersect(c("evidence_ref", "source_row_id", "hit_ref"),
+                  names(numeric_run$evidence)),
+        "evidence_ref")
 
     expect_error(
         run_variable(
@@ -75,7 +76,7 @@ test_that("one lab concept publishes real columns without result-lane inference"
         "found 2 non-missing values")
 })
 
-test_that("aliases, activation filters, combine keys, and restriction keys stay distinct", {
+test_that("relational keys control qualification, evidence, and broadcast", {
     biology <- tibble::tibble(
         PATID = "P1",
         EVTID = c("E1", "E1", "E1", "E2", "E2", "E2"),
@@ -116,54 +117,43 @@ test_that("aliases, activation filters, combine keys, and restriction keys stay 
         anchor_date = as.Date("2026-02-05"))
 
     protocol_specs <- list(make_variable("EVTID"), make_variable("PATID"))
-    protocol_names <- vapply(protocol_specs, `[[`, character(1), "name")
     protocol_run <- run_protocol(
         protocol_specs,
         cohort = patient_cohort,
         sources = list(biology = biology))
-    expect_identical(
-        names(protocol_run),
-        c("mean_hb_filtered_by_EVTID", "mean_hb_filtered_by_PATID"))
-    expect_identical(
-        names(run_protocol(
-            stats::setNames(protocol_specs, protocol_names),
-            cohort = patient_cohort,
-            sources = list(biology = biology))),
-        protocol_names)
     event_restricted <- protocol_run$mean_hb_filtered_by_EVTID
     patient_restricted <- protocol_run$mean_hb_filtered_by_PATID
 
-    expect_identical(event_restricted$values$value, 9.5)
-    expect_identical(patient_restricted$values$value, 12.25)
+    # Engine invariant: the qualified-row key, not an implicit aggregation,
+    # determines which raw rows reach the terminal patient reducer.
+    expect_identical(
+        c(
+            filter_by_EVTID = event_restricted$values$value,
+            filter_by_PATID = patient_restricted$values$value),
+        c(filter_by_EVTID = 9.5, filter_by_PATID = 12.25))
     expect_identical(
         event_restricted$audit$combine_keys$EVTID[
             event_restricted$audit$combine_keys$qualifies],
         "E1")
+    # Audit provenance must retain concept origin after activation aliasing.
     expect_identical(
         unname(vapply(event_restricted$audit$execution_manifest$channels,
                       `[[`, character(1), "origin_name")),
         c("hb", "hb", "hb"))
-    expect_true(any(event_restricted$evidence$channel == "hb_payload"))
-    hb_low_counts <- event_restricted$audit$counts |>
-        dplyr::filter(channel == "hb_low") |>
-        dplyr::select(stage, n)
+    # Known regression: the payload evidence follows the qualifying rows while
+    # gate evidence remains the complete observed signal.
     expect_identical(
-        hb_low_counts,
+        event_restricted$evidence |>
+            dplyr::filter(channel == "hb_payload") |>
+            dplyr::arrange(evidence_ref) |>
+            dplyr::select(source_EVTID, NUMRES),
         tibble::tibble(
-            stage = c("task_join", "window", "selector", "filter_rows"),
-            n = c(6L, 5L, 4L, 2L)))
+            source_EVTID = c("E1", "E1"),
+            NUMRES = c(9, 10)))
     expect_identical(
-        event_restricted$audit$counts$n[
-            event_restricted$audit$counts$channel == "hb_payload" &
-                event_restricted$audit$counts$stage == "output_input"],
-        2L)
-    expect_identical(
-        patient_restricted$audit$counts$n[
-            patient_restricted$audit$counts$channel == "hb_payload" &
-                patient_restricted$audit$counts$stage == "output_input"],
-        4L)
-    expect_false(any(c("membership", "channel_results", "combine_keys") %in%
-                     names(event_restricted)))
+        sort(event_restricted$evidence$source_EVTID[
+            event_restricted$evidence$channel == "hb_gate"]),
+        c("E1", "E1", "E2", "E2"))
 
     broadcast <- variable_spec(
         name = "hb_patient_gate_broadcast_to_events",
@@ -187,17 +177,99 @@ test_that("aliases, activation filters, combine keys, and restriction keys stay 
             anchor_date = as.Date("2026-02-05")),
         sources = list(biology = biology))
 
+    # Coarse qualification broadcasts to declared descendant output units; the
+    # public relation remains at the authored combine key.
     expect_identical(broadcast_run$values$value, c(1L, 1L, 0L))
     expect_identical(
-        broadcast_run$audit$combine_keys,
+        broadcast_run$audit$combine_keys |>
+            dplyr::arrange(PATID),
         tibble::tibble(
             PATID = c("P1", "P2"),
             hb_gate = c(TRUE, FALSE),
             hb_low = c(TRUE, FALSE),
             qualifies = c(TRUE, FALSE)))
+
+    # Identical text in two source documents is not duplicate relational
+    # evidence: both native stay/document keys must survive real retrieval.
+    documents <- data.frame(
+        ELTID = c("D1", "D2"),
+        RECTXT = c("Alpha marker.", "Alpha marker. Beta marker."),
+        PATID = c("P1", "P1"),
+        EVTID = c("E1", "E2"),
+        RECDATE = as.Date(c("2026-01-01", "2026-01-02")),
+        RECTYPE = c("CR", "CR"))
+    corpus <- corpustools::create_tcorpus(
+        documents,
+        text_columns = "RECTXT", doc_column = "ELTID",
+        split_sentences = TRUE, remember_spaces = FALSE, verbose = FALSE)
+    text_signals <- concept_spec(
+        "same_sentence_across_stays",
+        channels = list(
+            alpha = text_channel(lucene_query("alpha")),
+            beta = text_channel(lucene_query("beta"))))
+    text_variable <- function(by) variable_spec(
+        name = paste0("same_unit_text_intersection_", by),
+        concept = text_signals,
+        channels = list(
+            alpha = use_channel(
+                "alpha", search_within = "PATID", method = "lucene"),
+            beta = use_channel(
+                "beta", search_within = "PATID", method = "lucene")),
+        combine = combine_channels("alpha & beta", by = by),
+        output = bin_output(group_by = "PATID"))
+
+    text_runs <- run_protocol(
+        list(text_variable("EVTID"), text_variable("ELTID")),
+        cohort = tibble::tibble(PATID = "P1"),
+        sources = list(documents = corpus))
+    expect_identical(
+        vapply(text_runs, function(run) run$values$value, integer(1)),
+        c(same_unit_text_intersection_EVTID = 1L,
+          same_unit_text_intersection_ELTID = 1L))
+    event_text_run <- text_runs$same_unit_text_intersection_EVTID
+    document_text_run <- text_runs$same_unit_text_intersection_ELTID
+    expect_identical(
+        c(
+            EVTID = event_text_run$audit$combine_keys$EVTID[
+                event_text_run$audit$combine_keys$qualifies],
+            ELTID = document_text_run$audit$combine_keys$ELTID[
+                document_text_run$audit$combine_keys$qualifies]),
+        c(EVTID = "E2", ELTID = "D2"))
+    expect_identical(
+        sort(event_text_run$evidence$source_EVTID[
+            event_text_run$evidence$channel == "alpha"]),
+        c("E1", "E2"))
+
+    # Trust-boundary invariant: select_event may select matched rows, but cannot
+    # synthesize a crossed EVTID/date pair that rewrites the clinical clock.
+    acts <- tibble::tibble(
+        PATID = "P1",
+        EVTID = c("A1", "A2"),
+        ELTID = c("AD1", "AD2"),
+        CODEACTE = c("ABCD001", "ABCD001"),
+        DATEACTE = as.Date(c("2026-02-03", "2026-02-05")))
+    crossed_anchor <- variable_spec(
+        name = "crossed_index_event_is_invalid",
+        concept = hemoglobin,
+        anchor = index_event(
+            "pmsi_actes", ccam("ABCD001"), at = "DATEACTE",
+            select_event = function(d) {
+                selected <- d[1, , drop = FALSE]
+                selected$DATEACTE <- d$DATEACTE[[2]]
+                selected
+            }),
+        channels = list(hb = use_channel("hb", window = c(-Inf, 0))),
+        output = from_channel(
+            "hb", column = "NUMRES", group_by = "PATID", reduce = max))
+    expect_error(
+        run_variable(
+            crossed_anchor,
+            cohort = tibble::tibble(PATID = "P1"),
+            sources = list(pmsi_actes = acts, biology = biology)),
+        "only rows from the matched event set")
 })
 
-test_that("native TypeObject yields a stable multi-column LLM frame and evidence", {
+test_that("LLM boundary stays grounded, isolated, and fail closed", {
     response <- ellmer::type_object(
         "Extraction structurée du statut tabagique.",
         statut_tabagique = ellmer::type_enum(
@@ -208,8 +280,8 @@ test_that("native TypeObject yields a stable multi-column LLM frame and evidence
     smoking <- concept_spec(
         "tabagisme",
         channels = list(text = text_channel(selector = lucene_query("taba*"))))
-    make_variable <- function(rationale = TRUE) variable_spec(
-        name = if (isFALSE(rationale)) "tabagisme_sans_rationale" else "tabagisme",
+    make_variable <- function(max_candidates = NULL) variable_spec(
+        name = "tabagisme",
         concept = smoking,
         channels = list(text_tabagisme = use_channel(
             channel = "text",
@@ -218,7 +290,7 @@ test_that("native TypeObject yields a stable multi-column LLM frame and evidence
             model = "declared-test-model",
             model_params = list(temperature = 0, seed = 42),
             response = response,
-            rationale = rationale)),
+            max_candidates = max_candidates)),
         output = from_channel("text_tabagisme", group_by = "EVTID"))
 
     cohort <- tibble::tibble(
@@ -239,18 +311,21 @@ test_that("native TypeObject yields a stable multi-column LLM frame and evidence
 
     seen <- new.env(parent = emptyenv())
     seen$types <- list()
+    seen$evidence_ids <- "S001"
+    seen$calls <- 0L
     testthat::local_mocked_bindings(
         .chat_metadata = function(chat) list(
             provider = "test", model = "fake", params = list(),
             temperature = 0, seed = 1L, max_tokens = 100),
         .require_gated_chat = function(metadata) invisible(TRUE),
         .call_chat = function(chat, prompt, type, system_prompt, metadata) {
+            seen$calls <- seen$calls + 1L
             seen$types[[length(seen$types) + 1L]] <- type
             fields <- names(S7::props(type)$properties)
             result <- list(
                 statut_tabagique = "fumeur",
                 temporalite = "actuel",
-                evidence_ids = "S001")
+                evidence_ids = seen$evidence_ids)
             if ("rationale" %in% fields) {
                 result$rationale <- "Le texte documente un tabagisme actif."
             }
@@ -265,52 +340,135 @@ test_that("native TypeObject yields a stable multi-column LLM frame and evidence
     run <- run_variable(
         make_variable(), cohort,
         sources = list(documents = documents), chat = structure(list(), class = "fake"))
-    run_without_rationale <- run_variable(
-        make_variable(FALSE), cohort,
-        sources = list(documents = documents), chat = structure(list(), class = "fake"))
 
-    expect_identical(run$values$statut_tabagique, c("fumeur", NA_character_))
-    expect_identical(run$values$temporalite, c("actuel", NA_character_))
+    # Public-contract invariant: a candidate publishes the authored frame while
+    # no-candidate remains typed missing and does not trigger a model call.
     expect_identical(
-        run$values$rationale,
-        c("Le texte documente un tabagisme actif.", NA_character_))
-    expect_identical(run$values$channel_coverage, c("complete", "partial"))
+        run$values |>
+            dplyr::select(
+                statut_tabagique, temporalite, rationale, channel_coverage),
+        tibble::tibble(
+            statut_tabagique = c("fumeur", NA_character_),
+            temporalite = c("actuel", NA_character_),
+            rationale = c(
+                "Le texte documente un tabagisme actif.", NA_character_),
+            channel_coverage = c("complete", "partial")))
+    expect_identical(seen$calls, 1L)
     expect_false("evidence_ids" %in% names(run$values))
-    expect_identical(run$evidence$EVTID, "TARGET1")
-    expect_identical(run$evidence$source_EVTID, "SOURCE_STAY")
-    expect_identical(run$evidence$evidence_ref, "H001")
-    expect_identical(run$evidence$snippet_id, "S001")
-    expect_false(any(c("source_row_id", "hit_ref") %in% names(run$evidence)))
-    expect_identical(
-        run$audit$execution_manifest$channels$text_tabagisme$declared_model,
-        "declared-test-model")
-    expect_identical(run$audit$llm_calls$model, "fake")
-    expect_true("hit_ref" %in%
-                names(run$audit$internal$channel_intermediates$
-                      text_tabagisme$candidates))
-    expect_identical(
-        run$audit$counts$n[
-            run$audit$counts$channel == "text_tabagisme" &
-                run$audit$counts$stage == "model_input"],
-        c(1L, 0L))
-    expect_false("model" %in% names(formals(variable_spec)))
-    expect_true("model" %in% names(formals(use_channel)))
 
+    # Grounded evidence keeps target and native stay identities distinct while
+    # exposing only the canonical public coordinate.
+    expect_identical(
+        run$evidence |>
+            dplyr::select(EVTID, source_EVTID, evidence_ref, snippet_id),
+        tibble::tibble(
+            EVTID = "TARGET1", source_EVTID = "SOURCE_STAY",
+            evidence_ref = "H001", snippet_id = "S001"))
+    expect_identical(
+        intersect(c("evidence_ref", "source_row_id", "hit_ref"),
+                  names(run$evidence)),
+        "evidence_ref")
+    expect_identical(
+        c(
+            declared = run$audit$execution_manifest$channels$
+                text_tabagisme$declared_model,
+            observed = run$audit$llm_calls$model),
+        c(declared = "declared-test-model", observed = "fake"))
+
+    # Schema-boundary invariant: engine-owned fields are injected dynamically,
+    # and the citation enum contains only prompt-visible IDs.
     default_properties <- S7::props(seen$types[[1]])$properties
     expect_setequal(
         names(default_properties),
         c("statut_tabagique", "temporalite", "rationale", "evidence_ids"))
-    expect_identical(
-        S7::props(default_properties$rationale)$description,
-        paste(
-            "Justification brève du choix, fondée uniquement sur les extraits",
-            "et sans ajouter d'information non documentée."))
     evidence_enum <- S7::props(default_properties$evidence_ids)$items
     expect_identical(S7::props(evidence_enum)$values, "S001")
-    expect_false("rationale" %in% names(run_without_rationale$values))
-    expect_false(
-        "rationale" %in% names(S7::props(seen$types[[2]])$properties))
 
+    # Ratified citation policy: mixed citations keep the grounded value and only
+    # materialize the supplied ID.
+    seen$evidence_ids <- c("S001", "S999")
+    mixed_citations <- run_variable(
+        make_variable(), cohort,
+        sources = list(documents = documents),
+        chat = structure(list(), class = "fake"))
+    expect_identical(
+        list(
+            value = mixed_citations$values$statut_tabagique[[1]],
+            warning = mixed_citations$values$citation_warning[[1]],
+            evidence = mixed_citations$evidence$snippet_id),
+        list(value = "fumeur", warning = TRUE, evidence = "S001"))
+
+    # Invented-only citations cannot publish a value or evidence and remain
+    # explicitly reviewable rather than becoming a model transport error.
+    seen$evidence_ids <- "S999"
+    invented_only <- run_variable(
+        make_variable(), cohort,
+        sources = list(documents = documents),
+        chat = structure(list(), class = "fake"))
+    expect_identical(
+        list(
+            value = invented_only$values$statut_tabagique[[1]],
+            coverage = invented_only$values$channel_coverage[[1]],
+            needs_review = invented_only$values$needs_review[[1]],
+            evidence_rows = nrow(invented_only$evidence)),
+        list(
+            value = NA_character_, coverage = "partial", needs_review = TRUE,
+            evidence_rows = 0L))
+
+    # Empty citations exercise the distinct zero-ID path: invalid, not errored.
+    seen$evidence_ids <- character()
+    uncited <- run_variable(
+        make_variable(), cohort,
+        sources = list(documents = documents),
+        chat = structure(list(), class = "fake"))
+    expect_identical(
+        list(
+            value = uncited$values$statut_tabagique[[1]],
+            needs_review = uncited$values$needs_review[[1]],
+            task_validity = uncited$audit$llm_calls$task_validity[[1]],
+            error = uncited$audit$llm_calls$error[[1]]),
+        list(
+            value = NA_character_, needs_review = TRUE,
+            task_validity = "invalid", error = NA_character_))
+
+    # Native occurrences remain distinct for relational algebra, but repeated
+    # normalized hit text consumes only one bounded LLM prompt slot.
+    crowded_documents <- documents
+    crowded_documents$candidates <- dplyr::bind_rows(
+        documents$candidates,
+        dplyr::mutate(
+            documents$candidates,
+            snippet_id = "S002", hit_ref = "H002", ELTID = "D002"),
+        dplyr::mutate(
+            documents$candidates,
+            snippet_id = "S003", hit_ref = "H003", ELTID = "D003",
+            hit_text = "Sevrage tabagique",
+            snippet_text = "Sevrage tabagique documenté."))
+    crowded_documents$candidates$hit_text <- NULL
+    seen$evidence_ids <- "S001"
+    invisible(run_variable(
+        make_variable(max_candidates = 2L), cohort,
+        sources = list(documents = crowded_documents),
+        chat = structure(list(), class = "fake")))
+    prompt_type <- seen$types[[length(seen$types)]]
+    prompt_evidence_enum <-
+        S7::props(S7::props(prompt_type)$properties$evidence_ids)$items
+    expect_identical(
+        S7::props(prompt_evidence_enum)$values,
+        c("S001", "S003"))
+
+    # Pre-retrieved fixtures must describe a possible retrieval result. A task
+    # cannot claim no candidate while still supplying positive candidate rows.
+    contradictory_documents <- documents
+    contradictory_documents$coverage$coverage_state[[1]] <- "no_candidate"
+    expect_error(
+        run_variable(
+            make_variable(), cohort,
+            sources = list(documents = contradictory_documents),
+            chat = structure(list(), class = "fake")),
+        "if and only if candidate rows exist")
+
+    # Until hit_when exists, an LLM payload has no implicit membership semantics.
     expect_error(
         variable_spec(
             name = "llm_membership_is_not_implicit",

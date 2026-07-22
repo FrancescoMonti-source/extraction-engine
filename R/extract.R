@@ -351,8 +351,28 @@ APPROVED_MODELS <- c("gemma3:4b")
 }
 
 .candidate_selector <- function(max_candidates) {
-    if (is.null(max_candidates)) return(base::identity)
-    function(rows) utils::head(rows, max_candidates)
+    function(rows) {
+        # Retrieval preserves native document/stay occurrences for relational
+        # algebra. The prompt has a different grain: repeated normalized hit
+        # text within one task should consume one candidate slot.
+        prompt_text <- rep(NA_character_, nrow(rows))
+        if ("hit_text" %in% names(rows)) {
+            prompt_text <- as.character(rows$hit_text)
+        }
+        missing_text <- is.na(prompt_text) | !nzchar(str_squish(prompt_text))
+        if (any(missing_text) && "snippet_text" %in% names(rows)) {
+            prompt_text[missing_text] <-
+                as.character(rows$snippet_text[missing_text])
+        }
+        normalized_hit <- tolower(str_squish(prompt_text))
+        missing_text <- is.na(normalized_hit) | !nzchar(normalized_hit)
+        normalized_hit[missing_text] <- paste0(
+            ".ee_unkeyed_snippet::",
+            as.character(rows$snippet_id[missing_text]))
+        selected <- rows[!duplicated(normalized_hit), , drop = FALSE]
+        if (is.null(max_candidates)) selected else
+            utils::head(selected, max_candidates)
+    }
 }
 
 .chat_metadata <- function(chat) {
@@ -537,16 +557,26 @@ run_extraction <- function(coverage, candidates, definition, chat,
                     stop("The LLM parser must return exactly one wide value row.",
                          call. = FALSE)
                 }
-                values$accepted_value <- "present"
+                grounded <- length(parsed$evidence_ids) > 0L
+                task_validity <- if (grounded) "valid" else "invalid"
+                task_validity_reason <- if (grounded) {
+                    NA_character_
+                } else if (isTRUE(parsed$citation_warning)) {
+                    "model cited only unsupplied snippet IDs"
+                } else {
+                    "model cited no supplied snippet ID"
+                }
+                values$accepted_value <- if (grounded) "present" else NA_character_
                 values$task_id <- as.character(tid)
-                values$task_validity <- "valid"
-                values$task_validity_reason <- NA_character_
+                values$task_validity <- task_validity
+                values$task_validity_reason <- task_validity_reason
                 values$citation_warning <- isTRUE(parsed$citation_warning)
                 values$citation_warning_reason <-
                     as.character(parsed$citation_warning_reason)
                 ev <- .materialize_task_evidence(parsed$evidence_ids, ts)
                 if (nrow(ev)) ev$task_id <- tid
-                list(values = values, evidence = ev, task_validity = "valid")
+                list(values = values, evidence = ev,
+                     task_validity = task_validity)
             }, error = function(e) list(error = conditionMessage(e)))
 
             if (is.null(res$error)) {

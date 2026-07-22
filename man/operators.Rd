@@ -22,7 +22,8 @@ registered source clock.}
 \item{select_event}{Optional plain function evaluated separately for each
 patient when multiple events match. It receives matched rows carrying
 \code{PATID}, \code{EVTID}, and the physical date-column name and must return the
-selected row or rows. Without it, multiple matches are an error.}
+selected row or rows without altering or inventing an \code{EVTID}/date pair.
+Without it, multiple matches are an error.}
 \item{expr}{A hit-set expression using activation aliases and \code{|},
 \code{&}, \code{!}, and parentheses.}
 \item{by}{The \code{"PATID"}, \code{"EVTID"}, or \code{"ELTID"} key where

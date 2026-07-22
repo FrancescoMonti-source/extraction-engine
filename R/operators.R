@@ -37,7 +37,9 @@
 # the row(s) that anchor the clock -- e.g. \(d) dplyr::slice_min(d, DATEACTE,
 # n = 1) for "the first surgery", or identity for "every surgery starts its own
 # clock" (one task per selected event; output$group_by must then be the event key).
-# Without it, multiple matches stay a loud error: the engine never picks.
+# It may filter or reorder only those matched rows; changing an EVTID/date pair is
+# not selection. Without it, multiple matches stay a loud error: the engine never
+# picks.
 index_event <- function(source, selector, at = NULL,
                         select_event = NULL) {
     if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
