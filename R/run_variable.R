@@ -361,28 +361,20 @@
     counts[[length(counts) + 1L]] <- .audit_stage(
         task_ids, channel_name, "selector", "snippet",
         .count_task_rows(candidates, task_ids))
-    if (!is.null(filter_rows)) {
-        if (nrow(candidates)) {
-            keep <- logical(nrow(candidates))
-            groups <- split(seq_len(nrow(candidates)),
-                            as.character(candidates$task_id))
-            for (indices in groups) {
-                keep[indices] <- .eval_row_predicate(
-                    candidates[indices, , drop = FALSE],
-                    filter_rows, channel_name)
-            }
-            candidates <- candidates[keep, , drop = FALSE]
-        }
-    }
-    if (!is.null(filter_groups)) {
-        if (nrow(candidates)) {
-            candidates$is_target <- TRUE
-            candidates <- .apply_group_predicate(
-                candidates, group_by, filter_groups, channel_name)
-            candidates <- candidates[candidates$is_target, , drop = FALSE]
-            candidates$is_target <- NULL
-            candidates$group_demoted <- NULL
-        }
+    if (!is.null(filter_rows) || !is.null(filter_groups)) {
+        mask_columns <- names(candidates)[
+            !names(candidates) %in% c(
+                "task_id", "is_target", "row_demoted", "group_demoted") &
+            !startsWith(names(candidates), ".ee_")]
+        candidates$is_target <- TRUE
+        candidates <- .apply_row_predicate(
+            candidates, filter_rows, channel_name, mask_columns)
+        candidates <- .apply_group_predicate(
+            candidates, group_by, filter_groups, channel_name, mask_columns)
+        candidates <- candidates[candidates$is_target, , drop = FALSE]
+        candidates$is_target <- NULL
+        candidates$row_demoted <- NULL
+        candidates$group_demoted <- NULL
     }
     if (!is.null(filter_rows) || !is.null(filter_groups)) {
         counts[[length(counts) + 1L]] <- .audit_stage(
@@ -936,16 +928,18 @@
 }
 
 .eval_from_channel_value <- function(rows, output, variable_name, channel_name) {
+    mask_columns <- setdiff(names(rows), "task_id")
     # Do not evaluate author code for an absent task. A logical NA is the only
     # stable prototype available without either running the expression on an
     # artificial zero-row mask or requiring a separately declared output type.
     if (!nrow(rows)) return(NA)
+    mask <- rows[mask_columns]
     value <- tryCatch(
-        rlang::eval_tidy(output$value, data = rows),
+        rlang::eval_tidy(output$value, data = mask),
         error = function(cnd) {
             stop("from_channel() value for '", variable_name, "' on channel '",
                  channel_name, "' could not be evaluated against payload columns ",
-                 paste(names(rows), collapse = ", "), ": ",
+                 paste(names(mask), collapse = ", "), ": ",
                  conditionMessage(cnd), call. = FALSE)
         })
     if (length(value) != 1L || !is.null(dim(value))) {
@@ -1025,6 +1019,9 @@
 .single_from_channel_variable <- function(variable, tasks, channel_name, result) {
     output <- variable$output
     payload <- .deterministic_payload(result, channel_name)
+    .validate_data_mask_expression(
+        output$value, setdiff(names(payload), "task_id"),
+        channel_name, "from_channel() value")
     source_name <- .source_name_for_channel(channel_name, variable)
     task_ids <- as.character(tasks$task_id)
     rows <- lapply(task_ids, function(task_id) {
@@ -1115,6 +1112,9 @@
     channel_name <- output$channel
     result <- channel_results[[channel_name]]
     payload <- .deterministic_payload(result, channel_name)
+    .validate_data_mask_expression(
+        output$value, setdiff(names(payload), "task_id"),
+        channel_name, "from_channel() value")
     payload <- .filter_payload_by_qualified(variable, output, out, payload)
     gate <- out$values
     qualified_task_ids <- as.character(gate$task_id[gate$value %in% 1L])

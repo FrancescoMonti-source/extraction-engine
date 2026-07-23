@@ -43,17 +43,24 @@ test_that("data-masked values preserve aligned source rows and one-cell output",
     empty_run <- run_variable(
         lab_variable("ABSENT", mean(NUMRES, na.rm = TRUE)), cohort,
         sources = list(biology = biology))
+    weight_options <- list(remove_missing = TRUE)
     weighted_run <- run_variable(
         lab_variable(
-            "K.K", stats::weighted.mean(NUMRES, WEIGHT, na.rm = TRUE)),
+            "K.K", stats::weighted.mean(
+                NUMRES, WEIGHT, na.rm = weight_options$remove_missing)),
         cohort, sources = list(biology = biology))
     latest_class_run <- run_variable(
         lab_variable("K.K", {
-            i <- which.max(DATEXAM)
-            dplyr::case_when(
-                NUMRES[[i]] < LOWER[[i]] ~ "low",
-                NUMRES[[i]] > UPPER[[i]] ~ "high",
-                .default = "normal")
+            if (all(is.na(NUMRES))) {
+                result <- NA_character_
+            } else {
+                i <- which.max(DATEXAM)
+                result <- dplyr::case_when(
+                    NUMRES[[i]] < LOWER[[i]] ~ "low",
+                    NUMRES[[i]] > UPPER[[i]] ~ "high",
+                    .default = "normal")
+            }
+            result
         }),
         cohort, sources = list(biology = biology))
 
@@ -125,6 +132,33 @@ test_that("data-masked values preserve aligned source rows and one-cell output",
             lab_variable("K.K", NUMRES), cohort,
             sources = list(biology = biology)),
         "must return exactly one scalar or one list cell")
+
+    # Data masks expose prepared-source columns only, and invalid references are
+    # rejected even when the selector happens to produce no target row.
+    absent_concept <- concept_spec(
+        "absent lab",
+        channels = list(result = lab_channel(selector = analyte("ABSENT"))))
+    invalid_filter <- variable_spec(
+        name = "invalid_filter",
+        concept = absent_concept,
+        channels = list(result = use_channel(
+            channel = "result",
+            filter_rows = {
+                if (FALSE) conditional_name <- 1
+                NUMREZ <- replace(NUMREZ, 1L, 0)
+                task_id == "internal-task" | conditional_name > 0
+            })),
+        output = bin_output(group_by = "PATID"))
+    expect_error(
+        run_variable(
+            invalid_filter, cohort,
+            sources = list(biology = biology)),
+        "missing prepared-source column.*NUMREZ, task_id, conditional_name")
+    expect_error(
+        run_variable(
+            lab_variable("K.K", task_id[[1L]]), cohort,
+            sources = list(biology = biology)),
+        "missing prepared-source column.*task_id")
 })
 
 test_that("relational keys control qualification, evidence, and broadcast", {
@@ -285,7 +319,8 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         concept = text_signals,
         channels = list(
             alpha = use_channel(
-                "alpha", search_within = "PATID", method = "lucene"),
+                "alpha", search_within = "PATID", method = "lucene",
+                filter_rows = !is.na(RECDATE)),
             beta = use_channel(
                 "beta", search_within = "PATID", method = "lucene")),
         combine = combine_channels("alpha & beta", by = by),

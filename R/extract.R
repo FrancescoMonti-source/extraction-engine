@@ -61,16 +61,14 @@
     list(
         description = parts$description,
         required = parts$required,
-        properties = properties,
-        additional_properties = parts$additional_properties)
+        properties = properties)
 }
 
 .rebuild_llm_type_object <- function(parts, properties) {
     do.call(
         ellmer::type_object,
         c(list(.description = parts$description), properties,
-          list(.required = parts$required,
-               .additional_properties = parts$additional_properties)))
+          list(.required = parts$required)))
 }
 
 .llm_field_prototype <- function(type) {

@@ -86,29 +86,191 @@
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
 
-# Data-masked activation expressions see complete prepared-source columns and the
-# quosure's lexical environment. Evaluation errors are reported at the channel
-# boundary with the available columns so a missing prepared-view column stays a
-# source-contract error rather than an opaque tidy-eval failure.
-.eval_activation_expression <- function(rows, expression, field, what) {
+# Find data-column references without evaluating author code. Bare names resolve
+# against the prepared columns first and then the quosure environment; explicit
+# .data accesses always name prepared columns. This makes a misspelled column fail
+# even when the selector happens to produce zero target rows.
+.data_mask_references <- function(expression) {
+    env <- rlang::quo_get_env(expression)
+    required <- character()
+
+    resolve_pronoun_key <- function(node, pronoun) {
+        key <- if (is.character(node) && length(node) == 1L) {
+            node
+        } else if (rlang::is_symbol(node)) {
+            name <- rlang::as_string(node)
+            if (!rlang::env_has(env, name, inherit = TRUE)) {
+                stop(pronoun, "[[", name,
+                     "]] requires that '", name,
+                     "' be defined in the expression environment.",
+                     call. = FALSE)
+            }
+            rlang::env_get(env, name, inherit = TRUE)
+        } else {
+            stop(pronoun,
+                 "[[...]] accepts only a literal column name or a symbol ",
+                 "bound to one; author code is not executed during validation.",
+                 call. = FALSE)
+        }
+        if (!is.character(key) || length(key) != 1L ||
+            is.na(key) || !nzchar(key)) {
+            stop(pronoun,
+                 "[[...]] must resolve to one non-empty name.",
+                 call. = FALSE)
+        }
+        key
+    }
+
+    visit <- function(node, locals = character()) {
+        if (rlang::is_symbol(node)) {
+            name <- rlang::as_string(node)
+            if (name %in% c(".data", ".env", locals) ||
+                rlang::env_has(env, name, inherit = TRUE)) {
+                return(locals)
+            }
+            required <<- c(required, name)
+            return(locals)
+        }
+        if (!rlang::is_call(node)) return(locals)
+
+        if (rlang::is_call(node, "{")) {
+            for (argument in as.list(node)[-1L]) {
+                locals <- visit(argument, locals)
+            }
+            return(locals)
+        }
+        if ((rlang::is_call(node, "<-") || rlang::is_call(node, "=")) &&
+            length(node) >= 3L && rlang::is_symbol(node[[2L]])) {
+            locals <- visit(node[[3L]], locals)
+            return(unique(c(locals, rlang::as_string(node[[2L]]))))
+        }
+        # Only assignments reached sequentially in a `{}` block are known to
+        # define a name for later expressions. An exhaustive if/else may also
+        # define names, but only those defined by both branches.
+        if (rlang::is_call(node, "if")) {
+            condition_locals <- visit(node[[2L]], locals)
+            then_locals <- visit(node[[3L]], condition_locals)
+            if (length(node) < 4L) return(condition_locals)
+            else_locals <- visit(node[[4L]], condition_locals)
+            return(unique(c(
+                condition_locals,
+                intersect(then_locals, else_locals)
+            )))
+        }
+        if (rlang::is_call(node, "for") && length(node) >= 4L &&
+            rlang::is_symbol(node[[2L]])) {
+            visit(node[[3L]], locals)
+            loop_locals <- unique(c(locals, rlang::as_string(node[[2L]])))
+            visit(node[[4L]], loop_locals)
+            return(locals)
+        }
+        if (rlang::is_call(node, "while") || rlang::is_call(node, "repeat")) {
+            for (argument in as.list(node)[-1L]) visit(argument, locals)
+            return(locals)
+        }
+        if (rlang::is_call(node, "function") && length(node) >= 3L) {
+            formals <- names(as.list(node[[2L]]))
+            visit(node[[3L]], unique(c(locals, formals)))
+            return(locals)
+        }
+        if (rlang::is_call(node, "~")) {
+            formula_locals <- unique(c(
+                locals, ".", ".x", ".y", "..1", "..2"
+            ))
+            for (argument in as.list(node)[-1L]) {
+                visit(argument, formula_locals)
+            }
+            return(locals)
+        }
+
+        operator <- node[[1L]]
+        if (rlang::is_symbol(operator) &&
+            rlang::as_string(operator) %in% c("$", "[[")) {
+            object <- node[[2L]]
+            if (rlang::is_symbol(object, ".data")) {
+                key <- if (rlang::is_call(node, "$")) {
+                    rlang::as_string(node[[3L]])
+                } else {
+                    resolve_pronoun_key(node[[3L]], ".data")
+                }
+                required <<- c(required, key)
+                return(locals)
+            }
+            if (rlang::is_symbol(object, ".env")) {
+                key <- if (rlang::is_call(node, "$")) {
+                    rlang::as_string(node[[3L]])
+                } else {
+                    resolve_pronoun_key(node[[3L]], ".env")
+                }
+                if (!rlang::env_has(env, key, inherit = TRUE)) {
+                    stop(".env$", key, " is not defined in the expression environment.",
+                         call. = FALSE)
+                }
+                return(locals)
+            }
+            # In ordinary `$`, the field name is not evaluated. An ordinary
+            # `[[` index is, so visit it after the object.
+            visit(object, locals)
+            if (rlang::is_call(node, "[[")) {
+                visit(node[[3L]], locals)
+            }
+            return(locals)
+        }
+
+        # The call head names a function/operator, not a data column.
+        for (argument in as.list(node)[-1L]) {
+            visit(argument, locals)
+        }
+        locals
+    }
+
+    visit(rlang::quo_get_expr(expression))
+    unique(required)
+}
+
+.validate_data_mask_expression <- function(expression, columns, field, what) {
     if (!rlang::is_quosure(expression)) {
         stop(what, " for channel '", field,
              "' is not a captured data-masked expression.", call. = FALSE)
     }
+    references <- tryCatch(
+        .data_mask_references(expression),
+        error = function(cnd) {
+            stop(what, " for channel '", field,
+                 "' could not resolve its data-mask references: ",
+                 conditionMessage(cnd), call. = FALSE)
+        })
+    missing <- setdiff(references, columns)
+    if (length(missing)) {
+        stop(what, " for channel '", field,
+             "' references missing prepared-source column(s): ",
+             paste(missing, collapse = ", "), ". Available columns: ",
+             paste(columns, collapse = ", "), ".", call. = FALSE)
+    }
+    invisible(TRUE)
+}
+
+# Data-masked activation expressions see complete prepared-source columns and the
+# quosure's lexical environment. Evaluation errors are reported at the channel
+# boundary with the available columns so a missing prepared-view column stays a
+# source-contract error rather than an opaque tidy-eval failure.
+.eval_activation_expression <- function(rows, expression, field, what,
+                                        mask_columns) {
+    mask <- rows[intersect(mask_columns, names(rows))]
     tryCatch(
-        rlang::eval_tidy(expression, data = rows),
+        rlang::eval_tidy(expression, data = mask),
         error = function(cnd) {
             stop(what, " for channel '", field,
                  "' could not be evaluated against prepared-source columns ",
-                 paste(names(rows), collapse = ", "), ": ",
+                 paste(names(mask), collapse = ", "), ": ",
                  conditionMessage(cnd), call. = FALSE)
         })
 }
 
 # A row predicate returns one logical per row. An NA result is not a hit.
-.eval_row_predicate <- function(rows, filter_rows, field) {
+.eval_row_predicate <- function(rows, filter_rows, field, mask_columns) {
     res <- .eval_activation_expression(
-        rows, filter_rows, field, "filter_rows")
+        rows, filter_rows, field, "filter_rows", mask_columns)
     if (!is.logical(res) || length(res) != nrow(rows)) {
         stop("filter_rows for channel '", field, "' must return one logical ",
              "per row (got ", class(res)[1L], " of length ", length(res), " for ",
@@ -120,16 +282,20 @@
 
 # Apply a row predicate independently to each task's current target rows. Demoted
 # rows stay in observations and NA predicate results are false.
-.apply_row_predicate <- function(observations, filter_rows, field) {
+.apply_row_predicate <- function(observations, filter_rows, field,
+                                 mask_columns) {
     observations$row_demoted <- FALSE
     if (is.null(filter_rows)) return(observations)
 
+    .validate_data_mask_expression(
+        filter_rows, mask_columns, field, "filter_rows")
     target_rows <- which(observations$is_target)
     if (!length(target_rows)) return(observations)
     by_task <- split(target_rows, observations$task_id[target_rows])
     for (idx in by_task) {
         keep <- .eval_row_predicate(
-            observations[idx, , drop = FALSE], filter_rows, field)
+            observations[idx, , drop = FALSE], filter_rows, field,
+            mask_columns)
         observations$row_demoted[idx] <- !keep
         observations$is_target[idx] <- keep
     }
@@ -141,15 +307,17 @@
 # that survived filter_rows. Failing groups are demoted in-place so observations
 # retain the complete audit trail.
 .apply_group_predicate <- function(observations, group_by,
-                                   filter_groups, field) {
+                                   filter_groups, field, mask_columns) {
     observations$group_demoted <- FALSE
     if (is.null(filter_groups)) return(observations)
-    if (is.null(group_by) || !group_by %in% names(observations)) {
+    if (is.null(group_by) || !group_by %in% mask_columns) {
         stop("filter_groups for channel '", field, "' groups by '",
              group_by, "', which the prepared source does not carry.",
              call. = FALSE)
     }
 
+    .validate_data_mask_expression(
+        filter_groups, mask_columns, field, "filter_groups")
     target_rows <- which(observations$is_target)
     if (!length(target_rows)) return(observations)
     group_key <- paste(observations$task_id[target_rows],
@@ -158,7 +326,7 @@
     keep <- vapply(groups, function(idx) {
         rows <- observations[idx, , drop = FALSE]
         res <- .eval_activation_expression(
-            rows, filter_groups, field, "filter_groups")
+            rows, filter_groups, field, "filter_groups", mask_columns)
         if (!is.logical(res) || length(res) != 1L || is.na(res)) {
             stop("filter_groups for channel '", field,
                  "' must return exactly one TRUE/FALSE per task + ",
@@ -280,9 +448,10 @@ measure_code_presence <- function(source_table, tasks, codes,
             in_scope = TRUE,
             is_target = .code_matches(.data[[code_col]], codes, match))
 
-    observations <- .apply_row_predicate(observations, filter_rows, field)
+    observations <- .apply_row_predicate(
+        observations, filter_rows, field, source_columns)
     observations <- .apply_group_predicate(
-        observations, group_by, filter_groups, field)
+        observations, group_by, filter_groups, field, source_columns)
 
     observations <- observations %>%
         mutate(
@@ -436,9 +605,10 @@ measure_doc_presence <- function(docs_index, tasks, filters,
             in_scope = TRUE,
             is_target = matches & !is.na(matches))
 
-    observations <- .apply_row_predicate(observations, filter_rows, field)
+    observations <- .apply_row_predicate(
+        observations, filter_rows, field, source_columns)
     observations <- .apply_group_predicate(
-        observations, group_by, filter_groups, field)
+        observations, group_by, filter_groups, field, source_columns)
 
     observations <- observations %>%
         mutate(
@@ -606,9 +776,10 @@ measure_analyte_values <- function(source_table, tasks, analytes,
         toupper(trimws(observations$.ee_analyte)) %in% target_analytes
 
     observations$is_target <- analyte_match
-    observations <- .apply_row_predicate(observations, filter_rows, field)
+    observations <- .apply_row_predicate(
+        observations, filter_rows, field, source_columns)
     observations <- .apply_group_predicate(
-        observations, group_by, filter_groups, field)
+        observations, group_by, filter_groups, field, source_columns)
     observations <- observations %>%
         mutate(
             selected_evidence = is_target,

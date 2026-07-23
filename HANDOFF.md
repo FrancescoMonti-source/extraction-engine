@@ -1836,3 +1836,29 @@ Two implementation decisions remain deliberately open:
 No runtime, public API, documentation surface, or sentinel test was changed by
 this spike. The next step is owner review of these boundaries, followed by one
 small vertical implementation slice rather than a wholesale audit rewrite.
+
+## Baseline checkpoint and data-mask boundary hardening (2026-07-23)
+
+The previously validated data-mask, source-identity, result-envelope, and two-
+vignette WIP was committed and pushed directly to `master` as `3b47d7b`
+(`Consolidate package contracts and onboarding`). Both vignette sources and their
+shared CSS are versioned; no real clinical data or model call entered the commit.
+
+A subsequent bounded hardening slice closes two review findings without changing
+the authored API. Activation filters and deterministic output expressions now see
+only prepared-source columns, never `task_id`, demotion flags, or `.ee_*` runtime
+plumbing. Data-mask column references are validated before row selection, so a
+misspelled or internal column fails even when the selector produces zero target
+rows. The Ellmer TypeObject rebuild also relies on the closed-object default
+instead of passing the deprecated `.additional_properties` argument.
+
+The first sentinel gained two assertions for these boundaries rather than a new
+`test_that()`. The three sentinels pass 46 expectations with no warning. Both
+vignettes rebuild, and built-tarball `R CMD check --no-manual` finishes with
+`Status: OK`.
+
+One provenance limitation remains assigned to the audit tranche: the execution
+manifest records a data-masked expression such as
+`NUMRES < .env$threshold`, but does not yet snapshot the captured value of
+`threshold`. Runtime evaluation is correct; the manifest is not yet a complete
+serialization of the quosure environment.
