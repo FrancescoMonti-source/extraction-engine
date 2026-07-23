@@ -26,7 +26,8 @@ edsan_source_specs()
 \code{redsan::edsan_sources()}.}
 \item{roles}{A named list mapping engine roles to columns of the prepared view.}
 \item{required_columns}{Columns that must be present. By default, all role-bound
-columns.}
+columns; an explicit subset permits role-bound provenance columns to remain
+optional.}
 \item{unique_columns}{Columns required to be non-missing and unique.}
 \item{spec}{A source specification.}
 \item{data}{A prepared data frame. Values are validated but never coerced.}
@@ -40,4 +41,8 @@ its role map; \code{validate_source_view()} returns \code{data} invisibly;
 Source mechanics are read from the live \pkg{redsan} registry. These functions
 bind already typed view columns to engine roles and fail closed on incompatible
 inputs; they do not parse warehouse values.
+
+The built-in biology contract requires the generic source-item coordinate
+\code{ELTID}. Native \code{BIOL_ID} is retained with canonical casing when
+available but is optional for execution.
 }

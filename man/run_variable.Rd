@@ -36,41 +36,43 @@ activations do not create a Chat.}
 \code{run_variable()} returns exactly \code{values}, \code{channel_status},
 \code{evidence}, and \code{audit}. Row-keyed public frames expose native
 output-grain columns: \code{PATID} at patient grain and \code{PATID + EVTID} at
-stay grain. Public evidence uses one canonical \code{evidence_ref}, retains an
-LLM \code{snippet_id} when available, and publishes any native evidence
-\code{EVTID} as \code{source_EVTID}; at stay grain the target remains
-\code{EVTID}. Structured evidence keeps
-the available prepared-source columns of each retained row; internal
-\code{source_row_id} and \code{hit_ref} coordinates are not published.
+stay grain. Public evidence classifies each row as \code{source_row},
+\code{lucene_hit}, or \code{llm_citation} in \code{evidence_kind}.
+\code{evidence_ref} is an opaque coordinate local to the executed run and source
+snapshot, not a globally durable warehouse key. An LLM citation may retain its
+task-local \code{snippet_id}. Any native evidence \code{EVTID} is published as
+\code{source_EVTID}; at stay grain the target remains \code{EVTID}, even when
+the two values are equal. Structured evidence keeps available prepared-source
+columns; internal \code{source_row_id} and \code{hit_ref} coordinates are not
+published.
 
 \code{channel_status} contains one row per output task and activated channel. Its
-stable core identifies the output unit, variable, channel, and source, then
-records \code{status}, \code{hit}, and \code{processing_state}; execution paths
-may add review or contribution fields. \code{status} is the coarse execution
-outcome: \code{complete} means that ascertainment finished, not that a signal
-was present. \code{hit} records observed membership as \code{TRUE},
-\code{FALSE}, or \code{NA}, and \code{processing_state} retains its finer
-executor state. On combine results, \code{contribution} may be \code{signal},
-\code{negative}, \code{silent}, \code{invalid}, \code{error}, or \code{unknown};
-\code{negative} means ascertained without an observed hit, not a clinical
-negative finding.
+stable core identifies the output unit, variable, channel, and source.
+\code{selection_status} is exactly \code{matched}, \code{no_match}, or
+\code{unavailable}. \code{processing_status} is \code{not_required} for
+non-LLM channels; for \code{lucene_llm} it is exactly \code{completed},
+\code{not_called}, \code{invalid}, or \code{failed}. These are mechanical
+selection and processing states, not clinical interpretations.
 
 \code{audit} contains a long \code{counts} table (grain keys, \code{channel},
 \code{stage}, \code{unit}, \code{n}), \code{llm_calls}, and a resolved
-\code{execution_manifest}. Controlled stages are \code{task_join},
-\code{window}, \code{selector}, \code{filter_rows}, \code{filter_groups},
-\code{model_input}, and \code{output_input}; they appear only when separately
-instrumented, so absence does not prove an operation did not run.
-\code{task_join} counts relationally associated source rows; \code{window},
-\code{selector}, \code{filter_rows}, and \code{filter_groups} count their
-successive survivors; \code{model_input} counts snippets sent to the model; and
-\code{output_input} counts non-missing values sent to the terminal reducer.
+\code{execution_manifest}. Controlled stages are \code{pre_selector},
+\code{window}, \code{selector}, \code{filtered_selector}, \code{model_input},
+and \code{output_input}; they appear only when separately instrumented, so
+absence does not prove an operation did not run. They count associated
+structured rows or searchable text documents before selection, window
+survivors, selector matches, matches surviving activation filters, model
+snippets, and prepared-source rows supplied to the terminal value expression,
+respectively.
 \code{llm_calls} has one row per task/channel model invocation actually made and
-retains its configuration, outcomes, timing, fingerprints, diagnostics, and raw
-or partial response. A task that does not reach the model has no call row.
+separates \code{call_status}, \code{response_status}, \code{task_validity}, and
+\code{transport_attempts}. It retains configuration, timing, fingerprints,
+diagnostics, and raw or partial response, with a stable schema even at zero rows.
+A task that does not reach the model has no call row.
 \code{execution_manifest} is the
 resolved configuration snapshot, not a chronological log. It records the
-terminal data flow as combine by, filter by qualified, group by, then reduce.
+terminal data flow as combine by, filter by qualified, group by, then evaluate
+value.
 Combine runs
 additionally retain \code{overlap}, a tabular summary of channel-membership
 patterns, and \code{combine_keys}, the evaluated key-level relation at

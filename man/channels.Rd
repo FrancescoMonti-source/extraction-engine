@@ -53,12 +53,14 @@ registered source. Caller objects are bound through
 \description{
 Channels locate possible signal rows. They do not choose the output payload or
 assign clinical meaning. \code{analyte()} selects rows by \code{TYPEANA} only;
-the exact prepared-source column to publish is declared later with
-\code{from_channel()}.
+the prepared-source columns used by a deterministic result are referenced later
+inside \code{from_channel(value =)}.
 }
 \details{
 Relational text eligibility and row/group filtering are variable-local execution
 rules declared by \code{use_channel()}, not properties of a concept channel.
+Its row and group predicates are data-masked expressions over the prepared-source
+columns.
 Its \code{group_by} is an intermediate grouping used only with
 \code{filter_groups}; the output constructor's mandatory \code{group_by} alone
 defines the published grain.

@@ -140,7 +140,7 @@ validate_source_view <- function(data, spec) {
 .prepare_biology_view <- function(data) {
     # redsan owns typing and preserves the normalized physical result columns.
     # The engine adds no `value` alias: variable outputs read NUMRES, STRRES,
-    # DATEXAM, or another prepared column explicitly through from_channel().
+    # DATEXAM, or other prepared columns explicitly in from_channel(value =).
     redsan::process_biol(data)
 }
 
@@ -256,8 +256,10 @@ BIOL_SOURCE <- source_spec(
     roles = list(
         source_row_id = "source_row_id", subject_id = "PATID",
         event_id = "EVTID", source_item_id = "ELTID",
-        source_result_id = "biol_ID", point_date = "DATEXAM",
-        analyte = "TYPEANA"))
+        source_result_id = "BIOL_ID", point_date = "DATEXAM",
+        analyte = "TYPEANA"),
+    required_columns = c(
+        "source_row_id", "PATID", "EVTID", "ELTID", "DATEXAM", "TYPEANA"))
 
 ACTE_SOURCE <- source_spec(
     name = "PMSI acts", module = "pmsi", table = "actes",

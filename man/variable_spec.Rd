@@ -61,15 +61,15 @@ published with \code{from_channel()}.}
 \item{channel}{Mandatory origin for this activation: one concept-channel name or
 one inline channel definition. It cannot name another activation alias.}
 \item{selector}{Optional local replacement for the origin channel's selector.}
-\item{filter_rows}{Optional per-task row predicate. Its formals name real
-prepared-source columns and it returns one logical per row; missing results are
+\item{filter_rows}{Optional per-task data-masked expression over real
+prepared-source columns. It returns one logical per row; missing results are
 treated as false.}
 \item{group_by}{Optional \code{"PATID"}, \code{"EVTID"}, or \code{"ELTID"}
 intermediate grouping key for \code{filter_groups}. This activation-local
 argument does not set the final output grain; output constructors have their own
 mandatory \code{group_by}.}
-\item{filter_groups}{A function evaluated on survivors of \code{filter_rows};
-its formals name prepared-source columns and it returns one logical per group.}
+\item{filter_groups}{A data-masked expression evaluated on survivors of
+\code{filter_rows}. It must return exactly one non-missing logical per group.}
 \item{search_within}{Text-source search relation, \code{"PATID"} or
 \code{"EVTID"}. It is mandatory for text activations and does not determine
 combine, payload, or output grain.}
@@ -115,7 +115,9 @@ source of final grain. When \code{combine$by} is finer than that grain, a
 \code{from_channel()} output must set \code{filter_by_qualified} to either the
 combine key or the output key; it must be \code{NULL} in all other grain
 relationships. Execution then proceeds as combine by, filter by qualified,
-group by, and reduce.
+group by, and evaluate the output value expression. Prepared-source columns are
+available as bare names in data-masked expressions; \code{.data} supports
+programmatic selection and \code{.env} disambiguates external values.
 
 For \code{lucene_llm}, authored instructions live in the TypeObject and its
 field descriptions. The engine dynamically adds the optional rationale and an

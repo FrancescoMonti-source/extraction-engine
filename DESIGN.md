@@ -10,7 +10,7 @@ The responsibility split is:
 
 - `redsan`: EDSAN retrieval, identifiers, table grain, time mechanics, and
   normalized source types;
-- researcher-owned code: concepts, selectors, thresholds, windows, reductions,
+- researcher-owned code: concepts, selectors, thresholds, windows, value expressions,
   model schemas, and interpretation;
 - `extractionengine`: compile the definition, select eligible evidence, execute
   it, and preserve values, coverage, evidence, and provenance;
@@ -24,12 +24,13 @@ compatibility.
 The executable definition has three deliberately separate layers:
 
 1. `concept_spec()` locates possible signal rows. A named channel records its
-   source and selector; it does not decide which payload column to read or how to
-   aggregate it.
+   source and selector; it does not decide which prepared columns a published
+   value uses or how it is calculated.
 2. `use_channel()` activates a concept channel, or an inline channel, for one
    variable and decides how candidate rows are used.
-3. `bin_output(group_by)` or `from_channel(..., group_by, reduce)` decides the
-   final grain, what is published, and, for a payload, how values are reduced.
+3. `bin_output(group_by)` or `from_channel(..., group_by, value)` decides the
+   final grain, what is published, and, for a deterministic payload, the
+   data-masked value expression.
 
 `resolve_variable_spec()` is the single compiled representation consumed by
 execution, `inspect()`, and provenance. Constructors fail closed: every accepted
@@ -42,6 +43,10 @@ argument is validated and used. Reuse is ordinary R code returning a
 lane. `lab_channel()` defaults to the logical source `"biology"` but accepts any
 registered source override; source-specific prepared columns come from the
 source contract, never from `if (source == ...)` branches.
+
+The built-in biology source uses `ELTID` as its required generic source-item
+coordinate. Native `BIOL_ID` is preserved with canonical casing when available,
+but is not required for execution.
 
 `text_channel()` records source and selector only. Relational eligibility belongs
 to its activation.
@@ -58,13 +63,15 @@ Operational row, group, and time rules also belong to the activation:
   variable's shared `anchor`; an activation without a window keeps the existing
   task-grain behavior;
 - `filter_rows` is evaluated independently per task after selector, relational,
-  and window selection. Its formals name real prepared-source columns, it returns
-  one logical per row, `NA` means `FALSE`, and complete surviving rows are kept;
+  and window selection. It is a data-masked expression over the real
+  prepared-source columns, returns one logical per row, treats `NA` as `FALSE`,
+  and keeps complete surviving rows;
 - `filter_groups`, paired with `use_channel(group_by =)`, runs on those survivors
-  and returns one logical per group while retaining all surviving rows of
-  accepted groups. This is an intermediate activation-local grouping only; it
-  never sets the published grain, which belongs exclusively to the output
-  constructor.
+  in the same data mask and returns exactly one non-missing logical per group
+  while retaining all surviving rows of accepted groups. `.data` supports
+  programmatic column selection and `.env` disambiguates captured external
+  values. This is an intermediate activation-local grouping only; it never sets
+  the published grain, which belongs exclusively to the output constructor.
 
 A character `anchor` is the exact date column supplied by the cohort. The engine
 copies it to the internal task clock only when a window consumes it; it never
@@ -80,24 +87,22 @@ combine expression.
 ## Output and cardinality
 
 `bin_output(group_by)` publishes observed membership or the result of hit-set
-algebra. `from_channel(channel, column, filter_by_qualified, group_by, reduce)`
-publishes one activation's payload. `group_by` is mandatory in both constructors
-and is the only declaration of final result grain; there is no default PATID.
+algebra. `from_channel(channel, group_by, value = NULL,
+filter_by_qualified = NULL)` publishes one activation's payload. `group_by` is
+mandatory in both constructors and is the only declaration of final result
+grain; there is no default PATID.
 
-For deterministic channels, `column` is mandatory and names the exact column in
-the prepared source, for example `NUMRES`, `STRRES`, or `DATEXAM`. Candidate rows
-retain the selected source row and its real columns. There is no implicit
-`value -> NUMRES` mapping and no NUMRES/STRRES inference. A row carrying either,
-both, or neither is valid until an explicit output read is applied. A missing
-requested column is a hard error that lists the available columns.
+For deterministic channels, `value` is mandatory and is evaluated once per
+final group in a data mask containing its complete, row-aligned prepared-source
+rows. It may reference several columns; missing values are not removed
+automatically. If no payload row remains, the expression is not evaluated and a
+logical `NA` is published. Otherwise it must return exactly one cell: one atomic
+scalar or one list cell. Longer or dimensional results are cardinality errors.
+A row carrying `NUMRES`, `STRRES`, both, or neither is valid until the authored
+expression uses those columns.
 
-Without `reduce`, zero non-missing values produce a typed `NA`, one is returned
-unchanged, and more than one is a cardinality error. With `reduce`, the function
-receives only non-missing values and must return exactly one scalar. A deliberate
-type change by the reducer is valid.
-
-For a `lucene_llm` activation, `column = NULL` publishes the complete structured
-result frame; `column =` projects one declared response field.
+For a `lucene_llm` activation, `value` must be omitted and the complete
+structured result frame is published.
 
 ## Relational keys and output grain
 
@@ -116,6 +121,13 @@ The combine and output contracts are self-contained:
 `!`, and parentheses. No separate public hit-set helper constructors are part of
 the authoring surface.
 
+`ELTID` identifies an element only inside its source identity domain. A combine
+at `by = "ELTID"` may use multiple aliases or selectors resolving to that same
+domain, but a cross-source ELTID combine is invalid. If a payload consumes those
+qualified keys at `ELTID`--through its final `group_by` or
+`filter_by_qualified`--that payload must belong to the same domain. Projecting
+qualification first to `EVTID` or `PATID` permits a legitimate cross-source use.
+
 Both `by` and `group_by` are mandatory; neither is inferred from the other. A
 combine may be finer than the output (existential projection), equal to it
 (direct match), or coarser (explicit broadcast to output units).
@@ -126,16 +138,17 @@ qualifying subunit. It must be `NULL` without a combine, at equal grain, and for
 coarse-to-fine broadcast. The filter never creates an intermediate aggregation.
 
 Payload execution is ordered: `combine by -> filter by qualified -> group by ->
-reduce`. The reducer is called once per final group on non-missing raw values;
-there is no implicit lower-grain aggregation. Public evidence for the payload
-channel is restricted by the same qualified-row relation; its complete pre-gate
-intermediate remains internal audit data.
+evaluate value`. The value expression is evaluated once per final group on the
+aligned raw rows; there is no implicit missing-value removal or lower-grain
+aggregation. Public evidence for the payload channel is restricted by the same
+qualified-row relation; its complete pre-gate intermediate remains internal
+audit data.
 
 LLM responses are compiled as one row per output task. Consequently, an LLM
 activation used as a fine-to-coarse payload may set `filter_by_qualified` only
 to `output$group_by`; lower-level LLM payload restriction would require per-key
-model calls and is outside the current execution contract. `reduce` remains
-invalid for an LLM output.
+model calls and is outside the current execution contract. An LLM output omits
+`value` and publishes the complete structured record.
 
 `search_within = "EVTID"` requires tasks carrying both `PATID` and `EVTID`,
 through stay-grain output or an `index_event()`. When stay-grain output searches
@@ -200,26 +213,35 @@ while composite task identifiers remain internal. Coverage is separate from
 value. Hit-set combination reports partial or failed channel coverage without
 silently changing the observed decision.
 
-`channel_status` has a stable core identifying output unit, variable, channel,
-source, coarse `status`, observed `hit`, and detailed `processing_state`;
-execution paths may append review or contribution fields. `complete` means that
-ascertainment completed, not that the channel hit. Combine results may carry
-`contribution`; its `negative` label means ascertained without an observed hit
-and is not a clinical interpretation.
+`channel_status` has one row per output unit and activated channel. Its stable
+core identifies output unit, variable, channel, and source. `selection_status`
+is exactly `matched`, `no_match`, or `unavailable`. `processing_status` is
+`not_required` for non-LLM channels; for `lucene_llm` it is exactly `completed`,
+`not_called`, `invalid`, or `failed`. Selection and model processing are separate
+axes and neither label carries a clinical interpretation.
 
-Public evidence retains source-specific prepared-row columns and has one
-canonical `evidence_ref`. LLM evidence may additionally carry the prompt-local
-`snippet_id`; internal `source_row_id` and `hit_ref` coordinates remain available
-only in `audit$internal$channel_intermediates`. A native evidence `EVTID` is
-published as `source_EVTID`; at stay-grain output the target remains `EVTID`.
+Public evidence retains source-specific prepared-row columns and classifies each
+row with `evidence_kind = "source_row"`, `"lucene_hit"`, or
+`"llm_citation"`. `evidence_ref` is an opaque, non-missing coordinate local to
+the executed run and source snapshot, not a globally durable warehouse key. An
+LLM citation additionally carries its task-local `snippet_id`. Internal
+`source_row_id` and `hit_ref` coordinates remain available only in
+`audit$internal$channel_intermediates`. A native evidence `EVTID` is published as
+`source_EVTID`; at stay-grain output the target remains `EVTID`, even when the
+two values are equal.
 
 `audit$counts` is a long table with output-grain keys, `channel`, `stage`,
-`unit`, and `n`. The controlled stages are `task_join`, `window`, `selector`,
-`filter_rows`, `filter_groups`, `model_input`, and `output_input`; stages appear
-only when separately instrumented, so absence does not prove an operation did
-not run. The audit also contains `llm_calls`, one row per task/channel model
-invocation actually made, and the resolved `execution_manifest`, a configuration
-snapshot rather than an activity log. Combination runs additionally retain
+`unit`, and `n`. The controlled stages are `pre_selector`, `window`, `selector`,
+`filtered_selector`, `model_input`, and `output_input`. They count,
+respectively, associated structured rows or searchable text documents before
+selection, window survivors, selector matches, matches surviving activation
+filters, model snippets, and source rows supplied to the terminal value
+expression. Stages appear only when separately instrumented, so absence does not
+prove an operation did not run. The audit also contains `llm_calls`, one row per
+task/channel model invocation actually made. Its independent public fields are
+`call_status`, `response_status`, `task_validity`, and `transport_attempts`; the
+zero-row table keeps the same schema. The resolved `execution_manifest` is a
+configuration snapshot rather than an activity log. Combination runs additionally retain
 `overlap`, the task-level channel-membership intersections, and `combine_keys`,
 the evaluated key-level relation, inside the audit rather than as ordinary
 output tables. The live `resolved_spec` and raw `channel_intermediates` are debugging details under
@@ -230,9 +252,9 @@ The execution manifest and `inspect()` record activation alias and
 concept/inline origin,
 original and effective selector, row/group filters, activation window,
 `search_within`, `combine$by`, `filter_by_qualified`, `output$group_by`, selected
-output column and reducer, response schema, and LLM configuration. Their output
+output value expression, response schema, and LLM configuration. Their output
 view follows the execution order `combine by -> filter by qualified -> group by
--> reduce`.
+-> evaluate value`.
 
 `variable_spec(name =)` is the canonical public identifier. `run_protocol()`
 accepts an entirely unnamed list or an entirely named list whose names match

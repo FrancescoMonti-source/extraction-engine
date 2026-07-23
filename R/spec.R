@@ -4,7 +4,7 @@
 # Thin list/S3 constructors for the package architecture:
 #   source_spec -> concept_spec -> channels -> variable_spec -> run_variable.
 # Companion files: channels.R (channel + selector ctors), operators.R (windows /
-# reducers / combiners / outputs / absence), run_variable.R (the execution spine).
+# combiners / outputs / absence), run_variable.R (the execution spine).
 # Keep the API experimental: we are validating object boundaries and execution
 # flow, not freezing syntax.
 # =============================================================================
@@ -211,10 +211,12 @@ concept_spec <- function(name, channels) {
     "variable", "channel", "source", "origin", "origin_kind",
     "field", "value", "accepted_value", "n_payload_rows",
     "status", "coverage_state", "processing_state", "channel_coverage",
+    "selection_status", "evidence_kind",
     "needs_review", "review_reason", "field_validity", "validity_reason",
     "task_validity", "task_validity_reason", "citation_warning",
     "citation_warning_reason", "provider", "model", "params",
-    "attempt_status", "processing_status", "raw_response",
+    "attempt_status", "processing_status", "call_status", "response_status",
+    "transport_attempts", "raw_response",
     "partial_response", "prompt_hash", "schema_hash", "query_hash",
     "error", "n_tries", "started_at", "latency_ms", "output_tokens",
     "inferred_finish_reason", "temperature", "seed", "max_tokens",
@@ -231,6 +233,10 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
                         user_prompt = NULL, system_prompt = NULL,
                         max_candidates = NULL) {
     rationale_missing <- missing(rationale)
+    filter_rows <- rlang::enquo(filter_rows)
+    filter_groups <- rlang::enquo(filter_groups)
+    if (rlang::quo_is_null(filter_rows)) filter_rows <- NULL
+    if (rlang::quo_is_null(filter_groups)) filter_groups <- NULL
     if (missing(channel)) {
         stop("use_channel() requires channel = <concept name or inline channel>.",
              call. = FALSE)
@@ -292,12 +298,6 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
         stop("use_channel() selector must be created with a selector constructor.",
              call. = FALSE)
     }
-    if (!is.null(filter_rows)) {
-        if (!is.function(filter_rows) || !length(formals(filter_rows))) {
-            stop("use_channel() filter_rows must be a function naming the source ",
-                 "row columns it reads.", call. = FALSE)
-        }
-    }
     has_group <- !is.null(group_by)
     has_group_rule <- !is.null(filter_groups)
     if (has_group != has_group_rule) {
@@ -312,11 +312,6 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
             !group_by %in% c("PATID", "EVTID", "ELTID")) {
             stop("use_channel() group_by must be PATID, EVTID, or ELTID.",
                  call. = FALSE)
-        }
-        if (!is.function(filter_groups) ||
-            !length(formals(filter_groups))) {
-            stop("use_channel() filter_groups must be a function naming the ",
-                 "group columns it reads.", call. = FALSE)
         }
     }
     if (!is.null(search_within) &&
@@ -430,6 +425,44 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
     invisible(TRUE)
 }
 
+# ELTID identifies one element only inside its prepared source. It is therefore
+# safe as a relational key between activation aliases of the same source, but it
+# must never be treated as a cross-source identifier. Coarser projection to
+# EVTID/PATID remains valid because those are the shared relational keys.
+.check_eltid_identity_domain <- function(combine, channels, output) {
+    if (!inherits(combine, "ee_combiner") ||
+        !identical(combine$kind, "hit_set_expr") ||
+        !identical(combine$by, "ELTID")) {
+        return(invisible(TRUE))
+    }
+
+    aliases <- combine$channels
+    sources <- vapply(channels[aliases], `[[`, character(1), "source")
+    domains <- unique(unname(sources))
+    if (length(domains) != 1L) {
+        detail <- paste(paste0(names(sources), "=", sources), collapse = ", ")
+        stop("combine_channels(..., by = 'ELTID') requires all referenced ",
+             "activations to use the same source identity domain; got ", detail,
+             ". Project the relation to EVTID or PATID before combining ",
+             "different sources.", call. = FALSE)
+    }
+
+    payload_uses_eltid <- identical(output$kind, "from_channel") &&
+        (identical(output$group_by, "ELTID") ||
+         identical(output$filter_by_qualified, "ELTID"))
+    if (payload_uses_eltid) {
+        payload_source <- channels[[output$channel]]$source
+        if (!identical(payload_source, domains[[1]])) {
+            stop("from_channel() cannot apply ELTID-qualified keys from source '",
+                 domains[[1]], "' to payload channel '", output$channel,
+                 "' from source '", payload_source,
+                 "'. Project qualification to EVTID or PATID instead.",
+                 call. = FALSE)
+        }
+    }
+    invisible(TRUE)
+}
+
 # A structured LLM response is a record, not boolean membership. Until authors
 # can declare how a response becomes a hit, accepting every valid response would
 # silently make the combine expression mean something different from its text.
@@ -465,10 +498,9 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
     definition <- .activation_channel_definition(
         output$channel, activation, concept)$definition
     if (identical(activation$method, "lucene_llm")) {
-        if (!is.null(output$reduce)) {
-            stop("from_channel() reduce is for deterministic source columns; ",
-                 "an LLM activation already returns one structured row per task.",
-                 call. = FALSE)
+        if (!is.null(output$value)) {
+            stop("from_channel() value is for deterministic source rows; omit it ",
+                 "to publish the complete structured LLM record.", call. = FALSE)
         }
         if (!is.null(output$filter_by_qualified) &&
             !identical(output$filter_by_qualified, output$group_by)) {
@@ -477,16 +509,6 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
                  "filter_by_qualified = output$group_by ('", output$group_by,
                  "'), not '", output$filter_by_qualified, "'.", call. = FALSE)
         }
-        if (!is.null(output$column)) {
-            fields <- .response_field_names(activation$response)
-            if (!is.null(activation$rationale)) fields <- c(fields, "rationale")
-            if (!output$column %in% fields) {
-                stop("from_channel() column '", output$column,
-                     "' is not declared by LLM activation '", output$channel,
-                     "'; available: ", paste(fields, collapse = ", "), ".",
-                     call. = FALSE)
-            }
-        }
         return(invisible(TRUE))
     }
     if (identical(definition$type, "text")) {
@@ -494,8 +516,8 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
              output$channel, "'; use bin_output() for Lucene membership.",
              call. = FALSE)
     }
-    if (is.null(output$column)) {
-        stop("from_channel() must declare column = <prepared-source column> for ",
+    if (is.null(output$value)) {
+        stop("from_channel() must declare value = <data-masked expression> for ",
              "deterministic activation '", output$channel, "'.", call. = FALSE)
     }
     invisible(TRUE)
@@ -601,7 +623,10 @@ inspect.default <- function(x, ...) {
          paste(class(x), collapse = ", "), call. = FALSE)
 }
 
-.one_line <- function(x) paste(deparse(x, width.cutoff = 500L), collapse = " ")
+.one_line <- function(x) {
+    if (rlang::is_quosure(x)) x <- rlang::get_expr(x)
+    paste(deparse(x, width.cutoff = 500L), collapse = " ")
+}
 
 .print_selector <- function(selector, indent = "    ") {
     if (is.null(selector)) return(invisible(NULL))
@@ -700,7 +725,9 @@ print.ee_variable_spec <- function(x, ...) {
     cat("Output: ", resolved$output$kind, "\n", sep = "")
     if (identical(resolved$output$kind, "from_channel")) {
         cat("Payload alias: ", resolved$output$channel, "\n", sep = "")
-        cat("Payload column: ", resolved$output$column %||% "all LLM fields",
+        cat("Payload value: ",
+            if (is.null(resolved$output$value)) "all LLM fields" else
+                .one_line(resolved$output$value),
             "\n", sep = "")
         if (!is.null(resolved$output$filter_by_qualified)) {
             cat("Filter by qualified: ",
@@ -708,7 +735,6 @@ print.ee_variable_spec <- function(x, ...) {
         }
     }
     cat("Group by: ", resolved$output$group_by, "\n", sep = "")
-    if (is.function(resolved$output$reduce)) cat("Reduce: configured\n")
     invisible(x)
 }
 
@@ -789,6 +815,8 @@ resolve_variable_spec <- function(variable) {
             name, variable$concept, variable$channels[[name]]))
     names(resolved_channels) <- names(variable$channels)
     invisible(lapply(resolved_channels, .check_channel_required_roles))
+    .check_eltid_identity_domain(
+        variable$combine, resolved_channels, variable$output)
 
     .new_spec(
         list(

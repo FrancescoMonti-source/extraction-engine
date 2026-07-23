@@ -3,59 +3,108 @@ lab_fixture <- function() {
         PATID = "P1",
         EVTID = c("E1", "E1", "E2", "E2", "E3"),
         ELTID = paste0("L", 1:5),
-        biol_ID = paste0("B", 1:5),
+        BIOL_ID = paste0("B", 1:5),
         DATEXAM = as.Date("2026-01-01") + 0:4,
         TYPEANA = c("K.K", "K.K", "K.K", "ONE", "EMPTY"),
         NUMRES = c(4.2, NA, 5.1, 2, NA),
-        STRRES = c(NA, "negatif", "legacy-code", NA, NA))
+        STRRES = c(NA, "negatif", "legacy-code", NA, NA),
+        LOWER = c(3.5, 3.5, 3.5, 1, NA),
+        UPPER = c(5, 5, 5, 3, NA),
+        WEIGHT = c(1, 2, 3, 1, 1))
 }
 
-lab_variable <- function(code, column, reduce = NULL) {
+lab_variable <- function(code, value) {
+    value <- rlang::enquo(value)
     concept <- concept_spec(
         paste("lab", code),
         channels = list(result = lab_channel(selector = analyte(code))))
     variable_spec(
-        name = paste(code, column, sep = "_"),
+        name = paste0(code, "_value"),
         concept = concept,
         channels = list(result = use_channel(channel = "result")),
         output = from_channel(
-            "result", column = column, group_by = "PATID", reduce = reduce))
+            "result", group_by = "PATID", value = !!value))
 }
 
-test_that("prepared columns remain explicit and cardinality fails closed", {
+test_that("data-masked values preserve aligned source rows and one-cell output", {
     biology <- lab_fixture()
     cohort <- tibble::tibble(PATID = "P1")
 
     numeric_run <- run_variable(
-        lab_variable("K.K", "NUMRES", max), cohort,
-        sources = list(biology = biology))
+        lab_variable("K.K", max(NUMRES, na.rm = TRUE)), cohort,
+        sources = list(biology = dplyr::select(biology, -BIOL_ID)))
     character_run <- run_variable(
-        lab_variable("K.K", "STRRES", function(x) paste(x, collapse = "|")), cohort,
+        lab_variable(
+            "K.K", paste(STRRES[!is.na(STRRES)], collapse = "|")), cohort,
         sources = list(biology = biology))
     date_run <- run_variable(
-        lab_variable("K.K", "DATEXAM", max), cohort,
+        lab_variable("K.K", max(DATEXAM)), cohort,
         sources = list(biology = biology))
     empty_run <- run_variable(
-        lab_variable("EMPTY", "NUMRES"), cohort,
+        lab_variable("ABSENT", mean(NUMRES, na.rm = TRUE)), cohort,
         sources = list(biology = biology))
+    weighted_run <- run_variable(
+        lab_variable(
+            "K.K", stats::weighted.mean(NUMRES, WEIGHT, na.rm = TRUE)),
+        cohort, sources = list(biology = biology))
+    latest_class_run <- run_variable(
+        lab_variable("K.K", {
+            i <- which.max(DATEXAM)
+            dplyr::case_when(
+                NUMRES[[i]] < LOWER[[i]] ~ "low",
+                NUMRES[[i]] > UPPER[[i]] ~ "high",
+                .default = "normal")
+        }),
+        cohort, sources = list(biology = biology))
 
-    # Engine invariant: from_channel() reads the authored source column and
-    # preserves the reducer's scalar type; it never infers a synthetic result lane.
+    # Engine invariant: one data-masked expression sees complete, aligned source
+    # columns. Missing values are handled explicitly by the author.
     expect_identical(
         list(
             numeric = numeric_run$values$value,
             character = character_run$values$value,
-            date = date_run$values$value),
+            date = date_run$values$value,
+            weighted = weighted_run$values$value,
+            latest_class = latest_class_run$values$value),
         list(
             numeric = 5.1,
             character = "negatif|legacy-code",
-            date = as.POSIXct("2026-01-03", tz = "Europe/Paris")))
+            date = as.POSIXct("2026-01-03", tz = "Europe/Paris"),
+            weighted = 4.875,
+            latest_class = "high"))
 
-    # Zero values remain typed missing; ambiguous cardinality is a loud error.
-    expect_identical(empty_run$values$value, NA_real_)
+    # With no candidate rows the expression is not evaluated and the task gets
+    # one stable missing cell. Multiple returned cells remain a loud error.
+    expect_identical(empty_run$values$value, NA)
 
-    # Provenance invariant: choosing NUMRES does not erase sibling payload or
-    # rows with missing NUMRES, and private coordinates do not leak publicly.
+    # Channel status keeps row selection separate from model processing. A
+    # deterministic channel never needs model processing, whether or not its
+    # selector matched a candidate row.
+    expect_identical(
+        c(
+            matched_selection = numeric_run$channel_status$selection_status,
+            matched_processing = numeric_run$channel_status$processing_status,
+            empty_selection = empty_run$channel_status$selection_status,
+            empty_processing = empty_run$channel_status$processing_status),
+        c(
+            matched_selection = "matched",
+            matched_processing = "not_required",
+            empty_selection = "no_match",
+            empty_processing = "not_required"))
+    expect_length(
+        intersect(
+            c("status", "hit", "processing_state", "contribution", "error"),
+            names(numeric_run$channel_status)),
+        0L)
+    expect_identical(
+        intersect(
+            c("call_status", "response_status", "transport_attempts",
+              "attempt_status", "processing_status", "n_tries", "definition"),
+            names(numeric_run$audit$llm_calls)),
+        c("call_status", "response_status", "transport_attempts"))
+
+    # Reading NUMRES does not erase sibling payload or rows with missing NUMRES.
+    # The native BIOL_ID is optional for execution and preserved when supplied.
     expect_identical(
         numeric_run$evidence |>
             dplyr::arrange(evidence_ref) |>
@@ -64,6 +113,8 @@ test_that("prepared columns remain explicit and cardinality fails closed", {
             source_EVTID = c("E1", "E1", "E2"),
             NUMRES = c(4.2, NA, 5.1),
             STRRES = c(NA, "negatif", "legacy-code")))
+    expect_identical(character_run$evidence$BIOL_ID, paste0("B", 1:3))
+    expect_identical(unique(numeric_run$evidence$evidence_kind), "source_row")
     expect_identical(
         intersect(c("evidence_ref", "source_row_id", "hit_ref"),
                   names(numeric_run$evidence)),
@@ -71,9 +122,9 @@ test_that("prepared columns remain explicit and cardinality fails closed", {
 
     expect_error(
         run_variable(
-            lab_variable("K.K", "NUMRES"), cohort,
+            lab_variable("K.K", NUMRES), cohort,
             sources = list(biology = biology)),
-        "found 2 non-missing values")
+        "must return exactly one scalar or one list cell")
 })
 
 test_that("relational keys control qualification, evidence, and broadcast", {
@@ -81,7 +132,7 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         PATID = "P1",
         EVTID = c("E1", "E1", "E1", "E2", "E2", "E2"),
         ELTID = paste0("L", 1:6),
-        biol_ID = paste0("B", 1:6),
+        BIOL_ID = paste0("B", 1:6),
         DATEXAM = as.Date("2026-02-01") + c(0, 1, 1, 2, 3, 5),
         TYPEANA = c("HB.HB", "HB.HB", "OTHER", "HB.HB", "HB.HB", "HB.HB"),
         NUMRES = c(9, 10, 99, 14, 16, 7),
@@ -89,26 +140,31 @@ test_that("relational keys control qualification, evidence, and broadcast", {
     hemoglobin <- concept_spec(
         "hemoglobin",
         channels = list(hb = lab_channel(selector = analyte("HB.HB"))))
-    make_variable <- function(filter_by) variable_spec(
-        name = paste0("mean_hb_filtered_by_", filter_by),
-        concept = hemoglobin,
-        anchor = "anchor_date",
-        channels = list(
-            hb_gate = use_channel(
-                channel = "hb",
-                window = c(-Inf, 0)),
-            hb_low = use_channel(
-                channel = "hb",
-                filter_rows = function(NUMRES) NUMRES < 12,
-                window = c(-Inf, 0)),
-            hb_payload = use_channel(
-                channel = "hb",
-                window = c(-Inf, 0))),
-        combine = combine_channels("hb_gate & hb_low", by = "EVTID"),
-        output = from_channel(
-            "hb_payload", column = "NUMRES",
-            filter_by_qualified = filter_by,
-            group_by = "PATID", reduce = mean))
+    make_variable <- function(filter_by) {
+        low_threshold <- 12
+        variable_spec(
+            name = paste0("mean_hb_filtered_by_", filter_by),
+            concept = hemoglobin,
+            anchor = "anchor_date",
+            channels = list(
+                hb_low = use_channel(
+                    channel = "hb",
+                    filter_rows = .data$NUMRES < .env$low_threshold,
+                    window = c(-Inf, 0)),
+                hb_group = use_channel(
+                    channel = "hb",
+                    group_by = "EVTID",
+                    filter_groups = mean(NUMRES, na.rm = TRUE) < 12,
+                    window = c(-Inf, 0)),
+                hb_payload = use_channel(
+                    channel = "hb",
+                    window = c(-Inf, 0))),
+            combine = combine_channels("hb_low & hb_group", by = "EVTID"),
+            output = from_channel(
+                "hb_payload", group_by = "PATID",
+                value = mean(NUMRES, na.rm = TRUE),
+                filter_by_qualified = filter_by))
+    }
 
     patient_cohort <- tibble::tibble(
         PATID = c("P1", "P1"),
@@ -140,6 +196,23 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         unname(vapply(event_restricted$audit$execution_manifest$channels,
                       `[[`, character(1), "origin_name")),
         c("hb", "hb", "hb"))
+
+    # Audit stages describe one relational funnel instead of exposing helper
+    # names. The window remains a separate stage between the pre-selector rows
+    # and the selector itself.
+    hb_low_counts <- event_restricted$audit$counts |>
+        dplyr::filter(channel == "hb_low")
+    expected_counts <- c(
+        pre_selector = 6L, window = 5L, selector = 4L,
+        filtered_selector = 2L)
+    expect_identical(
+        hb_low_counts$n[match(names(expected_counts), hb_low_counts$stage)],
+        unname(expected_counts))
+    expect_length(
+        intersect(
+            unique(event_restricted$audit$counts$stage),
+            c("task_join", "filter_rows", "filter_groups")),
+        0L)
     # Known regression: the payload evidence follows the qualifying rows while
     # gate evidence remains the complete observed signal.
     expect_identical(
@@ -152,8 +225,8 @@ test_that("relational keys control qualification, evidence, and broadcast", {
             NUMRES = c(9, 10)))
     expect_identical(
         sort(event_restricted$evidence$source_EVTID[
-            event_restricted$evidence$channel == "hb_gate"]),
-        c("E1", "E1", "E2", "E2"))
+            event_restricted$evidence$channel == "hb_group"]),
+        c("E1", "E1"))
 
     broadcast <- variable_spec(
         name = "hb_patient_gate_broadcast_to_events",
@@ -165,7 +238,7 @@ test_that("relational keys control qualification, evidence, and broadcast", {
                 window = c(-Inf, 0)),
             hb_low = use_channel(
                 channel = "hb",
-                filter_rows = function(NUMRES) NUMRES < 12,
+                filter_rows = NUMRES < 12,
                 window = c(-Inf, 0))),
         combine = combine_channels("hb_gate & hb_low", by = "PATID"),
         output = bin_output(group_by = "EVTID"))
@@ -239,6 +312,52 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         sort(event_text_run$evidence$source_EVTID[
             event_text_run$evidence$channel == "alpha"]),
         c("E1", "E2"))
+    expect_identical(
+        unique(event_text_run$evidence$evidence_kind),
+        "lucene_hit")
+
+    # ELTID is source-local. Distinct selectors from the same document source
+    # may combine at document level, but bare ELTID values never join sources.
+    cross_source <- concept_spec(
+        "cross_source_element_ids",
+        channels = list(
+            alpha = text_channel(lucene_query("alpha")),
+            hb = lab_channel(selector = analyte("HB.HB"))))
+    cross_source_variable <- variable_spec(
+        name = "cross_source_ELTID_is_invalid",
+        concept = cross_source,
+        channels = list(
+            alpha = use_channel(
+                "alpha", search_within = "PATID", method = "lucene"),
+            hb = use_channel("hb")),
+        combine = combine_channels("alpha & hb", by = "ELTID"),
+        output = bin_output(group_by = "PATID"))
+    expect_error(
+        resolve_variable_spec(cross_source_variable),
+        "same source identity domain")
+
+    cross_source_payload <- concept_spec(
+        "cross_source_qualified_payload",
+        channels = list(
+            alpha = text_channel(lucene_query("alpha")),
+            beta = text_channel(lucene_query("beta")),
+            hb = lab_channel(selector = analyte("HB.HB"))))
+    cross_source_payload_variable <- variable_spec(
+        name = "cross_source_ELTID_payload_is_invalid",
+        concept = cross_source_payload,
+        channels = list(
+            alpha = use_channel(
+                "alpha", search_within = "PATID", method = "lucene"),
+            beta = use_channel(
+                "beta", search_within = "PATID", method = "lucene"),
+            hb = use_channel("hb")),
+        combine = combine_channels("alpha & beta", by = "ELTID"),
+        output = from_channel(
+            "hb", group_by = "PATID", value = mean(NUMRES, na.rm = TRUE),
+            filter_by_qualified = "ELTID"))
+    expect_error(
+        resolve_variable_spec(cross_source_payload_variable),
+        "cannot apply ELTID-qualified keys")
 
     # Trust-boundary invariant: select_event may select matched rows, but cannot
     # synthesize a crossed EVTID/date pair that rewrites the clinical clock.
@@ -260,7 +379,7 @@ test_that("relational keys control qualification, evidence, and broadcast", {
             }),
         channels = list(hb = use_channel("hb", window = c(-Inf, 0))),
         output = from_channel(
-            "hb", column = "NUMRES", group_by = "PATID", reduce = max))
+            "hb", group_by = "PATID", value = max(NUMRES, na.rm = TRUE)))
     expect_error(
         run_variable(
             crossed_anchor,
@@ -270,6 +389,25 @@ test_that("relational keys control qualification, evidence, and broadcast", {
 })
 
 test_that("LLM boundary stays grounded, isolated, and fail closed", {
+    new_engine_fields <- c(
+        "selection_status", "evidence_kind", "call_status",
+        "response_status", "transport_attempts")
+    collision_rejected <- vapply(new_engine_fields, function(field) {
+        authored <- do.call(
+            ellmer::type_object,
+            c(list("Invalid engine-owned response field."),
+              stats::setNames(
+                  list(ellmer::type_string("Must be rejected.")), field)))
+        inherits(
+            try(
+                use_channel(
+                    channel = "text", search_within = "PATID",
+                    method = "lucene_llm", response = authored),
+                silent = TRUE),
+            "try-error")
+    }, logical(1))
+    expect_true(all(collision_rejected))
+
     response <- ellmer::type_object(
         "Extraction structurée du statut tabagique.",
         statut_tabagique = ellmer::type_enum(
@@ -356,14 +494,31 @@ test_that("LLM boundary stays grounded, isolated, and fail closed", {
     expect_identical(seen$calls, 1L)
     expect_false("evidence_ids" %in% names(run$values))
 
+    # Selection describes the Lucene boundary; processing describes the LLM
+    # boundary. No candidate therefore means no_match + not_called, whereas a
+    # grounded response means matched + completed.
+    expect_identical(
+        run$channel_status |>
+            dplyr::select(selection_status, processing_status),
+        tibble::tibble(
+            selection_status = c("matched", "no_match"),
+            processing_status = c("completed", "not_called")))
+    expect_length(
+        intersect(
+            c("status", "hit", "processing_state", "contribution", "error"),
+            names(run$channel_status)),
+        0L)
+
     # Grounded evidence keeps target and native stay identities distinct while
     # exposing only the canonical public coordinate.
     expect_identical(
         run$evidence |>
-            dplyr::select(EVTID, source_EVTID, evidence_ref, snippet_id),
+            dplyr::select(
+                EVTID, source_EVTID, evidence_ref, evidence_kind, snippet_id),
         tibble::tibble(
             EVTID = "TARGET1", source_EVTID = "SOURCE_STAY",
-            evidence_ref = "H001", snippet_id = "S001"))
+            evidence_ref = "H001", evidence_kind = "llm_citation",
+            snippet_id = "S001"))
     expect_identical(
         intersect(c("evidence_ref", "source_row_id", "hit_ref"),
                   names(run$evidence)),
@@ -374,6 +529,12 @@ test_that("LLM boundary stays grounded, isolated, and fail closed", {
                 text_tabagisme$declared_model,
             observed = run$audit$llm_calls$model),
         c(declared = "declared-test-model", observed = "fake"))
+    expect_identical(
+        intersect(
+            c("call_status", "response_status", "transport_attempts",
+              "attempt_status", "processing_status", "n_tries", "definition"),
+            names(run$audit$llm_calls)),
+        c("call_status", "response_status", "transport_attempts"))
 
     # Schema-boundary invariant: engine-owned fields are injected dynamically,
     # and the citation enum contains only prompt-visible IDs.
@@ -410,9 +571,12 @@ test_that("LLM boundary stays grounded, isolated, and fail closed", {
             value = invented_only$values$statut_tabagique[[1]],
             coverage = invented_only$values$channel_coverage[[1]],
             needs_review = invented_only$values$needs_review[[1]],
+            selection = invented_only$channel_status$selection_status[[1]],
+            processing = invented_only$channel_status$processing_status[[1]],
             evidence_rows = nrow(invented_only$evidence)),
         list(
             value = NA_character_, coverage = "partial", needs_review = TRUE,
+            selection = "matched", processing = "invalid",
             evidence_rows = 0L))
 
     # Empty citations exercise the distinct zero-ID path: invalid, not errored.

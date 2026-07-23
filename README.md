@@ -4,7 +4,7 @@
 > definitions, not the author of those definitions.
 
 The package executes explicit study-variable specifications over prepared EDSAN
-views. It returns values together with source coverage, resolvable evidence, and
+views. It returns values together with source coverage, inspectable evidence, and
 execution provenance. The researcher owns the clinical definition and its
 scientific interpretation; `redsan` owns source normalization; `ellmer` owns
 model transport and structured output.
@@ -19,6 +19,11 @@ New users should begin with
 [`vignette("getting-started", package = "extractionengine")`](vignettes/getting-started.Rmd).
 It builds one auditable variable from synthetic data, translates the relational
 contract to dplyr, and explains the result and audit objects.
+
+For structured text extraction, continue with
+[`vignette("structured-text-with-llm", package = "extractionengine")`](vignettes/structured-text-with-llm.Rmd).
+It separates Lucene retrieval from LLM interpretation, defines the response with
+an Ellmer TypeObject, and explains grounding, failure state, and model audit.
 
 ## One complete authoring workflow
 
@@ -43,8 +48,8 @@ anemia <- concept_spec(
 
 `lab_channel()` defaults to the logical source `"biology"`; another registered
 lab source can be named with `source =`. `analyte()` selects `TYPEANA` rows and
-nothing else. It does not infer whether `NUMRES`, `STRRES`, or `DATEXAM` should be
-read.
+nothing else. It does not infer which prepared-source columns a published value
+should use.
 
 The variable activates concept channels explicitly. The list name is the alias
 used by combine expressions, output, inspection, and provenance. The mandatory
@@ -67,9 +72,7 @@ mean_hb_for_patients_with_anemic_stays <- variable_spec(
     ),
     hb_low = use_channel(
       channel = "hb",
-      filter_rows = \(NUMRES, PATSEX) {
-        NUMRES < ifelse(PATSEX == "F", 12, 13)
-      }
+      filter_rows = NUMRES < ifelse(PATSEX == "F", 12, 13)
     )
   ),
 
@@ -80,10 +83,9 @@ mean_hb_for_patients_with_anemic_stays <- variable_spec(
 
   output = from_channel(
     "hb",
-    column = "NUMRES",
-    filter_by_qualified = "PATID",
     group_by = "PATID",
-    reduce = mean
+    value = mean(NUMRES, na.rm = TRUE),
+    filter_by_qualified = "PATID"
   )
 )
 
@@ -95,14 +97,16 @@ hb_result <- run_variable(
 ```
 
 Here `filter_rows` runs separately inside each task after relational, window, and
-selector filtering. Its formal arguments name real prepared-source columns and
-it returns one logical per row; `NA` is treated as `FALSE`, and surviving rows
-stay intact. `filter_groups`, paired with `use_channel(group_by =)`, is the
-corresponding one-logical-per-group rule and retains all surviving rows of
-accepted groups. That `group_by` is an intermediate grouping used only by
-`filter_groups`; it is not the final output grain. The mandatory `group_by` in
-`bin_output(group_by = ...)` or `from_channel(group_by = ...)` independently
-defines that terminal grain.
+selector filtering. It is evaluated in a data mask where prepared-source columns
+are available as bare names and must return one logical per row; `NA` is treated
+as `FALSE`, and surviving rows stay intact. Use `.data[[column]]` for a
+programmatically selected column and `.env$threshold` to disambiguate an external
+value. `filter_groups`, paired with `use_channel(group_by =)`, is evaluated in
+the same data mask and must return one non-missing logical per group while
+retaining all surviving rows of accepted groups. That `group_by` is an
+intermediate grouping used only by `filter_groups`; it is not the final output
+grain. The mandatory `group_by` in `bin_output(group_by = ...)` or
+`from_channel(group_by = ...)` independently defines that terminal grain.
 An activation may also declare `window = c(from_days, to_days)` relative to the
 variable's shared `anchor`; other activations remain unwindowed.
 
@@ -128,10 +132,16 @@ The relational declarations answer different questions:
   combine; text activations must declare `"PATID"` or `"EVTID"`;
 - `combine_channels(..., by = "EVTID")` requires the text and low-Hb signals to
   coexist in a stay;
-- `filter_by_qualified = "PATID"` lets the reducer read all Hb rows of each
+- `filter_by_qualified = "PATID"` lets the value expression see all Hb rows of each
   qualified patient; changing it to `"EVTID"` restricts the mean to qualifying
   stays;
 - `group_by = "PATID"` publishes one final row per patient.
+
+`ELTID` is source-local. A combine at `by = "ELTID"` may relate different
+activations or selectors only when they resolve to the same registered source
+identity domain; it cannot join elements from different sources. A payload may
+consume those keys at `ELTID` only from that same source; projection to `EVTID`
+or `PATID` is the cross-source route.
 
 `filter_by_qualified` is admitted, and required, only when `combine$by` is finer
 than `output$group_by`; it may then be only the combine key or the output key.
@@ -144,7 +154,7 @@ publication; it is not a hidden engine column.
 ### Why the qualifying-row filter and output grain are different
 
 The subtle case is a combine evaluated at a finer key than the final output,
-followed by a `from_channel()` reducer. Suppose one patient has two stays:
+followed by a `from_channel()` value expression. Suppose one patient has two stays:
 
 | PATID | EVTID | Hb values | Combine result |
 |---|---|---|---|
@@ -152,7 +162,7 @@ followed by a `from_channel()` reducer. Suppose one patient has two stays:
 | P1 | E2 | 14, 16 | not qualifying |
 
 With `combine_channels(..., by = "EVTID")`, the combine answers only that E1
-qualifies. With `group_by = "PATID"`, the reducer must ultimately publish one
+qualifies. With `group_by = "PATID"`, the output must ultimately publish one
 value for P1. Those declarations still leave two scientifically different
 questions.
 
@@ -162,10 +172,9 @@ rows by the combine key:
 ```r
 from_channel(
   "hb",
-  column = "NUMRES",
-  filter_by_qualified = "EVTID",
   group_by = "PATID",
-  reduce = mean
+  value = mean(NUMRES, na.rm = TRUE),
+  filter_by_qualified = "EVTID"
 )
 ```
 
@@ -175,7 +184,7 @@ This is relationally equivalent to:
 hb_rows |>
   semi_join(qualified_evtids, by = c("PATID", "EVTID")) |>
   group_by(PATID) |>
-  summarise(value = mean(NUMRES))
+  summarise(value = mean(NUMRES, na.rm = TRUE))
 # P1: mean(c(8, 10)) = 9
 ```
 
@@ -185,10 +194,9 @@ mean Hb across all stays?*, restrict by the output key instead:
 ```r
 from_channel(
   "hb",
-  column = "NUMRES",
-  filter_by_qualified = "PATID",
   group_by = "PATID",
-  reduce = mean
+  value = mean(NUMRES, na.rm = TRUE),
+  filter_by_qualified = "PATID"
 )
 ```
 
@@ -202,16 +210,16 @@ qualified_patids <- qualified_evtids |>
 hb_rows |>
   semi_join(qualified_patids, by = "PATID") |>
   group_by(PATID) |>
-  summarise(value = mean(NUMRES))
+  summarise(value = mean(NUMRES, na.rm = TRUE))
 # P1: mean(c(8, 10, 14, 16)) = 12
 ```
 
 Both routes correctly produce one row per PATID. Execution always follows
-`combine by -> filter by qualified -> group by -> reduce`, and the three
+`combine by -> filter by qualified -> group by -> evaluate value`, and the three
 declarations answer separate questions:
 
 - `combine$by`: where is qualification decided?
-- `filter_by_qualified`: rows from which qualified units feed the reducer?
+- `filter_by_qualified`: rows from which qualified units feed the value expression?
 - `output$group_by`: at which key is the final result grouped and published?
 
 The payload channel's public evidence follows the same qualified-row relation:
@@ -228,20 +236,22 @@ fine-to-coarse payload, `filter_by_qualified` must therefore equal
 `output$group_by`; lower-level LLM payload scope would require one model call per
 lower-level key and is not implemented.
 
-For a deterministic channel, `column` is the exact prepared-source column name.
-There is no hidden `value` alias. With `reduce = NULL`, zero non-missing values
-produce a typed `NA`, one is returned directly, and more than one is a cardinality
-error. With `reduce =`, the reducer receives only non-missing values and must
-return exactly one scalar. It may intentionally change type, for example from a
-numeric measurement to a categorical label. Consequently the same lab concept
-can be published with `column = "NUMRES"`, `"STRRES"`, or `"DATEXAM"`; a row
-containing both result columns is valid because the read is explicit.
+For a deterministic channel, `value` is one data-masked expression evaluated on
+the complete, aligned prepared-source rows of each final group. It can therefore
+use several columns, for example `weighted.mean(NUMRES, WEIGHT, na.rm = TRUE)` or
+`NUMRES[which.max(DATEXAM)]`. Missing values are not removed automatically: the
+expression owns its `NA` policy. If no payload row remains, the expression is not
+evaluated and the engine publishes a logical `NA`. Otherwise it must return
+exactly one cell: one atomic scalar or one list cell. Longer or dimensional
+results are cardinality errors. A row containing both `NUMRES` and `STRRES` is
+valid because the authored expression makes their use explicit.
 
-The reducer is terminal: `group_by = "EVTID"` with `reduce = mean` computes one
-stay mean, while `group_by = "PATID"` pools the patient's raw values.
-`filter_by_qualified` filters rows before that grouping and reducer; it does not
-implement a mean of stay means. Such a two-stage aggregation requires an
-explicit derived variable and is intentionally future work.
+The value expression is terminal: `group_by = "EVTID"` with
+`value = mean(NUMRES, na.rm = TRUE)` computes one stay mean, while
+`group_by = "PATID"` pools the patient's raw rows. `filter_by_qualified` filters
+rows before that grouping and evaluation; it does not implement a mean of stay
+means. Such a two-stage aggregation requires an explicit derived variable and is
+intentionally future work.
 
 ## Structured text extraction
 
@@ -296,8 +306,8 @@ smoking_result <- run_variable(
 
 `from_channel("text_tabagisme", group_by = "EVTID")` publishes the complete
 structured frame: every authored TypeObject field plus `rationale` by default.
-Supplying `column =` instead projects one field. In `use_channel()`,
-`rationale = TRUE` or omission uses:
+An LLM output omits `value`; field projection is not part of this output
+contract. In `use_channel()`, `rationale = TRUE` or omission uses:
 “Justification brève du choix, fondée uniquement sur les extraits et sans ajouter
 d'information non documentée.” A non-empty string overrides that description;
 `FALSE` or `NULL` omits the field.
@@ -339,31 +349,34 @@ until an explicit response-to-hit rule such as `hit_when` is implemented. Use
 signal.
 
 No candidate, model failure, or invalid schema still yields a stable result row
-with typed missing fields and separate status/review information. Raw response
-and provenance remain auditable. Public evidence has one durable
-`evidence_ref`; LLM evidence also keeps the prompt-local `snippet_id` when
-available. Internal `source_row_id` and `hit_ref` coordinates remain in
-`audit$internal$channel_intermediates`, not in the public evidence frame. When
-an evidence row carries a native `EVTID`, the public evidence frame names it
-`source_EVTID`; at stay-grain output, the target stay remains `EVTID`.
+with typed missing fields and separate selection/processing information. Raw
+response and provenance remain auditable. A grounded LLM response publishes
+only the snippets it cited, marked as `evidence_kind = "llm_citation"`; its
+`snippet_id` is local to that task's prompt.
 
 `run_variable()` returns only `values`, `channel_status`, `evidence`, and
 `audit`. `channel_status` has one row per output task and activated channel. Its
 stable core identifies the output unit, variable, channel, and source, then
-records `status`, `hit`, and `processing_state`; some execution paths add review
-or contribution fields. `status` is the coarse execution outcome: `complete`
-means that ascertainment finished, not that a signal was present. Presence is
-recorded separately as `TRUE`, `FALSE`, or `NA` in `hit`, while
-`processing_state` retains the more specific executor outcome. On a combine,
-`contribution` summarizes the channel as `signal`, `negative`,
-`silent`, `invalid`, `error`, or `unknown`; here `negative` means "successfully
-ascertained with no observed hit", not a clinical negative finding.
+records two independent controlled fields:
 
-`evidence` has one row per retained source row or text snippet. Structured
-evidence preserves the prepared source's row columns, such as `TYPEANA`,
-`NUMRES`, `STRRES`, and `DATEXAM` when available, together with its public
-coordinates. Every row receives one canonical `evidence_ref`; internal
-`source_row_id` and `hit_ref` identifiers are removed from this public frame.
+- `selection_status` is `matched`, `no_match`, or `unavailable`: respectively,
+  one or more candidates survived activation selection, selection completed
+  with no surviving candidate, or no reliable selection could be made;
+- `processing_status` is `not_required` for non-LLM channels. For
+  `lucene_llm`, it is `completed`, `not_called`, `invalid`, or `failed`:
+  respectively a valid grounded response, no model invocation, an unusable
+  returned response, or a call/processing failure.
+
+`evidence` has one row per retained evidence occurrence. `evidence_kind`
+distinguishes `source_row`, `lucene_hit`, and `llm_citation`. Structured evidence
+preserves prepared-source columns such as `TYPEANA`, `NUMRES`, `STRRES`, and
+`DATEXAM` when available. `evidence_ref` is an opaque coordinate local to the
+executed run and source snapshot, not a globally stable warehouse identifier;
+the same source evidence may legitimately recur for different targets or
+channels. Internal `source_row_id` and `hit_ref` identifiers are not public.
+When a row carries a native `EVTID`, it is published as `source_EVTID`; an output
+`EVTID` remains the target stay. The two may be equal without being semantically
+interchangeable.
 
 `run_protocol()` accepts either an entirely unnamed variable list or an entirely
 named one whose names exactly equal each `spec$name` in the same order. Canonical
@@ -377,22 +390,24 @@ corresponding executor emits them:
 
 | `stage` | What `n` counts |
 |---|---|
-| `task_join` | source rows associated with the task by its relational keys |
-| `window` | source rows remaining after the activation's time window |
-| `selector` | rows matching the channel selector |
-| `filter_rows` | rows surviving the row predicate |
-| `filter_groups` | rows retained inside accepted groups |
+| `pre_selector` | structured source rows, or searchable text documents, associated with the task before window and selector |
+| `window` | those rows or documents remaining after the activation's time window |
+| `selector` | rows or snippets matching the channel selector |
+| `filtered_selector` | selector matches remaining after row and group filters |
 | `model_input` | snippets supplied to the model |
-| `output_input` | non-missing values supplied to the terminal reducer |
+| `output_input` | prepared-source rows supplied to the terminal value expression |
 
 Stages are included only when that executor records a distinct count. Their
-absence alone does not prove that an operation did not run; in particular, text
-retrieval does not currently emit a separate `window` row.
+absence alone does not prove that an operation did not run.
 
-`llm_calls` contains one row per task/channel model invocation, including model
-configuration, call and processing outcomes, timing, prompt/schema/query
-fingerprints, diagnostics, and the raw or partial response. A task that never
-reaches the model, for example because it has no candidate, has no call row. The
+`llm_calls` contains one row per task/channel model invocation. `call_status`
+records the model/transport outcome, `response_status` records whether the
+returned response could be processed, and `task_validity` records grounding and
+schema acceptance; `transport_attempts` counts the underlying call tries. The
+table also retains model configuration, timing, prompt/schema/query fingerprints,
+diagnostics, and the raw or partial response, with the same columns when it has
+zero rows. A task that never reaches the model, for example because it has no
+candidate, has no call row. The
 `execution_manifest` is a resolved snapshot of what was configured and executed,
 not a chronological activity log. Combination runs additionally keep `overlap`,
 a tabular Venn/UpSet-style count of observed `TRUE`/`FALSE`/`NA` channel patterns,

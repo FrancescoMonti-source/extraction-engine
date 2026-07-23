@@ -11,8 +11,7 @@ combine_channels(expr, by)
 
 bin_output(group_by)
 
-from_channel(channel, column = NULL, filter_by_qualified = NULL,
-  group_by, reduce = NULL)
+from_channel(channel, group_by, value = NULL, filter_by_qualified = NULL)
 }
 \arguments{
 \item{source}{The registered prepared source used to derive an index event.}
@@ -27,11 +26,14 @@ Without it, multiple matches are an error.}
 \item{expr}{A hit-set expression using activation aliases and \code{|},
 \code{&}, \code{!}, and parentheses.}
 \item{by}{The \code{"PATID"}, \code{"EVTID"}, or \code{"ELTID"} key where
-the signals referenced by \code{expr} must coexist.}
+the signals referenced by \code{expr} must coexist. \code{"ELTID"} is valid
+only when all referenced activations resolve to the same source identity domain;
+a payload consuming those qualified keys at \code{ELTID} must use that domain too.}
 \item{channel}{The activation alias whose payload is published.}
-\item{column}{For a deterministic activation, one exact prepared-source column
-name. For an LLM activation, \code{NULL} publishes the complete structured frame
-and a field name projects one column.}
+\item{value}{For a deterministic activation, one data-masked expression evaluated
+over the complete, aligned prepared-source rows of each final group. It may use
+multiple columns and must return exactly one cell. Omit it for an LLM activation
+to publish the complete structured frame.}
 \item{filter_by_qualified}{Optional qualifying-relation key used to filter native
 payload rows before terminal grouping. It is admitted and required only when
 \code{combine$by} is finer than the output \code{group_by}, and must then equal
@@ -41,8 +43,6 @@ payload supports only the output \code{group_by}.}
 \code{"EVTID"}, or \code{"ELTID"}. It is not inferred from a combine and is
 distinct from \code{use_channel(group_by =)}, which groups rows only for
 \code{filter_groups}.}
-\item{reduce}{An optional plain function receiving non-missing values and
-returning one scalar.}
 }
 \value{An anchor, combiner, or output specification.}
 \description{
@@ -51,16 +51,20 @@ membership or a hit-set decision. \code{from_channel()} publishes an explicitly
 named activation payload.
 }
 \details{
-Without \code{reduce}, zero non-missing values produce a typed missing value, one
-is returned directly, and more than one is a cardinality error. Hit-set
-expressions operate on observed membership and do not encode clinical ontology.
+Data-masked expressions see prepared-source columns as bare names. \code{.data}
+supports programmatic column selection and \code{.env} disambiguates captured
+external values. Missing values remain aligned and are not removed automatically.
+When no payload row remains, \code{value} is not evaluated and the result is a
+logical missing value. Otherwise it must return one atomic scalar or one list
+cell; longer or dimensional results are cardinality errors. Hit-set expressions
+operate on observed membership and do not encode clinical ontology.
 \code{combine_channels(expr, by)} accepts exactly one boolean expression string; no
 separate public hit-set helper constructors are required.
 
 For payload output, execution is ordered as combine by, filter by qualified,
-group by, then reduce. The reducer is called once for each final group over its
-non-missing raw values, without an implicit intermediate aggregation. LLM output
-does not accept \code{reduce}.
+group by, then evaluate value. The expression is evaluated once for each final
+group over its aligned raw rows, without implicit missing-value removal or an
+intermediate aggregation. LLM output omits \code{value}.
 
 \code{index_event()} is resolved from its named source before channel execution;
 it is not associated with or inferred from a \code{use_channel()} activation.

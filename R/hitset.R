@@ -33,7 +33,7 @@
 # clinical ontology.
 #
 # This file is the PURE core (parser / grammar / evaluator / overlap), decoupled
-# from the channel/reduce machinery; run_variable.R wraps it to
+# from channel execution and output assembly; run_variable.R wraps it to
 # attach per-channel status + evidence provenance + the Venn/UpSet audit.
 # =============================================================================
 
@@ -101,9 +101,10 @@ hit_set_overlap <- function(wide, channels, value, channel_coverage) {
     parts <- lapply(channels, function(ch) sprintf("%s:%s", ch, state_str(wide[[ch]])))
     pattern <- do.call(paste, c(parts, list(sep = " | ")))
     df <- wide
-    df$pattern <- pattern
-    df$value <- value
-    df$channel_coverage <- channel_coverage
+    for (channel in channels) df[[channel]] <- unname(df[[channel]])
+    df$pattern <- unname(pattern)
+    df$value <- unname(value)
+    df$channel_coverage <- unname(channel_coverage)
     df %>%
         dplyr::group_by(dplyr::across(dplyr::all_of(
             c(channels, "pattern", "value", "channel_coverage")))) %>%

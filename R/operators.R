@@ -2,7 +2,7 @@
 # operators.R -- experimental operators / helpers
 # -----------------------------------------------------------------------------
 # Generic reusable computational pieces used INSIDE a variable_spec or template:
-# windows, reducers, combiners, output types, and extraction methods. These are
+# windows, combiners, output types, and extraction methods. These are
 # operators/helpers, NOT variable templates (a variable template is
 # concept-specific; these are not). Each is a thin tagged record the runner reads
 # by class/kind.
@@ -66,10 +66,10 @@ index_event <- function(source, selector, at = NULL,
                        "ee_index_event")
 }
 
-# --- payload reduction ---------------------------------------------------------
-# Reduction lives on from_channel(), not the activation. It collapses the selected
-# real source column with a plain values -> scalar function; no bespoke operator
-# wraps trivial base reductions or invents tie-breaks.
+# --- payload value -------------------------------------------------------------
+# A deterministic from_channel() value is one data-masked expression evaluated
+# over the aligned prepared-source rows of each final task. It is the equivalent
+# of one dplyr::summarise() expression and must return exactly one cell.
 
 # --- cross-channel combiner ---------------------------------------------------
 # The ONLY cross-channel combine is hit-set algebra. A single channel has no
@@ -115,9 +115,9 @@ combine_channels <- function(expr, by) {
 
 # --- output contract ----------------------------------------------------------
 # Membership is the one output that does not publish a channel payload. Every
-# payload output names its activation alias and, for deterministic channels, the
-# real prepared-source column to publish. Reduction is deliberately an ordinary
-# values -> scalar function supplied by the study author.
+# payload output names its activation alias. Deterministic channels additionally
+# supply one data-masked value expression; an omitted value publishes the complete
+# structured record returned by an LLM activation.
 
 .check_output_group_by <- function(group_by, what) {
     if (!is.character(group_by) || length(group_by) != 1L || is.na(group_by) ||
@@ -136,20 +136,13 @@ DEFAULT_RATIONALE_DESCRIPTION <- paste(
     "Justification br\u00e8ve du choix, fond\u00e9e uniquement sur les extraits",
     "et sans ajouter d'information non document\u00e9e.")
 
-from_channel <- function(channel, column = NULL, filter_by_qualified = NULL,
-                         group_by, reduce = NULL) {
+from_channel <- function(channel, group_by, value = NULL,
+                         filter_by_qualified = NULL) {
+    value <- rlang::enquo(value)
+    if (rlang::quo_is_null(value)) value <- NULL
     if (!is.character(channel) || length(channel) != 1L || is.na(channel) ||
         !nzchar(channel)) {
         stop("from_channel() channel must be one activation alias.", call. = FALSE)
-    }
-    if (!is.null(column) &&
-        (!is.character(column) || length(column) != 1L || is.na(column) ||
-         !nzchar(column))) {
-        stop("from_channel() column must be one prepared-source column name or NULL.",
-             call. = FALSE)
-    }
-    if (!is.null(reduce) && !is.function(reduce)) {
-        stop("from_channel() reduce must be a function or NULL.", call. = FALSE)
     }
     if (!is.null(filter_by_qualified) &&
         (!is.character(filter_by_qualified) ||
@@ -161,8 +154,8 @@ from_channel <- function(channel, column = NULL, filter_by_qualified = NULL,
     }
     group_by <- .check_output_group_by(group_by, "from_channel()")
     .new_spec(
-        list(kind = "from_channel", channel = channel, column = column,
+        list(kind = "from_channel", channel = channel, value = value,
              filter_by_qualified = filter_by_qualified,
-             group_by = group_by, reduce = reduce),
+             group_by = group_by),
         "ee_output_type")
 }

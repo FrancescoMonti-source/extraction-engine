@@ -1415,7 +1415,7 @@ that installation and completes its deterministic path for three stays with the
 LLM disabled. The real Ollama call remains for the owner's interactive check.
 No compatibility shim, commit, or merge is part of this WIP.
 
-## Self-contained combine, output grain, and canonical naming -- implemented (2026-07-19)
+## Self-contained combine, output grain, and canonical naming -- superseded by the data-mask tranche (2026-07-19)
 
 The approved final consolidation replaces the separate
 `combine_channels`/`combine_by` and `output_one_row_per` axes with two complete
@@ -1564,3 +1564,275 @@ test expectations pass; `R CMD build` creates the vignette; built-tarball
 `R CMD check --no-manual` checks and rebuilds it with `Status: OK`; and
 `git diff --check` passes. No runtime API or sentinel test changed. No commit was
 created.
+
+## Approved next-work backlog (2026-07-22)
+
+Status update: the data-mask contract, source-local identity contract, public
+result-envelope review, and focused LLM vignette are complete in the
+implementation sections below. The remaining backlog starts with lazy execution
+of payload-only LLM channels, then the advanced vignette and optional editor
+snippets. Historical API shapes below are retained as a chronological record.
+
+The owner approved two independent contract tranches discovered while exercising
+the onboarding vignette:
+
+1. **One dplyr-style evaluation model.** Stress-test and then implement a
+   coordinated data-masked surface for row/group filters and deterministic
+   output, rather than adding a convenience syntax to `filter_rows` alone. The
+   target authoring shape should make direct expressions, multiple aligned source
+   columns, `case_when()`, weighted summaries, and value-at-latest-date operations
+   natural while still producing one cell per output task. Before coding, fix the
+   zero-row, missing-value, `.data`/`.env`, programmatic-authoring, audit-printing,
+   and size-one rules.
+2. **Source-local element identity.** For biology, `ELTID` and `BIOL_ID` are
+   unique one-to-one identifiers of the same exam. `ELTID` is the engine's generic
+   source-item coordinate; `BIOL_ID` is the native alias and should be preserved
+   when available, not required for execution. Correct the canonical casing to
+   `BIOL_ID`. `ELTID` values cannot join different sources: compiling
+   `combine_channels(..., by = "ELTID")` should accept distinct selectors or
+   activation aliases only when they resolve to the same source identity domain,
+   and reject cross-source combinations.
+
+After those public contracts settle, review the result envelope before teaching
+it more broadly:
+
+- make `results$x$evidence` easy to interpret without redundant identifiers while
+  preserving resolvable source provenance;
+- clarify `results$x$channel_status`, especially the meanings of execution state,
+  candidate availability, hit/signal, and contribution;
+- simplify and document `results$x$audit`, retaining the useful `counts`,
+  `overlap`, and `combine_keys` relations while making the execution manifest,
+  LLM-call table, and internal trace less ambiguous;
+- complete the already deferred lazy execution of payload-only LLM activations,
+  including an explicit skipped-by-gate audit state.
+
+Documentation then proceeds in three layers rather than copying the Desktop demo:
+
+1. enrich and revise `getting-started` against the settled deterministic API and
+   public result envelope;
+2. add a focused LLM vignette covering TypeObject authoring, retrieval scope,
+   rationale/evidence grounding, failures, and audit;
+3. add an advanced vignette for cross-grain qualification, same-source
+   `ELTID` query composition, multi-column deterministic calculations, and other
+   deliberately non-cosmetic combinations.
+
+Authoring ergonomics is a separate, small backlog item: provide tab-stop
+boilerplate snippets for `concept_spec()` and `variable_spec()`. Snippets belong
+to the editor rather than the R runtime, so investigate shipping canonical
+templates with explicit opt-in setup for both Positron/VS Code TextMate snippets
+and RStudio `r.snippets`. Package installation must not silently rewrite a
+user's IDE configuration.
+
+## Data-mask and source-local identity tranche implemented (2026-07-22)
+
+The first backlog item now supersedes the earlier function-formal and
+single-column output surface. `use_channel()` captures `filter_rows` and
+`filter_groups` as data-masked expressions. They see complete aligned source
+columns plus their lexical environment, including `.data`, `.env`, and tidy
+injection. Row filters return one logical per row (`NA` is false); grouped
+filters return one non-missing logical per activation-local group.
+
+The deterministic output contract is now:
+
+```r
+from_channel(
+    channel,
+    group_by,
+    value = <data-masked expression>,
+    filter_by_qualified = NULL
+)
+```
+
+`column` and `reduce` were removed without compatibility shims. `value` is
+evaluated once on each final task's complete, row-aligned payload and may use
+several prepared-source columns. It owns missing-value handling and must produce
+one atomic scalar or one list cell. With no payload rows the engine does not
+evaluate author code and publishes logical `NA`. An LLM output omits `value` and
+continues to publish its whole structured response record. `audit$counts` now
+labels `output_input` in `source_row` units.
+
+The biology source retains `source_result_id = "BIOL_ID"` with canonical casing,
+but requires only the generic execution fields including `ELTID`; `BIOL_ID` is
+preserved when supplied and is not mandatory. Because `ELTID` is source-local,
+resolution rejects `combine_channels(..., by = "ELTID")` across source identity
+domains. It also rejects applying qualified `ELTID` keys to a payload from a
+different source; projecting qualification first to `EVTID` or `PATID` remains
+valid.
+
+The three sentinel tests were migrated in place, without adding a fourth
+`test_that()`. They cover direct expressions, `.data`/`.env`, multi-column
+weighted and latest-row calculations, `case_when()`, empty/cardinality behavior,
+optional native biology identity, same-source document composition, and both
+cross-source `ELTID` failure modes. README, DESIGN, Rd, and the onboarding
+vignette use the same contract. `testthat::test_local(".")` under R 4.6.1 passes
+all 33 expectations; its five warnings are the already-known Ellmer 0.5
+deprecation of `.additional_properties`. R 4.5.2 plus the Positron Pandoc builds
+the vignette and source tarball, and `R CMD check --no-manual` on that tarball
+finishes with `Status: OK`. The R 4.6.1 library does not currently contain
+`knitr`, so it was not used as the vignette builder. `git diff --check` passes
+with only the checkout's LF-to-CRLF notices. The verified tarball was installed
+into the local R 4.6 library; an installed-package smoke confirms the new
+formals, direct data-mask execution without `BIOL_ID`, and the packaged vignette.
+No commit was created.
+
+## Public result-envelope contract consolidated (2026-07-22)
+
+The result-envelope review replaces the overlapping public channel state fields
+with two explicit axes. `channel_status` keeps the output keys, canonical
+variable, activation alias, and logical source. `selection_status` is exactly
+`matched`, `no_match`, or `unavailable`. `processing_status` is `not_required`
+for non-LLM channels; for `lucene_llm` it is exactly `completed`, `not_called`,
+`invalid`, or `failed`. These values describe mechanical execution and do not
+encode a clinical interpretation.
+
+Public evidence now declares why each row is present through `evidence_kind`:
+`source_row`, `lucene_hit`, or `llm_citation`. `evidence_ref` is an opaque,
+non-missing coordinate local to the executed run and source snapshot, not a
+globally durable warehouse identifier. Native source identity remains visible,
+including `source_EVTID`; it remains distinct from a target `EVTID` even when the
+values coincide. Private `source_row_id` and `hit_ref` coordinates remain under
+`audit$internal`.
+
+`audit$counts` uses one stage vocabulary across executors: `pre_selector`,
+`window`, `selector`, `filtered_selector`, `model_input`, and `output_input`.
+These stages count associated rows, window survivors, selector matches,
+post-activation-filter matches, model snippets, and terminal value-input rows,
+respectively. README, DESIGN, the reference manual, and the onboarding vignette
+describe this same public contract. Lazy execution of payload-only LLM channels
+remains the separate deferred tranche recorded above.
+
+`audit$llm_calls` now has a stable empty schema, drops the duplicated
+`definition`, and names its independent facts `call_status`, `response_status`,
+`task_validity`, and `transport_attempts`. `audit$overlap` no longer carries
+accidental `names` attributes on its public columns.
+
+## Documentation, vignette, and Desktop demo realigned (2026-07-22)
+
+The current README, DESIGN, and Rd reference already use the data-mask/value
+surface and the consolidated result envelope. The onboarding vignette now uses
+the same count-stage units for structured rows, searchable documents, and
+snippets. Earlier `column`/`reduce` material in this handoff is explicitly marked
+as historical rather than silently rewritten.
+
+The canonical `C:\Users\franc\Desktop\demo extractionengine.R` now uses direct
+data-masked `filter_rows`/`filter_groups` expressions and
+`from_channel(channel, group_by, value, filter_by_qualified)`. Its comments refer
+to the terminal value expression rather than a reducer, its embedded checks cover
+the public status, evidence, count-stage, and LLM-call schemas, and the Ollama
+path is opt-in through `options(extractionengine.demo_llm = TRUE)`.
+
+The deterministic demo completes eight variables for three stays under R 4.6.1.
+The three sentinel tests pass all 44 expectations; the five warnings remain the
+known Ellmer `.additional_properties` deprecation. The source tarball rebuilds
+the vignette and `R CMD check --no-manual` ends with `Status: OK`. The tarball is
+installed in the local R 4.6 library and its packaged vignette was verified.
+No commit was created.
+
+## Focused LLM vignette implemented (2026-07-22)
+
+`vignettes/structured-text-with-llm.Rmd` is now the package onboarding path for
+structured text extraction. It uses a synthetic medication-allergy question,
+first validates the Lucene boundary with a deterministic `method = "lucene"`
+run, then teaches native Ellmer TypeObject authoring, `search_within`, activation-
+local model configuration, whole-record `from_channel()` publication, rationale,
+dynamic evidence grounding, status axes, and the public LLM audit tables.
+
+The vignette does not copy the Desktop tabagisme workflow, expose pre-retrieved
+fixtures or mocks, put an LLM inside a combine, or teach `audit$internal`. Corpus,
+retrieval, schema, and specification chunks execute during the build. The real
+Ollama call and result-reading chunks are deliberately non-evaluated, so package
+builds remain deterministic and network/model independent. README and the end of
+`getting-started` link to the new vignette; both vignettes share the existing
+light/dark CSS.
+
+Verification: source-backed rendering succeeds; the three sentinel tests pass
+44 expectations with only the five known Ellmer 0.5 `.additional_properties`
+warnings; `R CMD build` includes both vignettes; built-tarball
+`R CMD check --no-manual` finishes with `Status: OK`. The verified tarball is
+installed in the local R 4.6 library, where `tools::pkgVignettes()` lists
+`getting-started` and `structured-text-with-llm` and the new HTML file is present.
+No real model call, commit, or merge was performed.
+
+## Question-first audit design spike -- proposed, not implemented (2026-07-23)
+
+The current result envelope was exercised on three concrete workflows before
+renaming or extending it:
+
+1. one lab activation reduced at `EVTID`;
+2. a combine evaluated at `EVTID`, with payload and output at `PATID`;
+3. Lucene retrieval followed by one structured LLM record at `EVTID`.
+
+The exercise confirms that counts are useful summaries, but cannot be the
+primary truth for all audit questions. Two patients can have identical per-channel
+counts while the signals coexist in the same stay for one patient and in
+different stays for the other. Likewise, the same qualifying relation can feed
+different payload rows under `filter_by_qualified = "EVTID"` and `"PATID"`.
+For LLM extraction, equal prompt counts do not prove that the same snippets, in
+the same order, were shown or cited.
+
+The proposed model therefore separates five relations or records:
+
+| Proposed view | Grain | Question answered |
+|---|---|---|
+| `activation_counts` | output task x activation x step x unit | How many source items survived each activation boundary? |
+| `combine_evaluation` | output task x declared combine key | Which channel memberships coexisted, and did that key qualify? |
+| `source_usage` | output task x activation x source occurrence x context | Which concrete source items were selected and how were they used? |
+| `llm_calls` | one row per real invocation | What happened at transport, structured-response, and grounding boundaries? |
+| `execution_manifest` | one record per variable execution | Which resolved definition and configuration were executed? |
+
+`values` remains the ordinary published result and is not an audit relation.
+`channel_status`, coverage summaries, `overlap`, and a reader-facing `evidence`
+table remain useful, but should be derivable conveniences rather than competing
+sources of truth.
+
+`activation_counts` should retain an explicit `unit`, because text retrieval
+changes from documents to snippets. Its steps should use observable boundaries,
+for example `source_input`, `after_window`, `after_selector`, `after_filters`,
+`model_input`, and `value_input`. A zero count means that a completed step
+produced an empty relation; an unexecuted or failed step must not be encoded as
+zero. This view is a census, not a row-level trace.
+
+`combine_evaluation` is the clearer long-term meaning of the current
+`combine_keys`. It must retain the per-channel membership vector and the final
+decision at `combine$by`; payload-only activations do not belong in that vector.
+The desired relation includes the complete evaluable combine-key universe, not
+only keys with at least one observed hit, so that an absent row cannot ambiguously
+mean all-false, unavailable, failed, or outside the universe. This matters in
+particular for negation and is not yet how the fine-to-coarse executor behaves.
+
+`source_usage` makes row identity and execution role inspectable without calling
+every selected row evidence. Its minimum roles are:
+
+- selected by the activation;
+- used to construct a channel membership for the combine;
+- passed to the terminal deterministic value expression;
+- sent to the LLM, with prompt position;
+- cited by the accepted LLM response.
+
+The same occurrence may have several roles. The activation alias is part of the
+key, so reuse of one source row through two aliases is intentional rather than a
+duplicate. A reader-facing `evidence` view can then select occurrences used by
+the combine or value, plus grounded LLM citations. Uncited prompt snippets remain
+auditable in `source_usage` without being mislabeled as evidence.
+
+Applied to the observed workflows:
+
+- lab to `EVTID`: selected rows, value-input rows, and evidence happen to
+  coincide, but no combine relation exists;
+- combine `EVTID` to output `PATID`: gate rows explain channel membership,
+  `combine_evaluation` preserves stay-level coexistence, and payload rows explain
+  the patient value; these are different relations;
+- Lucene plus LLM: cited evidence is a subset of ordered model input, which is a
+  subset of selected hits. A successful transport can still yield an invalid
+  structured or ungrounded result.
+
+Two implementation decisions remain deliberately open:
+
+1. whether `source_usage` stores one row with role flags or one row per
+   occurrence-role relation;
+2. whether bounded/deduplicated prompt items always point to one selected source
+   occurrence, or require a separate many-to-many prompt-item relation.
+
+No runtime, public API, documentation surface, or sentinel test was changed by
+this spike. The next step is owner review of these boundaries, followed by one
+small vertical implementation slice rather than a wholesale audit rewrite.

@@ -286,6 +286,17 @@
     keys <- tasks %>% select(all_of(task_columns)) %>% distinct()
     eligibility <- src$docs_index %>%
         inner_join(keys, by = join_keys, relationship = "many-to-many")
+    corpus_ids <- as.character(src$corpus$get_meta("doc_id"))
+    count_searchable <- function(rows, column) {
+        counts <- rows %>%
+            filter(as.character(ELTID) %in% corpus_ids) %>%
+            group_by(task_id) %>%
+            summarise(n = n_distinct(ELTID), .groups = "drop")
+        names(counts)[names(counts) == "n"] <- column
+        counts
+    }
+    pre_selector_counts <- count_searchable(
+        eligibility, "n_pre_selector_documents")
     if (!is.null(channel_def$window)) {
         if (!inherits(channel_def$window, "ee_window")) {
             stop("Real retrieval requires a compiled relative window.",
@@ -296,8 +307,18 @@
             filter(RECDATE >= anchor_date + w[["from_days"]],
                    RECDATE <= anchor_date + w[["to_days"]])
     }
+    window_counts <- if (!is.null(channel_def$window)) {
+        count_searchable(eligibility, "n_window_documents")
+    } else NULL
     eligibility <- .text_eligibility_cols(eligibility)
-    retrieve(src$corpus, tasks, eligibility, query = selector$query)
+    result <- retrieve(src$corpus, tasks, eligibility, query = selector$query)
+    result$coverage <- result$coverage %>%
+        left_join(pre_selector_counts, by = "task_id")
+    if (!is.null(window_counts)) {
+        result$coverage <- result$coverage %>%
+            left_join(window_counts, by = "task_id")
+    }
+    result
 }
 
 # Deterministic text presence: a Lucene match is the measured signal. No prompt,
@@ -325,10 +346,22 @@
                                     filter_groups, channel_name) {
     task_ids <- as.character(text_inputs$coverage$task_id)
     candidates <- text_inputs$candidates
-    counts <- list(.audit_stage(
+    counts <- list()
+    if ("n_pre_selector_documents" %in% names(text_inputs$coverage)) {
+        counts[[length(counts) + 1L]] <- .audit_stage(
+            task_ids, channel_name, "pre_selector", "document",
+            .audit_coverage_count(
+                text_inputs, task_ids, "n_pre_selector_documents"))
+    }
+    if ("n_window_documents" %in% names(text_inputs$coverage)) {
+        counts[[length(counts) + 1L]] <- .audit_stage(
+            task_ids, channel_name, "window", "document",
+            .audit_coverage_count(text_inputs, task_ids, "n_window_documents"))
+    }
+    counts[[length(counts) + 1L]] <- .audit_stage(
         task_ids, channel_name, "selector", "snippet",
-        .count_task_rows(candidates, task_ids)))
-    if (is.function(filter_rows)) {
+        .count_task_rows(candidates, task_ids))
+    if (!is.null(filter_rows)) {
         if (nrow(candidates)) {
             keep <- logical(nrow(candidates))
             groups <- split(seq_len(nrow(candidates)),
@@ -340,11 +373,8 @@
             }
             candidates <- candidates[keep, , drop = FALSE]
         }
-        counts[[length(counts) + 1L]] <- .audit_stage(
-            task_ids, channel_name, "filter_rows", "snippet",
-            .count_task_rows(candidates, task_ids))
     }
-    if (is.function(filter_groups)) {
+    if (!is.null(filter_groups)) {
         if (nrow(candidates)) {
             candidates$is_target <- TRUE
             candidates <- .apply_group_predicate(
@@ -353,8 +383,10 @@
             candidates$is_target <- NULL
             candidates$group_demoted <- NULL
         }
+    }
+    if (!is.null(filter_rows) || !is.null(filter_groups)) {
         counts[[length(counts) + 1L]] <- .audit_stage(
-            task_ids, channel_name, "filter_groups", "snippet",
+            task_ids, channel_name, "filtered_selector", "snippet",
             .count_task_rows(candidates, task_ids))
     }
     text_inputs$candidates <- candidates
@@ -759,29 +791,6 @@
              call. = FALSE))
 }
 
-# Raw per-channel state for one task, BEFORE the {complete/unavailable/invalid/
-# error} collapse -- so the source-contribution view can show WHY a channel was
-# silent (no_candidate vs no rows for the subject vs no source), not just "silent".
-.channel_raw_state <- function(channel_results, ch, tid) {
-    cov <- channel_results[[ch]]$coverage
-    s <- cov$processing_state[as.character(cov$task_id) == tid]
-    if (length(s)) as.character(s[[1]]) else NA_character_
-}
-
-# How a channel contributed to the OR result, derived from its collapsed status +
-# hit. The engine does NOT estimate certainty; it just exposes the contribution so
-# the researcher can see e.g. a `1` that came only from the code channel while the
-# text channel was silent.
-.contribution_class <- function(status, hit) {
-    dplyr::case_when(
-        hit %in% TRUE        ~ "signal",     # this channel carried a positive
-        status == "complete" ~ "negative",   # ascertained, no signal
-        status == "unavailable" ~ "silent",  # nothing to ascertain (see processing_state)
-        status == "invalid"  ~ "invalid",
-        status == "error"    ~ "error",
-        TRUE                 ~ "unknown")
-}
-
 .no_candidate_status <- function(channel_name, variable) {
     channel <- .channel_def(variable, channel_name)
     if (identical(channel$type, "text") &&
@@ -792,13 +801,72 @@
     }
 }
 
+# Public channel status separates two stages instead of publishing several
+# overlapping recodings of one executor state. Selection describes whether the
+# activation produced rows after selector + activation filters. Processing is the
+# optional post-selection step; today that is structured LLM extraction only.
+.task_candidate_count <- function(result, task_id) {
+    candidates <- result$candidates
+    if (!is.data.frame(candidates) || !"task_id" %in% names(candidates)) {
+        return(0L)
+    }
+    sum(as.character(candidates$task_id) == as.character(task_id))
+}
+
+.selection_status_for_task <- function(result, task_id) {
+    state <- .state_for_task(result, task_id)
+    if (state %in% c("no_eligible_source", "no_eligible_document")) {
+        return("unavailable")
+    }
+    if (.task_candidate_count(result, task_id) > 0L) "matched" else "no_match"
+}
+
+.processing_status_for_task <- function(variable, channel_name, result, task_id) {
+    channel <- .channel_def(variable, channel_name)
+    if (!identical(channel$type, "text") ||
+        !identical(channel$method, "lucene_llm")) {
+        return("not_required")
+    }
+    switch(
+        .state_for_task(result, task_id),
+        valid = "completed",
+        invalid = "invalid",
+        model_error = ,
+        processing_error = "failed",
+        no_candidate = ,
+        no_eligible_source = ,
+        no_eligible_document = ,
+        not_called = "not_called",
+        "not_called")
+}
+
+.channel_status_row <- function(variable, channel_name, result, task_id) {
+    variable_name <- variable$name
+    source_name <- .source_name_for_channel(channel_name, variable)
+    selection_status <- .selection_status_for_task(result, task_id)
+    processing_status <- .processing_status_for_task(
+        variable, channel_name, result, task_id)
+    tibble::tibble(
+        task_id = as.character(task_id),
+        variable = variable_name,
+        channel = channel_name,
+        source = source_name,
+        selection_status = selection_status,
+        processing_status = processing_status)
+}
+
+.evidence_kind_for_channel <- function(variable, channel_name) {
+    channel <- .channel_def(variable, channel_name)
+    if (!identical(channel$type, "text")) return("source_row")
+    if (identical(channel$method, "lucene_llm")) "llm_citation" else "lucene_hit"
+}
+
 # Single-channel binary membership (combine = NULL + binary output): the value IS
 # the channel's observed hit, as OBSERVED set algebra -- a task is a member iff
 # hit == TRUE, so both FALSE and NA give 0 and the value is always 0/1 (a degenerate
 # one-set hit-algebra; the open-world uncertainty rides on channel_coverage, never on
-# the value). The per-channel channel_status keeps the RAW processing_state, the raw
-# TRUE/FALSE/NA hit, and a contribution class so a `0` from an unavailable channel is
-# distinguishable from an ascertained negative.
+# the value). Public channel_status reports selection and post-selection processing;
+# membership itself is published by values and, for combines, combine_keys/overlap.
 .single_membership_variable <- function(variable, tasks, channel_name, result) {
     var_name <- variable$name
     source_name <- .source_name_for_channel(channel_name, variable)
@@ -807,11 +875,6 @@
     no_candidate <- .no_candidate_status(channel_name, variable)
     task_ids <- as.character(tasks$task_id)
     reduced <- .reduce_channel_result(result, task_ids, id_col, no_candidate)
-
-    raw_state <- function(tid) {
-        s <- result$coverage$processing_state[as.character(result$coverage$task_id) == tid]
-        if (length(s)) as.character(s[[1]]) else NA_character_
-    }
 
     values_l <- list(); status_l <- list()
     for (tid in task_ids) {
@@ -826,25 +889,22 @@
         values_l[[length(values_l) + 1L]] <- tibble::tibble(
             task_id = tid, variable = var_name,
             value = as.integer(observed), channel_coverage = coverage)
-        status_l[[length(status_l) + 1L]] <- tibble::tibble(
-            task_id = tid, variable = var_name, channel = channel_name,
-            source = source_name, status = r$status, hit = r$hit,
-            processing_state = raw_state(tid),
-            contribution = .contribution_class(r$status, r$hit),
-            error = NA_character_)
+        status_l[[length(status_l) + 1L]] <- .channel_status_row(
+            variable, channel_name, result, tid)
     }
     list(
         values = bind_rows(values_l),
         channel_status = bind_rows(status_l),
         evidence = .public_evidence(
-            result, var_name, channel_name, source_name, task_ids))
+            result, var_name, channel_name, source_name, task_ids,
+            .evidence_kind_for_channel(variable, channel_name)))
 }
 
 # --- from_channel() assembly ---------------------------------------------------
-# Deterministic activations expose selected prepared-source rows. The output names
-# the physical column it reads; no hidden `value` alias or result-lane inference is
-# allowed. LLM activations instead expose their authored TypeObject fields as one
-# wide row per task.
+# Deterministic activations expose selected prepared-source rows. The output value
+# expression sees those complete, row-aligned rows in a tidy data mask. LLM
+# activations instead expose their authored TypeObject fields as one wide row per
+# task.
 .candidate_rows <- function(result, channel_name) {
     rows <- result$candidates
     if (!is.data.frame(rows)) {
@@ -858,15 +918,6 @@
     rows
 }
 
-.value_is_present <- function(x) {
-    if (is.list(x) && !inherits(x, "POSIXlt")) {
-        return(!vapply(x, function(value) {
-            is.null(value) || !length(value) || all(is.na(value))
-        }, logical(1)))
-    }
-    !is.na(x)
-}
-
 .typed_na <- function(prototype) {
     if (is.list(prototype) && !inherits(prototype, "POSIXlt")) return(list(NULL))
     prototype[NA_integer_]
@@ -877,46 +928,34 @@
     tibble::as_tibble(columns)
 }
 
-.deterministic_payload <- function(result, output, channel_name) {
+.deterministic_payload <- function(result, channel_name) {
     rows <- .candidate_rows(result, channel_name)
-    if (!output$column %in% names(rows)) {
-        stop("from_channel() column '", output$column,
-             "' is unavailable on activation '", channel_name,
-             "'. Available columns: ", paste(names(rows), collapse = ", "), ".",
-             call. = FALSE)
-    }
-    if (".ee_payload_value" %in% names(rows)) {
-        stop("Prepared-source column '.ee_payload_value' is reserved internally.",
-             call. = FALSE)
-    }
     payload <- tibble::as_tibble(rows)
     payload$task_id <- as.character(payload$task_id)
-    payload$.ee_payload_value <- rows[[output$column]]
     payload
 }
 
-.reduce_from_channel <- function(values, output, variable_name) {
-    values <- values[.value_is_present(values)]
-    if (is.null(output$reduce)) {
-        if (!length(values)) return(.typed_na(values))
-        if (length(values) > 1L) {
-            stop("from_channel() for '", variable_name,
-                 "' found ", length(values), " non-missing values; supply reduce = ",
-                 "<values-to-scalar function> or narrow the activation.",
-                 call. = FALSE)
-        }
-        if (is.list(values) && !inherits(values, "POSIXlt")) {
-            return(values[1])
-        }
-        return(values[[1]])
-    }
-    reduced <- output$reduce(values)
-    if (length(reduced) != 1L || !is.null(dim(reduced))) {
-        stop("from_channel() reduce for '", variable_name,
-             "' must return exactly one scalar; got length ", length(reduced), ".",
+.eval_from_channel_value <- function(rows, output, variable_name, channel_name) {
+    # Do not evaluate author code for an absent task. A logical NA is the only
+    # stable prototype available without either running the expression on an
+    # artificial zero-row mask or requiring a separately declared output type.
+    if (!nrow(rows)) return(NA)
+    value <- tryCatch(
+        rlang::eval_tidy(output$value, data = rows),
+        error = function(cnd) {
+            stop("from_channel() value for '", variable_name, "' on channel '",
+                 channel_name, "' could not be evaluated against payload columns ",
+                 paste(names(rows), collapse = ", "), ": ",
+                 conditionMessage(cnd), call. = FALSE)
+        })
+    if (length(value) != 1L || !is.null(dim(value))) {
+        stop("from_channel() value for '", variable_name,
+             "' must return exactly one scalar or one list cell per ",
+             output$group_by, " task; got length ", length(value),
+             if (is.null(dim(value))) "." else " with dimensions.",
              call. = FALSE)
     }
-    reduced
+    value
 }
 
 .state_for_task <- function(result, task_id) {
@@ -943,19 +982,21 @@
 }
 
 .public_evidence <- function(result, variable_name, channel_name, source_name,
-                             task_ids = NULL) {
+                             task_ids = NULL, evidence_kind) {
     evidence <- result$evidence
     if (!is.data.frame(evidence) || !nrow(evidence)) {
         return(tibble::tibble(
             task_id = character(), variable = character(), channel = character(),
-            source = character(), evidence_ref = character()))
+            source = character(), evidence_ref = character(),
+            evidence_kind = character()))
     }
     if (!is.null(task_ids)) {
         evidence <- evidence[as.character(evidence$task_id) %in% task_ids,
                              , drop = FALSE]
     }
     if (!nrow(evidence)) return(.public_evidence(
-        list(evidence = evidence), variable_name, channel_name, source_name))
+        list(evidence = evidence), variable_name, channel_name, source_name,
+        evidence_kind = evidence_kind))
     if ("field" %in% names(evidence)) evidence$field <- NULL
     refs <- rep(NA_character_, nrow(evidence))
     for (column in c("evidence_ref", "hit_ref", "source_row_id")) {
@@ -975,19 +1016,22 @@
     evidence$variable <- variable_name
     evidence$channel <- channel_name
     evidence$source <- source_name
-    front <- c("task_id", "variable", "channel", "source", "evidence_ref")
+    evidence$evidence_kind <- evidence_kind
+    front <- c("task_id", "variable", "channel", "source", "evidence_ref",
+               "evidence_kind")
     evidence[c(front, setdiff(names(evidence), front))]
 }
 
 .single_from_channel_variable <- function(variable, tasks, channel_name, result) {
     output <- variable$output
-    payload <- .deterministic_payload(result, output, channel_name)
+    payload <- .deterministic_payload(result, channel_name)
     source_name <- .source_name_for_channel(channel_name, variable)
     task_ids <- as.character(tasks$task_id)
     rows <- lapply(task_ids, function(task_id) {
-        values <- payload$.ee_payload_value[payload$task_id == task_id]
-        n_values <- sum(.value_is_present(values))
-        value <- .reduce_from_channel(values, output, variable$name)
+        task_rows <- payload[payload$task_id == task_id, , drop = FALSE]
+        n_values <- nrow(task_rows)
+        value <- .eval_from_channel_value(
+            task_rows, output, variable$name, channel_name)
         state <- .state_for_task(result, task_id)
         status <- .status_from_processing_state(state)
         tibble::tibble(
@@ -998,20 +1042,16 @@
     })
     values <- bind_rows(rows)
     status <- lapply(task_ids, function(task_id) {
-        state <- .state_for_task(result, task_id)
-        n_values <- sum(.value_is_present(
-            payload$.ee_payload_value[payload$task_id == task_id]))
-        tibble::tibble(
-            task_id = task_id, variable = variable$name, channel = channel_name,
-            source = source_name, status = .status_from_processing_state(state),
-            hit = .hit_for_task(result, task_id), processing_state = state,
-            n_payload_rows = as.integer(n_values), error = NA_character_)
+        row <- .channel_status_row(variable, channel_name, result, task_id)
+        row$n_payload_rows <- as.integer(sum(payload$task_id == task_id))
+        row
     })
     list(
         values = values,
         channel_status = bind_rows(status),
         evidence = .public_evidence(
-            result, variable$name, channel_name, source_name, task_ids))
+            result, variable$name, channel_name, source_name, task_ids,
+            .evidence_kind_for_channel(variable, channel_name)))
 }
 
 .filter_payload_by_qualified <- function(variable, output, out, payload) {
@@ -1074,14 +1114,15 @@
     output <- variable$output
     channel_name <- output$channel
     result <- channel_results[[channel_name]]
-    payload <- .deterministic_payload(result, output, channel_name)
+    payload <- .deterministic_payload(result, channel_name)
     payload <- .filter_payload_by_qualified(variable, output, out, payload)
     gate <- out$values
     qualified_task_ids <- as.character(gate$task_id[gate$value %in% 1L])
     payload <- payload[
         as.character(payload$task_id) %in% qualified_task_ids, , drop = FALSE]
 
-    # Public payload evidence follows the same relational gate as the reducer.
+    # Public payload evidence follows the same relational gate as the output
+    # value expression.
     # Other channels retain their complete hit evidence, and the unfiltered
     # payload intermediate remains available under audit$internal.
     payload_keys <- paste(
@@ -1099,10 +1140,11 @@
     n_payload <- integer(nrow(gate))
     for (i in seq_len(nrow(gate))) {
         task_id <- as.character(gate$task_id[[i]])
-        values <- payload$.ee_payload_value[payload$task_id == task_id]
+        task_rows <- payload[payload$task_id == task_id, , drop = FALSE]
         if (identical(gate$value[[i]], 1L)) {
-            n_payload[[i]] <- sum(.value_is_present(values))
-            value_rows[[i]] <- .reduce_from_channel(values, output, variable$name)
+            n_payload[[i]] <- nrow(task_rows)
+            value_rows[[i]] <- .eval_from_channel_value(
+                task_rows, output, variable$name, channel_name)
             payload_status <- .status_from_processing_state(
                 .state_for_task(result, task_id))
             if (payload_status == "error") {
@@ -1112,7 +1154,7 @@
                 gate$channel_coverage[[i]] <- "partial"
             }
         } else {
-            value_rows[[i]] <- .typed_na(payload$.ee_payload_value)
+            value_rows[[i]] <- NA
         }
     }
     gate$value <- bind_rows(lapply(
@@ -1125,16 +1167,14 @@
 .single_llm_from_channel_variable <- function(variable, tasks, channel_name,
                                               result) {
     output <- variable$output
+    if (!is.null(output$value)) {
+        stop("LLM from_channel() output must omit value and publish its complete ",
+             "structured record.", call. = FALSE)
+    }
     prototype <- result$value_prototype
     if (!is.data.frame(prototype)) {
         stop("LLM activation '", channel_name,
              "' did not expose its authored response prototype.", call. = FALSE)
-    }
-    if (!is.null(output$column) && !output$column %in% names(prototype)) {
-        stop("from_channel() column '", output$column,
-             "' is unavailable on LLM activation '", channel_name,
-             "'. Available fields: ", paste(names(prototype), collapse = ", "), ".",
-             call. = FALSE)
     }
     task_ids <- as.character(tasks$task_id)
     authored <- names(prototype)
@@ -1144,9 +1184,6 @@
             as.character(result$values$task_id) == task_id, , drop = FALSE]
         valid <- identical(state, "valid") && nrow(selected) == 1L
         response <- if (valid) selected[authored] else .typed_na_frame(prototype)
-        if (!is.null(output$column)) {
-            response <- tibble::tibble(value = response[[output$column]])
-        }
         citation_warning <- valid && isTRUE(selected$citation_warning[[1]])
         review <- state %in% c("invalid", "model_error", "processing_error")
         bind_cols(
@@ -1165,23 +1202,14 @@
     values <- bind_rows(value_rows)
     source_name <- .source_name_for_channel(channel_name, variable)
     status <- bind_rows(lapply(task_ids, function(task_id) {
-        state <- .state_for_task(result, task_id)
-        selected <- result$values[
-            as.character(result$values$task_id) == task_id, , drop = FALSE]
-        tibble::tibble(
-            task_id = task_id, variable = variable$name, channel = channel_name,
-            source = source_name, status = .status_from_processing_state(state),
-            hit = if (identical(state, "valid")) TRUE else NA,
-            processing_state = state,
-            citation_warning = nrow(selected) == 1L &&
-                isTRUE(selected$citation_warning[[1]]),
-            needs_review = state %in% c("invalid", "model_error", "processing_error"))
+        .channel_status_row(variable, channel_name, result, task_id)
     }))
     list(
         values = values,
         channel_status = status,
         evidence = .public_evidence(
-            result, variable$name, channel_name, source_name, task_ids))
+            result, variable$name, channel_name, source_name, task_ids,
+            .evidence_kind_for_channel(variable, channel_name)))
 }
 
 .apply_gated_llm_from_channel <- function(variable, out, tasks, channel_results) {
@@ -1227,8 +1255,7 @@
 # included/excluded is a presentation recoding of value, not an engine field, and
 # expression polarity is derived internally, never a public per-channel column.
 #   values        per task: value (1/0), channel_coverage (complete/partial/failed).
-#   channel_status per task x channel: status, hit (TRUE/FALSE/NA), processing_state,
-#                 contribution.
+#   channel_status per task x channel: selection_status + processing_status.
 #   evidence      per hit ref.
 #   overlap       UpSet-style summary: one row per membership pattern (TRUE/FALSE/NA
 #                 preserved) across the expression channels, with count, value,
@@ -1381,17 +1408,13 @@
     for (ch in declared) {
         src <- .source_name_for_channel(ch, variable)
         for (tid in task_ids) {
-            r <- reduced[[ch]][[tid]]
-            status_l[[length(status_l) + 1L]] <- tibble::tibble(
-                task_id = tid, variable = var_name, channel = ch, source = src,
-                status = r$status, hit = r$hit,
-                processing_state = .channel_raw_state(channel_results, ch, tid),
-                contribution = .contribution_class(r$status, r$hit),
-                error = NA_character_)
+            status_l[[length(status_l) + 1L]] <- .channel_status_row(
+                variable, ch, channel_results[[ch]], tid)
         }
         evidence_l[[ch]] <- .public_evidence(
             channel_results[[ch]], var_name, ch, src,
-            task_ids[audit_vectors[[ch]] %in% TRUE])
+            task_ids[audit_vectors[[ch]] %in% TRUE],
+            .evidence_kind_for_channel(variable, ch))
     }
     channel_status <- bind_rows(status_l)
 
@@ -1406,7 +1429,7 @@
         evidence = if (length(evidence_l)) bind_rows(evidence_l) else
             tibble::tibble(task_id = character(), variable = character(),
                            channel = character(), source = character(),
-                           evidence_ref = character()),
+                           evidence_ref = character(), evidence_kind = character()),
         overlap = overlap)
     # Relation audit: one row per evaluated combine key, attached to its output
     # task when projection or broadcast is required.
@@ -1435,7 +1458,7 @@
         counts[[length(counts) + 1L]] <- result$audit_counts
     } else if (channel$type %in% c("code", "act", "lab", "doc")) {
         counts[[length(counts) + 1L]] <- .audit_stage(
-            task_ids, channel_name, "task_join", "source_row",
+            task_ids, channel_name, "pre_selector", "source_row",
             .audit_coverage_count(result, task_ids, "n_source_rows"))
         if (inherits(channel$window, "ee_window")) {
             counts[[length(counts) + 1L]] <- .audit_stage(
@@ -1449,15 +1472,9 @@
         counts[[length(counts) + 1L]] <- .audit_stage(
             task_ids, channel_name, "selector", "source_row",
             .count_task_rows(observations, task_ids, selector_keep))
-        if (is.function(channel$filter_rows)) {
-            after_rows <- observations$is_target | observations$group_demoted
+        if (!is.null(channel$filter_rows) || !is.null(channel$filter_groups)) {
             counts[[length(counts) + 1L]] <- .audit_stage(
-                task_ids, channel_name, "filter_rows", "source_row",
-                .count_task_rows(observations, task_ids, after_rows))
-        }
-        if (is.function(channel$filter_groups)) {
-            counts[[length(counts) + 1L]] <- .audit_stage(
-                task_ids, channel_name, "filter_groups", "source_row",
+                task_ids, channel_name, "filtered_selector", "source_row",
                 .count_task_rows(observations, task_ids,
                                  observations$is_target))
         }
@@ -1484,7 +1501,7 @@
         n[is.na(n)] <- 0L
         counts[[length(counts) + 1L]] <- .audit_stage(
             task_ids, variable$output$channel, "output_input",
-            "non_missing_value", n)
+            "source_row", n)
     }
     result <- dplyr::bind_rows(counts)
     if (!nrow(result)) {
@@ -1495,20 +1512,33 @@
     result
 }
 
+.empty_audit_llm_calls <- function() {
+    tibble::tibble(
+        task_id = character(), channel = character(), provider = character(),
+        model = character(), temperature = double(), seed = integer(),
+        max_tokens = double(), params = list(), call_status = character(),
+        response_status = character(), transport_attempts = integer(),
+        started_at = as.POSIXct(character()), latency_ms = double(),
+        prompt_hash = character(), schema_hash = character(),
+        query_hash = character(), task_validity = character(), error = character(),
+        output_tokens = double(), inferred_finish_reason = character(),
+        partial_response = character(), raw_response = list())
+}
+
 .build_audit_llm_calls <- function(channel_results) {
     calls <- lapply(names(channel_results), function(channel_name) {
         frame <- channel_results[[channel_name]]$attempts
-        if (!is.data.frame(frame)) return(NULL)
-        if (!"task_id" %in% names(frame)) frame$task_id <- character()
+        if (!is.data.frame(frame) || !nrow(frame)) return(NULL)
+        frame$definition <- NULL
+        names(frame)[names(frame) == "attempt_status"] <- "call_status"
+        names(frame)[names(frame) == "processing_status"] <- "response_status"
+        names(frame)[names(frame) == "n_tries"] <- "transport_attempts"
         frame$channel <- channel_name
         frame[c("task_id", "channel",
                 setdiff(names(frame), c("task_id", "channel")))]
     })
     result <- dplyr::bind_rows(calls)
-    if (!nrow(result) && !all(c("task_id", "channel") %in% names(result))) {
-        result <- tibble::tibble(task_id = character(), channel = character())
-    }
-    result
+    if (!nrow(result)) .empty_audit_llm_calls() else result
 }
 
 .build_channel_intermediates <- function(channel_results) {
@@ -1554,7 +1584,8 @@
                         (if (anchor$source %in% names(EE_SOURCES)) {
                             EE_SOURCES[[anchor$source]]$source_time_start
                         } else NULL),
-                    # The executed multi-match rule, serializable (like reduce).
+                    # The executed multi-match rule, serialized like authored
+                    # data-masked expressions.
                     select_event = if (is.function(anchor$select_event)) {
                         paste(deparse(anchor$select_event), collapse = " ")
                     } else NULL))
@@ -1581,8 +1612,8 @@
             original_selector = .manifest_selector(ch$original_selector),
             effective_selector = .manifest_selector(ch$selector),
             selector_source = ch$selector_source,
-            filter_rows = if (is.function(ch$filter_rows)) {
-                paste(deparse(ch$filter_rows), collapse = " ")
+            filter_rows = if (!is.null(ch$filter_rows)) {
+                .one_line(ch$filter_rows)
             } else NULL,
             window = if (inherits(ch$window, "ee_window")) {
                 list(from_days = ch$window$from_days,
@@ -1604,21 +1635,20 @@
             rationale = ch$rationale,
             max_candidates = ch$max_candidates,
             group_by = ch$group_by,
-            filter_groups = if (is.function(ch$filter_groups)) {
-                paste(deparse(ch$filter_groups), collapse = " ")
+            filter_groups = if (!is.null(ch$filter_groups)) {
+                .one_line(ch$filter_groups)
             } else NULL)
     })
     output <- if (is.null(variable$output)) NULL else {
         out <- list(kind = variable$output$kind)
         if (!is.null(variable$output$channel)) out$channel <- variable$output$channel
-        if (!is.null(variable$output$column)) out$column <- variable$output$column
+        if (!is.null(variable$output$value)) {
+            out$value <- .one_line(variable$output$value)
+        }
         if (!is.null(variable$output$filter_by_qualified)) {
             out$filter_by_qualified <- variable$output$filter_by_qualified
         }
         out$group_by <- variable$output$group_by
-        if (is.function(variable$output$reduce)) {
-            out$reduce <- paste(deparse(variable$output$reduce), collapse = " ")
-        }
         out
     }
     combine <- if (inherits(variable$combine, "ee_combiner") &&
@@ -1641,10 +1671,10 @@ print.ee_execution_manifest <- function(x, ...) {
     output <- x$output
     output_label <- output$kind %||% "none"
     if (identical(output$kind, "from_channel")) {
-        payload <- if (is.null(output$column)) {
+        payload <- if (is.null(output$value)) {
             paste0(output$channel, " (all structured fields)")
         } else {
-            paste0(output$channel, "$", output$column)
+            paste0(output$channel, " using ", output$value)
         }
         output_label <- paste0(output$kind, " from ", payload)
     }
@@ -1669,7 +1699,6 @@ print.ee_execution_manifest <- function(x, ...) {
         cat("  filter by qualified: ", output$filter_by_qualified, "\n", sep = "")
     }
     cat("  group by: ", output$group_by, "\n", sep = "")
-    if (!is.null(output$reduce)) cat("  reduce: configured\n")
 
     cat("\nChannels:\n")
     for (name in names(x$channels)) {

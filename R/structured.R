@@ -4,8 +4,8 @@
 # Mirrors the text path's four views but: evidence = selected source rows,
 # measurement = a deterministic rule, NO corpus and NO model. NEUTRAL, concept-
 # agnostic executors only: measure_code_presence (code/act membership) and
-# measure_analyte_values (valued rows of an analyte in a window -- reduction is a
-# plain function on the variable's channel activation, applied in assembly); the
+# measure_analyte_values (valued rows of an analyte in a window -- the output
+# expression is evaluated later during assembly); the
 # run_variable() dispatch binds each to its source. Coverage census is kept over ALL
 # tasks, same discipline as the text path. Provenance points at the exact source rows.
 # =============================================================================
@@ -86,23 +86,29 @@
 
 .within_point <- function(t, lo, hi) !is.na(t) & t >= lo & t <= hi
 
-# Subject-context row predicate (DESIGN §8): the closure's FORMALS name actual
-# prepared-source columns -- same explicit-column convention as index_event(at =)
-# -- and it returns one logical per row. An NA result is not a hit.
-# A formal naming a column the source did not carry, or a result of the wrong
-# shape/type, is a hard error (a predicate breaking its contract is a bug -- the
-# same discipline as filter_groups and a payload reduce).
-.eval_row_predicate <- function(rows, filter_rows, field) {
-    args <- names(formals(filter_rows))
-    missing <- setdiff(args, names(rows))
-    if (length(missing)) {
-        stop("filter_rows for channel '", field, "' names column(s) ",
-             paste(missing, collapse = ", "), " that the source does not carry; ",
-             "only columns declared on the source_spec survive normalization, so ",
-             "declare them (role-less is fine) to make them visible to the predicate.",
-             call. = FALSE)
+# Data-masked activation expressions see complete prepared-source columns and the
+# quosure's lexical environment. Evaluation errors are reported at the channel
+# boundary with the available columns so a missing prepared-view column stays a
+# source-contract error rather than an opaque tidy-eval failure.
+.eval_activation_expression <- function(rows, expression, field, what) {
+    if (!rlang::is_quosure(expression)) {
+        stop(what, " for channel '", field,
+             "' is not a captured data-masked expression.", call. = FALSE)
     }
-    res <- do.call(filter_rows, as.list(rows[args]))
+    tryCatch(
+        rlang::eval_tidy(expression, data = rows),
+        error = function(cnd) {
+            stop(what, " for channel '", field,
+                 "' could not be evaluated against prepared-source columns ",
+                 paste(names(rows), collapse = ", "), ": ",
+                 conditionMessage(cnd), call. = FALSE)
+        })
+}
+
+# A row predicate returns one logical per row. An NA result is not a hit.
+.eval_row_predicate <- function(rows, filter_rows, field) {
+    res <- .eval_activation_expression(
+        rows, filter_rows, field, "filter_rows")
     if (!is.logical(res) || length(res) != nrow(rows)) {
         stop("filter_rows for channel '", field, "' must return one logical ",
              "per row (got ", class(res)[1L], " of length ", length(res), " for ",
@@ -130,7 +136,7 @@
     observations
 }
 
-# Aggregate predicate: evaluate a named-column closure on the current target rows,
+# Aggregate predicate: evaluate the data-masked expression on current target rows,
 # separately for every task + declared level. For lab channels these are the rows
 # that survived filter_rows. Failing groups are demoted in-place so observations
 # retain the complete audit trail.
@@ -144,14 +150,6 @@
              call. = FALSE)
     }
 
-    args <- names(formals(filter_groups))
-    missing <- setdiff(args, names(observations))
-    if (length(missing)) {
-        stop("filter_groups for channel '", field,
-             "' names column(s) ", paste(missing, collapse = ", "),
-             " that the prepared source does not carry.", call. = FALSE)
-    }
-
     target_rows <- which(observations$is_target)
     if (!length(target_rows)) return(observations)
     group_key <- paste(observations$task_id[target_rows],
@@ -159,7 +157,8 @@
     groups <- split(target_rows, group_key)
     keep <- vapply(groups, function(idx) {
         rows <- observations[idx, , drop = FALSE]
-        res <- do.call(filter_groups, as.list(rows[args]))
+        res <- .eval_activation_expression(
+            rows, filter_groups, field, "filter_groups")
         if (!is.logical(res) || length(res) != 1L || is.na(res)) {
             stop("filter_groups for channel '", field,
                  "' must return exactly one TRUE/FALSE per task + ",
@@ -256,17 +255,6 @@ measure_code_presence <- function(source_table, tasks, codes,
             ELTID = as.character(ELTID),
             .ee_t_start = .clinical_date(.data[[start_col]]),
             .ee_t_end = .clinical_date(.data[[end_col]]))
-    for (predicate in list(filter_rows = filter_rows,
-                           filter_groups = filter_groups)) {
-        if (is.null(predicate)) next
-        missing <- setdiff(names(formals(predicate)), source_columns)
-        if (length(missing)) {
-            stop("Activation predicate for channel '", field,
-                 "' names column(s) ",
-                 paste(missing, collapse = ", "),
-                 " that the prepared source does not carry.", call. = FALSE)
-        }
-    }
     tkeys <- tasks %>%
         transmute(task_id = as.character(task_id), PATID = as.character(PATID))
     for (k in setdiff(grain_keys, "PATID")) tkeys[[k]] <- as.character(tasks[[k]])
@@ -419,16 +407,6 @@ measure_doc_presence <- function(docs_index, tasks, filters,
         tasks, rows,
         c("source_row_id", "PATID", "EVTID", "ELTID", ".ee_doc_date"),
         "docs index", require_anchor = windowed)
-    for (predicate in list(filter_rows = filter_rows,
-                           filter_groups = filter_groups)) {
-        if (is.null(predicate)) next
-        missing <- setdiff(names(formals(predicate)), source_columns)
-        if (length(missing)) {
-            stop("Activation predicate for channel '", field,
-                 "' names column(s) ", paste(missing, collapse = ", "),
-                 " that the document index does not carry.", call. = FALSE)
-        }
-    }
 
     tkeys <- tasks %>%
         transmute(task_id = as.character(task_id), PATID = as.character(PATID))
@@ -560,8 +538,9 @@ measure_doc_presence <- function(docs_index, tasks, filters,
 # --- generic analyte candidates: selected prepared rows in a point-window -------
 # The lab executor selects rows by the source's analyte role only. NUMRES, STRRES,
 # DATEXAM, identifiers, units, qualifiers and role-less predicate columns remain
-# ordinary prepared-source columns; `from_channel(column =)` chooses the payload
-# downstream. A row may therefore carry either, both, or neither result column.
+# ordinary prepared-source columns; `from_channel(value =)` evaluates its payload
+# expression downstream. A row may therefore carry either, both, or neither result
+# column.
 #
 # filter_rows is evaluated on analyte matches separately for each task after grain and
 # window scoping. filter_groups then sees the surviving rows in each task + group_by
@@ -571,14 +550,14 @@ measure_analyte_values <- function(source_table, tasks, analytes,
                                    grain_keys = "PATID",
                                    from_days = -7L, to_days = 7L,
                                    group_by = NULL, filter_groups = NULL,
-                                   result_id_col = "biol_ID",
+                                   result_id_col = "BIOL_ID",
                                    date_col = "DATEXAM",
                                    analyte_col = "TYPEANA",
                                    field = "analyte", source = "biology") {
     windowed <- !is.null(from_days) && !is.null(to_days)   # NULL window -> event scope
     .validate_structured_inputs(
         tasks, source_table,
-        unique(c("source_row_id", "PATID", "EVTID", "ELTID", result_id_col,
+        unique(c("source_row_id", "PATID", "EVTID", "ELTID",
                  date_col, analyte_col)),
         "biology rows", require_anchor = windowed)
 
@@ -587,24 +566,17 @@ measure_analyte_values <- function(source_table, tasks, analytes,
     # or collapsed into a synthetic `value` lane.
     biol <- tibble::as_tibble(source_table)
     source_columns <- names(biol)
-    for (column in unique(c("source_row_id", "PATID", "EVTID", "ELTID",
-                            result_id_col))) {
+    # The native exam identifier is optional provenance. `source_row_id` is the
+    # execution coordinate for each prepared result row.
+    id_columns <- intersect(
+        unique(c("source_row_id", "PATID", "EVTID", "ELTID", result_id_col)),
+        names(biol))
+    for (column in id_columns) {
         biol[[column]] <- as.character(biol[[column]])
     }
     biol$.ee_point_date <- .clinical_date(biol[[date_col]])
     biol$.ee_analyte <- as.character(biol[[analyte_col]])
 
-    for (predicate in list(filter_rows = filter_rows,
-                           filter_groups = filter_groups)) {
-        if (is.null(predicate)) next
-        missing <- setdiff(names(formals(predicate)), names(biol))
-        if (length(missing)) {
-            stop("Lab activation predicate for '", field, "' names column(s) ",
-                 paste(missing, collapse = ", "), " that the prepared source ",
-                 "does not carry; declare them on source_spec() to preserve them.",
-                 call. = FALSE)
-        }
-    }
 
     # Grain is declared by the variable and carried by the task universe.
     tkeys <- tasks %>%
@@ -703,11 +675,11 @@ measure_analyte_values <- function(source_table, tasks, analytes,
 
     filter_txt <- paste0(
         if (!is.null(filter_rows)) {
-            sprintf("row kept when %s; ", paste(deparse(filter_rows), collapse = " "))
+            sprintf("row kept when %s; ", .one_line(filter_rows))
         } else "",
         if (!is.null(filter_groups)) {
             sprintf("group(%s) kept when %s; ", group_by,
-                    paste(deparse(filter_groups), collapse = " "))
+                    .one_line(filter_groups))
         } else "")
     scope_txt <- paste(grain_keys, collapse = "+")
     window_txt <- if (windowed) {

@@ -1,0 +1,384 @@
+---
+title: "Structured text extraction with an LLM"
+output:
+  rmarkdown::html_vignette:
+    css: extractionengine.css
+vignette: >
+  %\VignetteIndexEntry{Structured text extraction with an LLM}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align = "center"
+)
+options(tibble.width = Inf)
+```
+
+This vignette starts where
+[`vignette("getting-started", package = "extractionengine")`](getting-started.html)
+ends. It assumes that you already know the roles of `concept_spec()`,
+`use_channel()`, and `from_channel()`. Here the new questions are:
+
+- which documents may supply evidence for one output task;
+- which excerpts are sent to the model;
+- how to describe a structured response with `ellmer`;
+- when a response is grounded enough to publish; and
+- how to distinguish retrieval, model processing, evidence, and audit state.
+
+The example is fully synthetic. The model call is deliberately not run while
+the package vignette is built; every step before that call is executable and
+checked offline.
+
+```{r libraries, message = FALSE, warning = FALSE}
+library(extractionengine)
+library(dplyr)
+library(tibble)
+```
+
+## 1. Start with one explicit extraction question
+
+Suppose the study asks:
+
+> For each stay, what medication-allergy status is explicitly documented, and
+> which substance is named?
+
+The wording matters. Silence must not become absence of allergy, and the model
+must justify its record using only excerpts supplied by the engine.
+
+The cohort defines three stay-level output tasks. The document source contains
+one document per stay, but only two documents mention allergy.
+
+```{r document-source, message = FALSE, warning = FALSE}
+cohort <- tribble(
+  ~PATID, ~EVTID,
+  "P1",   "E1",
+  "P2",   "E2",
+  "P3",   "E3"
+)
+
+document_rows <- tribble(
+  ~ELTID, ~RECTXT, ~PATID, ~EVTID, ~RECDATE, ~RECTYPE,
+  "D1",
+  "Allergie medicamenteuse documentee a la penicilline, avec urticaire.",
+  "P1", "E1", "2026-01-04", "CR",
+  "D2",
+  "Le patient nie toute allergie medicamenteuse connue.",
+  "P2", "E2", "2026-02-08", "CR",
+  "D3",
+  "Sortie a domicile avec traitement habituel inchange.",
+  "P3", "E3", "2026-03-12", "CR"
+) |>
+  mutate(RECDATE = as.Date(RECDATE))
+
+documents <- corpustools::create_tcorpus(
+  as.data.frame(document_rows),
+  text_columns = "RECTXT",
+  doc_column = "ELTID",
+  split_sentences = TRUE,
+  remember_spaces = FALSE,
+  verbose = FALSE
+)
+```
+
+A metadata-rich `corpustools::tCorpus` is the canonical public document source.
+`ELTID` identifies a native document inside that source; `PATID`, `EVTID`,
+`RECDATE`, and `RECTYPE` remain available for relational scope and evidence.
+
+## 2. Make retrieval inspectable before adding an LLM
+
+The concept only locates text that may be relevant. A Lucene match is a
+candidate, not the final allergy classification.
+
+```{r text-concept}
+medication_allergy <- concept_spec(
+  name = "medication_allergy",
+  channels = list(
+    allergy_text = text_channel(
+      selector = lucene_query("allerg*")
+    )
+  )
+)
+```
+
+Before paying the cost of a model call, exercise the retrieval boundary with a
+deterministic `method = "lucene"` variable.
+
+```{r retrieval-check, message = FALSE, warning = FALSE}
+allergy_mentions <- variable_spec(
+  name = "allergy_mentions",
+  concept = medication_allergy,
+  channels = list(
+    allergy_text = use_channel(
+      channel = "allergy_text",
+      search_within = "EVTID",
+      method = "lucene"
+    )
+  ),
+  output = bin_output(group_by = "EVTID")
+)
+
+retrieval_run <- run_variable(
+  allergy_mentions,
+  cohort = cohort,
+  sources = list(documents = documents)
+)
+
+retrieval_run$values
+
+retrieval_run$evidence |>
+  select(
+    PATID, EVTID, source_EVTID, evidence_kind,
+    snippet_id, snippet_text
+  )
+```
+
+This answers only: *did the query retain at least one excerpt in this stay?*
+It deliberately does not answer whether an allergy is affirmed or denied. The
+second document demonstrates why Lucene-hit presence cannot itself become the
+clinical value.
+
+`search_within = "EVTID"` means that each task may search documents attached to
+the same stay. It does not define the output grain and it does not affect the
+model's rationale. Later, `from_channel(group_by = "EVTID")` independently makes
+one structured result record per stay and at most one model call when candidates
+exist.
+
+## 3. Put field meaning in an Ellmer schema
+
+The model response is a native `ellmer::TypeObject`. Its object description
+states the purpose of the record; each field description states how that field
+must be interpreted.
+
+```{r response-schema}
+allergy_response <- ellmer::type_object(
+  paste(
+    "Extraction structuree du statut d'allergie medicamenteuse",
+    "explicitement documente pour un sejour."
+  ),
+  statut_allergique = ellmer::type_enum(
+    c(
+      "allergie_documentee",
+      "absence_allergie_documentee",
+      "indetermine"
+    ),
+    paste(
+      "Statut explicitement documente dans les extraits.",
+      "Ne jamais deduire une absence d'allergie du silence."
+    )
+  ),
+  substance_documentee = ellmer::type_string(
+    paste(
+      "Substance nommee comme allergene medicamenteux.",
+      "Retourner 'non_documentee' si aucune substance n'est nommee."
+    )
+  )
+)
+```
+
+The three instruction layers have separate jobs:
+
+| Instruction layer | Responsibility |
+|---|---|
+| package system prompt | General rules for grounded structured extraction; override with `system_prompt =` only when the whole activation needs a different role |
+| engine user prompt | Target keys plus numbered excerpts; `user_prompt =` adds an optional prefix for cross-field instructions |
+| `TypeObject` and `type_*()` descriptions | Meaning, allowed values, and decision rules for this particular record and its fields |
+
+There is no `prompt =` argument and no manually authored JSON format. The engine
+calls `chat_structured()` with the TypeObject.
+
+Do not add `rationale` or `evidence_ids` to the authored TypeObject. They are
+engine-owned fields:
+
+- omitting `rationale` in `use_channel()` adds one required rationale to the same
+  structured response; a string overrides its description, while `FALSE` or
+  `NULL` removes it;
+- `evidence_ids` is injected at runtime as an enum containing only the snippet
+  identifiers actually shown to the model.
+
+The model therefore returns the authored fields, rationale, and citations in one
+structured call. The engine resolves those citations into the public evidence
+table and does not publish `evidence_ids` as a value column.
+
+## 4. Declare the LLM activation and output record
+
+```{r llm-variable}
+medication_allergy_status <- variable_spec(
+  name = "medication_allergy_status",
+  concept = medication_allergy,
+  channels = list(
+    allergy_text = use_channel(
+      channel = "allergy_text",
+      search_within = "EVTID",
+      method = "lucene_llm",
+      model = "gemma3:4b",
+      model_params = list(temperature = 0, seed = 42),
+      response = allergy_response,
+      max_candidates = 6L
+    )
+  ),
+  output = from_channel(
+    channel = "allergy_text",
+    group_by = "EVTID"
+  )
+)
+
+medication_allergy_status
+```
+
+`model` and `model_params` belong to this activation because they configure how
+this particular LLM channel is processed. `gemma3:4b` is the model currently
+accepted by the package's structured-output gate; it is an executable example,
+not a general model recommendation.
+
+Unlike deterministic `from_channel()`, an LLM output has no `value =`
+expression. It publishes the complete structured frame: every authored field
+plus the rationale added by the engine. Here `group_by = "EVTID"` constructs one
+task, one model call when candidates exist, and one final result row per stay.
+
+Printing or inspecting the specification resolves its authoring contract but
+does not start Ollama or call the model.
+
+## 5. Run the real model interactively
+
+The following chunk is not evaluated when the vignette is built. To run it,
+start Ollama locally and make sure `gemma3:4b` is available, then execute the code
+in an interactive R session.
+
+```{r real-llm-run, eval = FALSE}
+allergy_run <- run_variable(
+  medication_allergy_status,
+  cohort = cohort,
+  sources = list(documents = documents)
+)
+```
+
+Because the model is declared in `use_channel()`, the engine constructs the
+Ollama Chat and uses `chat_structured()` behind the scenes. `run_variable(chat =)`
+can supply a real Ellmer Chat as a run-wide test or debugging override; it is not
+needed for this normal path.
+
+## 6. Read the result as four coordinated views
+
+### Published record
+
+```{r read-llm-values, eval = FALSE}
+allergy_run$values |>
+  select(
+    PATID, EVTID,
+    statut_allergique, substance_documentee, rationale,
+    channel_coverage, needs_review, review_reason, citation_warning
+  )
+```
+
+`values` always follows the declared output key. A task with no candidate or no
+valid grounded response remains present with typed missing response fields and a
+separate review state; it does not silently disappear. A no-match task normally
+has `needs_review = FALSE` because selection completed without a model call.
+Invalid or failed processing requires review. `citation_warning` distinguishes a
+published grounded record that also contained unsupported citation IDs; only the
+IDs that resolve to supplied snippets are materialized as evidence.
+
+### Selection and model processing
+
+```{r read-llm-status, eval = FALSE}
+allergy_run$channel_status |>
+  select(
+    PATID, EVTID, channel, source,
+    selection_status, processing_status
+  )
+```
+
+The two status columns answer different questions:
+
+| Situation | `selection_status` | `processing_status` | Interpretation |
+|---|---|---|---|
+| candidate and grounded response | `matched` | `completed` | retrieval found input and the model returned a publishable grounded record |
+| no Lucene candidate | `no_match` | `not_called` | selection completed with no input, so no model call exists |
+| no eligible document | `unavailable` | `not_called` | the retrieval boundary could not ascertain candidate presence |
+| candidate but ungrounded response | `matched` | `invalid` | the call returned a structured response, but citation grounding did not permit publication |
+| candidate but call or parsing failed | `matched` | `failed` | retrieval succeeded, but model transport or response processing failed |
+
+These are mechanical execution states, not clinical labels. In particular,
+`no_match` means *no excerpt matched the authored retrieval rule*, not *no allergy*.
+
+### Grounded evidence
+
+```{r read-llm-evidence, eval = FALSE}
+allergy_run$evidence |>
+  select(
+    PATID, EVTID, source_EVTID,
+    evidence_kind, evidence_ref, snippet_id, snippet_text
+  )
+```
+
+For a successful LLM record, `evidence` contains only snippets cited by the
+model, with `evidence_kind = "llm_citation"`. `EVTID` is the target output stay;
+`source_EVTID` is the stay native to the cited document. They often have the
+same value in event-scoped retrieval, but they have different roles.
+`evidence_ref` is an opaque coordinate local to this run and source snapshot.
+
+### Execution audit
+
+```{r read-llm-audit, eval = FALSE}
+allergy_run$audit$counts |>
+  select(PATID, EVTID, channel, stage, unit, n)
+
+allergy_run$audit$llm_calls |>
+  select(
+    PATID, EVTID, channel, model,
+    call_status, response_status, task_validity,
+    transport_attempts, latency_ms
+  )
+
+allergy_run$audit$execution_manifest
+```
+
+For text LLM channels, `counts` can expose searchable documents before and after
+a window, Lucene matches, matches after activation filters, and snippets supplied
+to the model. Stages appear only when the executor records a distinct count.
+
+`llm_calls` has one row for each invocation actually attempted. A no-candidate
+task has no call row. The call table separates transport outcome, response
+processing, and final task validity; the execution manifest records the resolved
+query, scope, model, schema, prompt configuration, and output grain.
+
+## 7. Grounding is part of the publication contract
+
+At runtime the schema's `evidence_ids` enum is built from the snippets visible in
+that task's prompt. A response is publishable only when at least one returned ID
+resolves to one of those supplied snippets. A response with no real citation is
+marked invalid, its structured fields are not accepted into the study variable,
+and the task remains visible for review.
+
+This contract does not prove that the model's interpretation is clinically
+correct. It provides a narrower guarantee: every published record is attached to
+inspectable text that the model identified from the bounded evidence it saw.
+
+## 8. One current boundary
+
+An LLM response is a structured payload, not an implicit boolean hit. A
+`lucene_llm` activation can be published with `from_channel()`, but it cannot
+currently appear inside `combine_channels()`. The engine would need an explicit
+authored rule mapping response fields to membership before that operation could
+have an unambiguous meaning. Use `method = "lucene"` when Lucene-hit presence is
+itself the intended signal.
+
+## 9. Authoring checklist
+
+Before running a new LLM variable, write down:
+
+1. the query that defines candidate text and how you checked its hits;
+2. whether documents are searched within `PATID` or `EVTID`;
+3. the output `group_by`, which defines one target and at most one model call
+   when candidates exist;
+4. every response field, its allowed values, and its silence/uncertainty rule;
+5. whether the default rationale is appropriate; and
+6. which result, status, evidence, and audit columns you will inspect before
+   accepting the variable.
+
+Keep those decisions in the specification. The model supplies a structured
+answer; the researcher still owns the operational definition and its validation.

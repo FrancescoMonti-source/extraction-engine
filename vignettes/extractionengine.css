@@ -1,0 +1,221 @@
+:root {
+  color-scheme: light dark;
+}
+
+html {
+  background: #ffffff;
+}
+
+body {
+  box-sizing: border-box;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 2rem 2.5rem 4rem;
+  background: #ffffff;
+  color: #26323d;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: #172b4d;
+  line-height: 1.25;
+}
+
+h2 {
+  margin-top: 2.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid #ccd6e0;
+}
+
+h3 {
+  margin-top: 1.75rem;
+}
+
+a {
+  color: #075da8;
+}
+
+code {
+  padding: 0.1em 0.3em;
+  border: 1px solid #d2dbe4;
+  border-radius: 3px;
+  background: #edf2f5;
+  color: #26323d;
+}
+
+pre {
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  border: 1px solid #ccd6e0;
+  border-radius: 5px;
+  background: #f0f3f6;
+  color: #26323d;
+  line-height: 1.5;
+}
+
+pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+table {
+  width: 100%;
+  margin: 1.25rem 0;
+  border-collapse: collapse;
+  color: #26323d;
+}
+
+th,
+td {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #ccd6e0;
+  text-align: left;
+  vertical-align: top;
+}
+
+thead th {
+  background: #e9eff5;
+  color: #172b4d;
+}
+
+tbody tr:nth-child(odd) {
+  background: #ffffff;
+}
+
+tbody tr:nth-child(even) {
+  background: #f5f8fa;
+}
+
+blockquote {
+  margin-left: 0;
+  padding: 0.2rem 1rem;
+  border-left: 4px solid #7aa7c7;
+  color: #425466;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    background: #171c22;
+    color: #d7dee7;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: #f0f4f8;
+  }
+
+  h2 {
+    border-bottom-color: #46515d;
+  }
+
+  a {
+    color: #79b8ff;
+  }
+
+  code {
+    border-color: #465362;
+    background: #28323c;
+    color: #e6edf3;
+  }
+
+  pre {
+    border-color: #3a4653;
+    background: #202832;
+    color: #e6edf3;
+  }
+
+  table {
+    color: #d7dee7;
+  }
+
+  th,
+  td {
+    border-color: #46515d;
+  }
+
+  thead th {
+    background: #303a45;
+    color: #f0f4f8;
+  }
+
+  tbody tr:nth-child(odd) {
+    background: #1c232b;
+  }
+
+  tbody tr:nth-child(even) {
+    background: #252d36;
+  }
+
+  blockquote {
+    border-left-color: #5794bf;
+    color: #b8c4d0;
+  }
+
+  code span.at,
+  code span.fu {
+    color: #d2a8ff;
+  }
+
+  code span.cf,
+  code span.kw,
+  code span.ot {
+    color: #ff7b72;
+  }
+
+  code span.bn,
+  code span.cn,
+  code span.dv,
+  code span.fl {
+    color: #79c0ff;
+  }
+
+  code span.ch,
+  code span.sc,
+  code span.st,
+  code span.vs {
+    color: #a5d6ff;
+  }
+
+  code span.an,
+  code span.co,
+  code span.cv,
+  code span.in,
+  code span.wa {
+    color: #8b949e;
+  }
+
+  code span.bu,
+  code span.im {
+    color: #7ee787;
+  }
+
+  code span.dt,
+  code span.do {
+    color: #ffa198;
+  }
+
+  code span.op,
+  code span.va {
+    color: #c9d1d9;
+  }
+
+  code span.pp,
+  code span.ss {
+    color: #ffa657;
+  }
+}
+
+@media (max-width: 700px) {
+  body {
+    padding: 1.25rem 1rem 3rem;
+  }
+}
