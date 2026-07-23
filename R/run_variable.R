@@ -1549,11 +1549,11 @@
 
 # --- resolved execution manifest (DESIGN §12, invariant 27) --------------------
 # `run$audit$execution_manifest` is a serializable snapshot of the RESOLVED
-# definition that actually executed (post concept-default / activation-override
+# definition that actually executed (post catalog-default / activation-override
 # inheritance) plus the execution facts the engine knows (timestamp and resolved
 # source-role mappings). It is assembled from
 # resolve_variable_spec(), so the audit trail and the executor read the SAME
-# resolution -- a trail recording the concept baseline while the executor ran a
+# resolution -- a trail recording the catalog baseline while the executor ran a
 # local override would be a silent audit lie no review of the values can catch.
 # Per-call LLM details (provider/seed/prompt/schema/query hashes) already
 # ride on channel_results[[channel]]$attempts and are not duplicated here.
@@ -1599,7 +1599,8 @@
                 else NULL
         list(
             alias = ch$name,
-            origin_name = ch$origin_name,
+            origin_concept = ch$origin_concept,
+            origin_channel = ch$origin_channel,
             origin_kind = ch$origin_kind,
             type = ch$type,
             source = ch$source,
@@ -1658,7 +1659,6 @@
     structure(
         list(
             variable = variable$name,
-            concept = variable$concept,
             anchor = .manifest_anchor(variable$anchor),
             combine = combine,
             output = output,
@@ -1680,7 +1680,6 @@ print.ee_execution_manifest <- function(x, ...) {
     }
 
     cat("Execution manifest: ", x$variable, "\n", sep = "")
-    cat("  concept: ", x$concept, "\n", sep = "")
     if (!is.null(x$anchor)) {
         anchor_label <- if (identical(x$anchor$kind, "cohort_column")) {
             paste0(x$anchor$column, " (provided by cohort)")
@@ -1704,7 +1703,13 @@ print.ee_execution_manifest <- function(x, ...) {
     for (name in names(x$channels)) {
         channel <- x$channels[[name]]
         method <- if (is.null(channel$method)) "" else paste0(" / ", channel$method)
-        cat("  ", name, " <- ", channel$origin_kind, ":", channel$origin_name,
+        origin <- if (identical(channel$origin_kind, "concept")) {
+            paste0("concept:", channel$origin_concept, "/",
+                   channel$origin_channel)
+        } else {
+            paste0("inline:", channel$origin_channel)
+        }
+        cat("  ", name, " <- ", origin,
             " [", channel$type, " / ", channel$source, method, "]\n", sep = "")
         .print_selector(channel$effective_selector, indent = "    ")
         if (identical(channel$selector_source, "activation")) {

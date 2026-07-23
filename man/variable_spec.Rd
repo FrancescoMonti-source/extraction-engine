@@ -10,7 +10,6 @@ concept_spec(name, channels)
 
 variable_spec(
   name,
-  concept,
   anchor = NULL,
   channels = list(),
   combine = NULL,
@@ -19,6 +18,7 @@ variable_spec(
 
 use_channel(
   channel,
+  concept = NULL,
   selector = NULL,
   filter_rows = NULL,
   group_by = NULL,
@@ -46,7 +46,10 @@ naming; the local R binding is not an identifier.}
 \item{channels}{For \code{concept_spec()}, a named catalog of channel
 definitions. For \code{variable_spec()}, a named list of \code{use_channel()}
 activations; character shorthand and bare inline channels are not accepted.}
-\item{concept}{A concept specification supplying reusable channel definitions.}
+\item{concept}{For a character \code{channel}, the concept specification whose
+catalog owns that channel. It must be \code{NULL} for an inline channel
+definition. A variable has no single global concept, so different activations
+may use different concept specifications.}
 \item{anchor}{\code{NULL}, the exact name of a \code{Date} or \code{POSIXt}
 column supplied by the cohort, or an \code{index_event()}. A cohort column is
 shared by the variable's windowed activations and must have one non-missing value
@@ -58,8 +61,9 @@ must coexist. A payload-only activation need not occur in the expression. A
 \code{lucene_llm} activation cannot currently occur because a valid structured
 response does not implicitly define positive membership; it may still be
 published with \code{from_channel()}.}
-\item{channel}{Mandatory origin for this activation: one concept-channel name or
-one inline channel definition. It cannot name another activation alias.}
+\item{channel}{Mandatory origin for this activation: one channel name paired
+with its owning \code{concept}, or one self-contained inline channel definition.
+It cannot name another activation alias.}
 \item{selector}{Optional local replacement for the origin channel's selector.}
 \item{filter_rows}{Optional per-task data-masked expression over real
 prepared-source columns. It returns one logical per row; missing results are
@@ -104,8 +108,9 @@ and provenance.
 }
 \description{
 These constructors record the researcher's executable operational definition:
-the concept locates rows, the activation controls their variable-local use, and
-the output publishes membership or an explicit channel payload.
+concepts locate rows, each activation names its own concept/channel origin and
+controls variable-local use, and the output publishes membership or an explicit
+channel payload.
 }
 \details{
 Text activations must declare \code{search_within}. Event-level search requires

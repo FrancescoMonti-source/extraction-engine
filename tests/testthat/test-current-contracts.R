@@ -20,8 +20,8 @@ lab_variable <- function(code, value) {
         channels = list(result = lab_channel(selector = analyte(code))))
     variable_spec(
         name = paste0(code, "_value"),
-        concept = concept,
-        channels = list(result = use_channel(channel = "result")),
+        channels = list(result = use_channel(
+            channel = "result", concept = concept)),
         output = from_channel(
             "result", group_by = "PATID", value = !!value))
 }
@@ -140,9 +140,9 @@ test_that("data-masked values preserve aligned source rows and one-cell output",
         channels = list(result = lab_channel(selector = analyte("ABSENT"))))
     invalid_filter <- variable_spec(
         name = "invalid_filter",
-        concept = absent_concept,
         channels = list(result = use_channel(
             channel = "result",
+            concept = absent_concept,
             filter_rows = {
                 if (FALSE) conditional_name <- 1
                 NUMREZ <- replace(NUMREZ, 1L, 0)
@@ -174,24 +174,64 @@ test_that("relational keys control qualification, evidence, and broadcast", {
     hemoglobin <- concept_spec(
         "hemoglobin",
         channels = list(hb = lab_channel(selector = analyte("HB.HB"))))
+    conflicting_hemoglobin <- concept_spec(
+        "hemoglobin",
+        channels = list(hb = lab_channel(selector = analyte("OTHER"))))
+    origin_contract <- c(
+        character_requires_concept = inherits(
+            try(use_channel("hb"), silent = TRUE), "try-error"),
+        inline_rejects_concept = inherits(
+            try(
+                use_channel(
+                    lab_channel(selector = analyte("HB.HB")),
+                    concept = hemoglobin),
+                silent = TRUE),
+            "try-error"),
+        unknown_channel_is_local_to_concept = inherits(
+            try(
+                use_channel("not_in_hemoglobin", concept = hemoglobin),
+                silent = TRUE),
+            "try-error"),
+        duplicate_name_rejects_different_catalog = inherits(
+            try(
+                variable_spec(
+                    name = "ambiguous_catalog_identity",
+                    channels = list(
+                        first = use_channel("hb", concept = hemoglobin),
+                        second = use_channel(
+                            "hb", concept = conflicting_hemoglobin)),
+                    combine = combine_channels("first & second", by = "PATID"),
+                    output = bin_output(group_by = "PATID")),
+                silent = TRUE),
+            "try-error"))
+    expect_identical(
+        origin_contract,
+        c(
+            character_requires_concept = TRUE,
+            inline_rejects_concept = TRUE,
+            unknown_channel_is_local_to_concept = TRUE,
+            duplicate_name_rejects_different_catalog = TRUE))
+
     make_variable <- function(filter_by) {
         low_threshold <- 12
         variable_spec(
             name = paste0("mean_hb_filtered_by_", filter_by),
-            concept = hemoglobin,
             anchor = "anchor_date",
             channels = list(
                 hb_low = use_channel(
                     channel = "hb",
+                    concept = hemoglobin,
                     filter_rows = .data$NUMRES < .env$low_threshold,
                     window = c(-Inf, 0)),
                 hb_group = use_channel(
                     channel = "hb",
+                    concept = hemoglobin,
                     group_by = "EVTID",
                     filter_groups = mean(NUMRES, na.rm = TRUE) < 12,
                     window = c(-Inf, 0)),
                 hb_payload = use_channel(
                     channel = "hb",
+                    concept = hemoglobin,
                     window = c(-Inf, 0))),
             combine = combine_channels("hb_low & hb_group", by = "EVTID"),
             output = from_channel(
@@ -225,12 +265,6 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         event_restricted$audit$combine_keys$EVTID[
             event_restricted$audit$combine_keys$qualifies],
         "E1")
-    # Audit provenance must retain concept origin after activation aliasing.
-    expect_identical(
-        unname(vapply(event_restricted$audit$execution_manifest$channels,
-                      `[[`, character(1), "origin_name")),
-        c("hb", "hb", "hb"))
-
     # Audit stages describe one relational funnel instead of exposing helper
     # names. The window remains a separate stage between the pre-selector rows
     # and the selector itself.
@@ -264,14 +298,15 @@ test_that("relational keys control qualification, evidence, and broadcast", {
 
     broadcast <- variable_spec(
         name = "hb_patient_gate_broadcast_to_events",
-        concept = hemoglobin,
         anchor = "anchor_date",
         channels = list(
             hb_gate = use_channel(
                 channel = "hb",
+                concept = hemoglobin,
                 window = c(-Inf, 0)),
             hb_low = use_channel(
                 channel = "hb",
+                concept = hemoglobin,
                 filter_rows = NUMRES < 12,
                 window = c(-Inf, 0))),
         combine = combine_channels("hb_gate & hb_low", by = "PATID"),
@@ -309,20 +344,22 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         documents,
         text_columns = "RECTXT", doc_column = "ELTID",
         split_sentences = TRUE, remember_spaces = FALSE, verbose = FALSE)
-    text_signals <- concept_spec(
-        "same_sentence_across_stays",
-        channels = list(
-            alpha = text_channel(lucene_query("alpha")),
-            beta = text_channel(lucene_query("beta"))))
+    alpha_signal <- concept_spec(
+        "alpha_signal",
+        channels = list(text = text_channel(lucene_query("alpha"))))
+    beta_signal <- concept_spec(
+        "beta_signal",
+        channels = list(text = text_channel(lucene_query("beta"))))
     text_variable <- function(by) variable_spec(
         name = paste0("same_unit_text_intersection_", by),
-        concept = text_signals,
         channels = list(
             alpha = use_channel(
-                "alpha", search_within = "PATID", method = "lucene",
+                "text", concept = alpha_signal,
+                search_within = "PATID", method = "lucene",
                 filter_rows = !is.na(RECDATE)),
             beta = use_channel(
-                "beta", search_within = "PATID", method = "lucene")),
+                "text", concept = beta_signal,
+                search_within = "PATID", method = "lucene")),
         combine = combine_channels("alpha & beta", by = by),
         output = bin_output(group_by = "PATID"))
 
@@ -350,42 +387,43 @@ test_that("relational keys control qualification, evidence, and broadcast", {
     expect_identical(
         unique(event_text_run$evidence$evidence_kind),
         "lucene_hit")
+    # Each activation carries its own catalog origin. Different concepts may
+    # reuse the same origin-channel name without creating a composite concept.
+    expect_identical(
+        lapply(
+            event_text_run$audit$execution_manifest$channels,
+            \(channel) channel[c("origin_concept", "origin_channel")]),
+        list(
+            alpha = list(
+                origin_concept = "alpha_signal", origin_channel = "text"),
+            beta = list(
+                origin_concept = "beta_signal", origin_channel = "text")))
 
     # ELTID is source-local. Distinct selectors from the same document source
     # may combine at document level, but bare ELTID values never join sources.
-    cross_source <- concept_spec(
-        "cross_source_element_ids",
-        channels = list(
-            alpha = text_channel(lucene_query("alpha")),
-            hb = lab_channel(selector = analyte("HB.HB"))))
     cross_source_variable <- variable_spec(
         name = "cross_source_ELTID_is_invalid",
-        concept = cross_source,
         channels = list(
             alpha = use_channel(
-                "alpha", search_within = "PATID", method = "lucene"),
-            hb = use_channel("hb")),
+                "text", concept = alpha_signal,
+                search_within = "PATID", method = "lucene"),
+            hb = use_channel("hb", concept = hemoglobin)),
         combine = combine_channels("alpha & hb", by = "ELTID"),
         output = bin_output(group_by = "PATID"))
     expect_error(
         resolve_variable_spec(cross_source_variable),
         "same source identity domain")
 
-    cross_source_payload <- concept_spec(
-        "cross_source_qualified_payload",
-        channels = list(
-            alpha = text_channel(lucene_query("alpha")),
-            beta = text_channel(lucene_query("beta")),
-            hb = lab_channel(selector = analyte("HB.HB"))))
     cross_source_payload_variable <- variable_spec(
         name = "cross_source_ELTID_payload_is_invalid",
-        concept = cross_source_payload,
         channels = list(
             alpha = use_channel(
-                "alpha", search_within = "PATID", method = "lucene"),
+                "text", concept = alpha_signal,
+                search_within = "PATID", method = "lucene"),
             beta = use_channel(
-                "beta", search_within = "PATID", method = "lucene"),
-            hb = use_channel("hb")),
+                "text", concept = beta_signal,
+                search_within = "PATID", method = "lucene"),
+            hb = use_channel("hb", concept = hemoglobin)),
         combine = combine_channels("alpha & beta", by = "ELTID"),
         output = from_channel(
             "hb", group_by = "PATID", value = mean(NUMRES, na.rm = TRUE),
@@ -404,7 +442,6 @@ test_that("relational keys control qualification, evidence, and broadcast", {
         DATEACTE = as.Date(c("2026-02-03", "2026-02-05")))
     crossed_anchor <- variable_spec(
         name = "crossed_index_event_is_invalid",
-        concept = hemoglobin,
         anchor = index_event(
             "pmsi_actes", ccam("ABCD001"), at = "DATEACTE",
             select_event = function(d) {
@@ -412,7 +449,8 @@ test_that("relational keys control qualification, evidence, and broadcast", {
                 selected$DATEACTE <- d$DATEACTE[[2]]
                 selected
             }),
-        channels = list(hb = use_channel("hb", window = c(-Inf, 0))),
+        channels = list(hb = use_channel(
+            "hb", concept = hemoglobin, window = c(-Inf, 0))),
         output = from_channel(
             "hb", group_by = "PATID", value = max(NUMRES, na.rm = TRUE)))
     expect_error(
@@ -436,7 +474,8 @@ test_that("LLM boundary stays grounded, isolated, and fail closed", {
         inherits(
             try(
                 use_channel(
-                    channel = "text", search_within = "PATID",
+                    channel = text_channel(lucene_query("taba*")),
+                    search_within = "PATID",
                     method = "lucene_llm", response = authored),
                 silent = TRUE),
             "try-error")
@@ -455,9 +494,9 @@ test_that("LLM boundary stays grounded, isolated, and fail closed", {
         channels = list(text = text_channel(selector = lucene_query("taba*"))))
     make_variable <- function(max_candidates = NULL) variable_spec(
         name = "tabagisme",
-        concept = smoking,
         channels = list(text_tabagisme = use_channel(
             channel = "text",
+            concept = smoking,
             search_within = "PATID",
             method = "lucene_llm",
             model = "declared-test-model",
@@ -671,16 +710,17 @@ test_that("LLM boundary stays grounded, isolated, and fail closed", {
     expect_error(
         variable_spec(
             name = "llm_membership_is_not_implicit",
-            concept = smoking,
             channels = list(
                 text_llm = use_channel(
                     channel = "text",
+                    concept = smoking,
                     search_within = "PATID",
                     method = "lucene_llm",
                     response = response,
                     rationale = FALSE),
                 text_lucene = use_channel(
                     channel = "text",
+                    concept = smoking,
                     search_within = "PATID",
                     method = "lucene")),
             combine = combine_channels(

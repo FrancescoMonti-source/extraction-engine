@@ -1855,10 +1855,51 @@ instead of passing the deprecated `.additional_properties` argument.
 The first sentinel gained two assertions for these boundaries rather than a new
 `test_that()`. The three sentinels pass 46 expectations with no warning. Both
 vignettes rebuild, and built-tarball `R CMD check --no-manual` finishes with
-`Status: OK`.
+`Status: OK`. This hardening was committed and pushed as `9083da1`
+(`Harden data-mask boundaries`).
 
 One provenance limitation remains assigned to the audit tranche: the execution
 manifest records a data-masked expression such as
 `NUMRES < .env$threshold`, but does not yet snapshot the captured value of
 `threshold`. Runtime evaluation is correct; the manifest is not yet a complete
 serialization of the quosure environment.
+
+## Activation-local concepts (2026-07-23)
+
+The variable-level concept proved to be the wrong ownership boundary: combining
+potassium and sodium otherwise required an artificial composite concept for
+every research question. The breaking authoring contract is now:
+
+```r
+variable_spec(
+    name = "ionic_alert",
+    channels = list(
+        potassium_high = use_channel(
+            channel = "lab", concept = potassium,
+            filter_rows = NUMRES > 5.2),
+        sodium_low = use_channel(
+            channel = "lab", concept = sodium,
+            filter_rows = NUMRES < 135)
+    ),
+    combine = combine_channels(
+        "potassium_high & sodium_low", by = "EVTID"),
+    output = bin_output(group_by = "EVTID")
+)
+```
+
+`variable_spec()` no longer has `concept=`. A character `channel=` requires an
+explicit `concept_spec()` in the same `use_channel()`; an inline channel requires
+`concept = NULL`. Two concepts may export the same local channel name because
+combine, output, evidence, and audit continue to use activation aliases.
+
+The compiled channel and execution manifest preserve `origin_concept`,
+`origin_channel`, `origin_kind`, and `source`. ELTID safety remains source-based:
+different concepts on the same source identity domain may combine at ELTID, but
+different sources may not. The three sentinels include the same-channel-name
+cross-concept case and verify its resolved manifest origin without adding a
+fourth `test_that()`.
+
+The three sentinels now contain 47 expectations with no warning. Both vignettes
+rebuild from the source tarball, and `R CMD check --no-manual` finishes with
+`Status: OK`. The PDF-manual-only gate is unavailable on this machine because
+`pdflatex` is not installed.

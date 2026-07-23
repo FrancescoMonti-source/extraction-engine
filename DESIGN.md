@@ -26,8 +26,9 @@ The executable definition has three deliberately separate layers:
 1. `concept_spec()` locates possible signal rows. A named channel records its
    source and selector; it does not decide which prepared columns a published
    value uses or how it is calculated.
-2. `use_channel()` activates a concept channel, or an inline channel, for one
-   variable and decides how candidate rows are used.
+2. `use_channel()` activates one named channel from an explicitly supplied
+   concept, or one self-contained inline channel, and decides how candidate rows
+   are used.
 3. `bin_output(group_by)` or `from_channel(..., group_by, value)` decides the
    final grain, what is published, and, for a deterministic payload, the
    data-masked value expression.
@@ -53,9 +54,13 @@ to its activation.
 
 Every entry of `variable_spec(channels =)` is named and must contain
 `use_channel(channel = ...)`. The outer name is the activation alias used by
-combine expressions, output, inspection, and provenance. `channel =` is either
-a concept-channel name or an inline channel definition; it cannot refer to
-another activation alias. `selector =` is an explicit local replacement.
+combine expressions, output, inspection, and provenance. A character `channel =`
+requires `concept = <concept_spec>` on that activation. An inline channel
+definition requires `concept = NULL` because it is already self-contained.
+`variable_spec()` has no global concept: different activations may draw from
+different reusable concepts, and identical channel names remain unambiguous
+inside their explicitly named catalogs. Neither form can refer to another
+activation alias. `selector =` is an explicit local replacement.
 
 Operational row, group, and time rules also belong to the activation:
 
@@ -248,8 +253,8 @@ output tables. The live `resolved_spec` and raw `channel_intermediates` are debu
 `audit$internal`, not ordinary audit tables. The execution manifest has a compact
 print method while retaining its complete machine-readable structure.
 
-The execution manifest and `inspect()` record activation alias and
-concept/inline origin,
+The execution manifest and `inspect()` record activation alias,
+`origin_concept`, `origin_channel`, source, and inline/catalog origin,
 original and effective selector, row/group filters, activation window,
 `search_within`, `combine$by`, `filter_by_qualified`, `output$group_by`, selected
 output value expression, response schema, and LLM configuration. Their output

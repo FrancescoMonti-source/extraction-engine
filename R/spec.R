@@ -2,7 +2,7 @@
 # spec.R -- study-variable vocabulary and compiler
 # -----------------------------------------------------------------------------
 # Thin list/S3 constructors for the package architecture:
-#   source_spec -> concept_spec -> channels -> variable_spec -> run_variable.
+#   source_spec -> concept_spec -> channel activations -> variable_spec -> run_variable.
 # Companion files: channels.R (channel + selector ctors), operators.R (windows /
 # combiners / outputs / absence), run_variable.R (the execution spine).
 # Keep the API experimental: we are validating object boundaries and execution
@@ -45,11 +45,11 @@
 }
 
 # Normalize the single activation grammar:
-#   alias = use_channel(channel = "concept_channel", ...)
+#   alias = use_channel(channel = "concept_channel", concept = concept, ...)
 #   alias = use_channel(channel = text_channel(...), ...)
 # The external name is always the alias. A character `channel=` resolves only in
-# the concept catalog, never through another activation alias.
-.normalize_variable_channels <- function(channels, concept) {
+# the concept explicitly attached to that activation, never through another alias.
+.normalize_variable_channels <- function(channels) {
     if (!is.list(channels)) {
         stop("channels must be a named list of use_channel() activations.",
              call. = FALSE)
@@ -64,16 +64,27 @@
              "invalid: ", paste(names(channels)[bad], collapse = ", "), ".",
              call. = FALSE)
     }
-    for (alias in names(channels)) {
-        origin <- channels[[alias]]$channel
-        if (is.character(origin) && !origin %in% names(concept$channels)) {
-            alias_hint <- if (origin %in% names(channels)) {
-                " Activation aliases cannot point to other aliases."
-            } else {
-                ""
-            }
-            stop("Activation '", alias, "' references unknown concept channel '",
-                 origin, "'.", alias_hint, call. = FALSE)
+    invisible(lapply(
+        names(channels),
+        function(alias) .activation_channel_definition(alias, channels[[alias]])))
+    catalogs <- lapply(channels, function(activation) {
+        if (is.character(activation$channel)) activation$concept else NULL
+    })
+    catalogs <- catalogs[!vapply(catalogs, is.null, logical(1))]
+    catalog_names <- vapply(catalogs, `[[`, character(1), "name")
+    duplicated_names <- unique(catalog_names[duplicated(catalog_names)])
+    for (catalog_name in duplicated_names) {
+        aliases <- names(catalogs)[catalog_names == catalog_name]
+        reference <- catalogs[[aliases[[1L]]]]
+        same_catalog <- vapply(
+            catalogs[aliases], identical, logical(1), y = reference)
+        if (!all(same_catalog)) {
+            stop(
+                "Concept name '", catalog_name,
+                "' refers to non-identical catalogs in activations: ",
+                paste(aliases, collapse = ", "),
+                ". Within one variable, a concept name must identify one catalog.",
+                call. = FALSE)
         }
     }
     channels
@@ -209,6 +220,7 @@ concept_spec <- function(name, channels) {
     "rationale", "evidence_ids",
     "task_id", "PATID", "EVTID", "ELTID", "source_EVTID",
     "variable", "channel", "source", "origin", "origin_kind",
+    "origin_concept", "origin_channel",
     "field", "value", "accepted_value", "n_payload_rows",
     "status", "coverage_state", "processing_state", "channel_coverage",
     "selection_status", "evidence_kind",
@@ -223,9 +235,10 @@ concept_spec <- function(name, channels) {
     "definition", "model_candidate_rank", "anchor_date",
     "snippet_id", "hit_ref", "source_row_id", "evidence_ref")
 
-# use_channel() is the complete variable-local activation. `channel` is mandatory:
-# either one concept-channel name or one inline ee_channel definition.
-use_channel <- function(channel, selector = NULL, filter_rows = NULL,
+# use_channel() is the complete variable-local activation. A named catalog
+# channel carries its concept explicitly; an inline channel is self-contained.
+use_channel <- function(channel, concept = NULL, selector = NULL,
+                        filter_rows = NULL,
                         group_by = NULL, filter_groups = NULL,
                         search_within = NULL, window = NULL, method = NULL,
                         model = NULL, model_params = list(),
@@ -238,7 +251,7 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
     if (rlang::quo_is_null(filter_rows)) filter_rows <- NULL
     if (rlang::quo_is_null(filter_groups)) filter_groups <- NULL
     if (missing(channel)) {
-        stop("use_channel() requires channel = <concept name or inline channel>.",
+        stop("use_channel() requires channel = <concept-channel name or inline channel>.",
              call. = FALSE)
     }
     valid_origin <- inherits(channel, "ee_channel") ||
@@ -247,6 +260,18 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
     if (!valid_origin) {
         stop("use_channel() channel must be one concept-channel name or an inline ",
              "channel definition.", call. = FALSE)
+    }
+    if (is.character(channel) && !inherits(concept, "ee_concept_spec")) {
+        stop("use_channel() with a character channel requires ",
+             "concept = <concept_spec>.", call. = FALSE)
+    }
+    if (is.character(channel) && !channel %in% names(concept$channels)) {
+        stop("use_channel() references unknown channel '", channel,
+             "' in concept '", concept$name, "'.", call. = FALSE)
+    }
+    if (inherits(channel, "ee_channel") && !is.null(concept)) {
+        stop("use_channel() with an inline channel must not declare concept; ",
+             "the inline definition is already self-contained.", call. = FALSE)
     }
     if (!is.null(method) &&
         (!is.character(method) || length(method) != 1L || is.na(method) ||
@@ -356,7 +381,8 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
         rationale <- NULL
     }
     .new_spec(
-        list(channel = channel, selector = selector, filter_rows = filter_rows,
+        list(channel = channel, concept = concept,
+             selector = selector, filter_rows = filter_rows,
              group_by = group_by, filter_groups = filter_groups,
              search_within = search_within, window = window,
              method = method, model = model, model_params = model_params,
@@ -366,26 +392,38 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
         "ee_channel_use")
 }
 
-.activation_channel_definition <- function(alias, activation, concept) {
+.activation_channel_definition <- function(alias, activation) {
     origin <- activation$channel
     if (inherits(origin, "ee_channel")) {
-        return(list(definition = origin, origin_name = alias,
-                    origin_kind = "inline"))
+        return(list(
+            definition = origin,
+            origin_concept = NULL,
+            origin_channel = alias,
+            origin_kind = "inline"))
+    }
+    concept <- activation$concept
+    if (!inherits(concept, "ee_concept_spec")) {
+        stop("Activation '", alias, "' uses character channel '", origin,
+             "' without a concept_spec().", call. = FALSE)
     }
     definition <- concept$channels[[origin]]
     if (is.null(definition)) {
-        stop("Activation '", alias, "' references unknown concept channel '",
-             origin, "'.", call. = FALSE)
+        stop("Activation '", alias, "' references unknown channel '", origin,
+             "' in concept '", concept$name, "'. Activation aliases cannot point ",
+             "to other aliases.", call. = FALSE)
     }
-    list(definition = definition, origin_name = origin,
-         origin_kind = "concept")
+    list(
+        definition = definition,
+        origin_concept = concept$name,
+        origin_channel = origin,
+        origin_kind = "concept")
 }
 
-.check_text_channel_uses <- function(channels, concept) {
+.check_text_channel_uses <- function(channels) {
     needs_chat <- FALSE
     for (alias in names(channels)) {
         activation <- channels[[alias]]
-        definition <- .activation_channel_definition(alias, activation, concept)$definition
+        definition <- .activation_channel_definition(alias, activation)$definition
         is_text <- identical(definition$type, "text")
         if (is_text && is.null(activation$method)) {
             stop("Text activation '", alias, "' requires method = 'lucene' or ",
@@ -492,11 +530,11 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
     invisible(TRUE)
 }
 
-.check_output_channel_type <- function(output, channels, concept) {
+.check_output_channel_type <- function(output, channels) {
     if (!identical(output$kind, "from_channel")) return(invisible(TRUE))
     activation <- channels[[output$channel]]
     definition <- .activation_channel_definition(
-        output$channel, activation, concept)$definition
+        output$channel, activation)$definition
     if (identical(activation$method, "lucene_llm")) {
         if (!is.null(output$value)) {
             stop("from_channel() value is for deterministic source rows; omit it ",
@@ -525,14 +563,11 @@ use_channel <- function(channel, selector = NULL, filter_rows = NULL,
 
 # A variable_spec is the concrete executable definition of one analytical variable.
 # Reuse is an ordinary R function that calls this constructor.
-variable_spec <- function(name, concept, anchor = NULL, channels = list(),
+variable_spec <- function(name, anchor = NULL, channels = list(),
                           combine = NULL, output = NULL) {
     if (!is.character(name) || length(name) != 1L || is.na(name) ||
         !nzchar(trimws(name))) {
         stop("variable_spec() requires one non-empty name.", call. = FALSE)
-    }
-    if (!inherits(concept, "ee_concept_spec")) {
-        stop("variable_spec() requires a concept_spec().", call. = FALSE)
     }
     if (!inherits(output, "ee_output_type")) {
         stop("variable_spec() output must be created with an output constructor.",
@@ -543,8 +578,8 @@ variable_spec <- function(name, concept, anchor = NULL, channels = list(),
         stop("variable_spec() anchor must be NULL, one cohort date column, or index_event().",
              call. = FALSE)
     }
-    channels <- .normalize_variable_channels(channels, concept)
-    .check_text_channel_uses(channels, concept)
+    channels <- .normalize_variable_channels(channels)
+    .check_text_channel_uses(channels)
     .check_llm_grain_collisions(channels, output$group_by)
 
     windowed <- names(channels)[vapply(
@@ -561,7 +596,7 @@ variable_spec <- function(name, concept, anchor = NULL, channels = list(),
     }
     combine <- .resolve_variable_combine(combine, names(channels), output)
     output <- .check_output_contract(output, names(channels), combine)
-    .check_output_channel_type(output, channels, concept)
+    .check_output_channel_type(output, channels)
     .check_expr_channels(combine, names(channels),
                          payload_channel = output$channel)
     .check_llm_combine_channels(combine, channels)
@@ -579,15 +614,16 @@ variable_spec <- function(name, concept, anchor = NULL, channels = list(),
     }
 
     .new_spec(
-        list(name = name, concept = concept, anchor = anchor,
-             channels = channels, combine = combine, output = output),
+        list(name = name, anchor = anchor, channels = channels,
+             combine = combine, output = output),
         "ee_variable_spec")
 }
 
 # --- inspection / resolution --------------------------------------------------
-# Read-only helpers for understanding what will execute after concept defaults and
-# variable activations are combined. They are intentionally lightweight: the return
-# value is an experimental list/S3 view, not a frozen public schema.
+# Read-only helpers for understanding what will execute after each activation's
+# concept defaults and local overrides are combined. They are intentionally
+# lightweight: the return value is an experimental list/S3 view, not a frozen
+# public schema.
 
 inspect <- function(x, ...) {
     UseMethod("inspect")
@@ -668,13 +704,17 @@ print.ee_concept_spec <- function(x, ...) {
 print.ee_variable_spec <- function(x, ...) {
     resolved <- resolve_variable_spec(x)
     cat("Study variable: ", resolved$name, "\n", sep = "")
-    cat("Concept: ", resolved$concept, "\n", sep = "")
     cat("\nChannels:\n")
     for (name in names(resolved$channels)) {
         channel <- resolved$channels[[name]]
         cat("  ", name, "\n", sep = "")
-        cat("    origin: ", channel$origin_kind, ":", channel$origin_name,
-            "\n", sep = "")
+        origin <- if (identical(channel$origin_kind, "concept")) {
+            paste0("concept:", channel$origin_concept, "/",
+                   channel$origin_channel)
+        } else {
+            paste0("inline:", channel$origin_channel)
+        }
+        cat("    origin: ", origin, "\n", sep = "")
         cat("    source: ", channel$source, "\n", sep = "")
         .print_selector(channel$selector)
         if (!is.null(channel$filter_rows)) {
@@ -760,8 +800,8 @@ print.ee_variable_spec <- function(x, ...) {
     invisible(TRUE)
 }
 
-.resolve_channel_activation <- function(name, concept, channel_use) {
-    origin <- .activation_channel_definition(name, channel_use, concept)
+.resolve_channel_activation <- function(name, channel_use) {
+    origin <- .activation_channel_definition(name, channel_use)
     channel_def <- origin$definition
     original_selector <- channel_def$selector
     selector <- channel_use$selector %||% original_selector
@@ -777,7 +817,8 @@ print.ee_variable_spec <- function(x, ...) {
     .new_spec(
         list(
             name = name,
-            origin_name = origin$origin_name,
+            origin_concept = origin$origin_concept,
+            origin_channel = origin$origin_channel,
             origin_kind = origin$origin_kind,
             type = channel_def$type,
             source = channel_def$source,
@@ -812,7 +853,7 @@ resolve_variable_spec <- function(variable) {
     resolved_channels <- lapply(
         names(variable$channels),
         function(name) .resolve_channel_activation(
-            name, variable$concept, variable$channels[[name]]))
+            name, variable$channels[[name]]))
     names(resolved_channels) <- names(variable$channels)
     invisible(lapply(resolved_channels, .check_channel_required_roles))
     .check_eltid_identity_domain(
@@ -821,7 +862,6 @@ resolve_variable_spec <- function(variable) {
     .new_spec(
         list(
             name = variable$name,
-            concept = variable$concept$name,
             anchor = variable$anchor,
             channels = resolved_channels,
             combine = variable$combine,

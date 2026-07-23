@@ -110,10 +110,10 @@ deterministic `method = "lucene"` variable.
 ```{r retrieval-check, message = FALSE, warning = FALSE}
 allergy_mentions <- variable_spec(
   name = "allergy_mentions",
-  concept = medication_allergy,
   channels = list(
     allergy_text = use_channel(
       channel = "allergy_text",
+      concept = medication_allergy,
       search_within = "EVTID",
       method = "lucene"
     )
@@ -208,10 +208,10 @@ table and does not publish `evidence_ids` as a value column.
 ```{r llm-variable}
 medication_allergy_status <- variable_spec(
   name = "medication_allergy_status",
-  concept = medication_allergy,
   channels = list(
     allergy_text = use_channel(
       channel = "allergy_text",
+      concept = medication_allergy,
       search_within = "EVTID",
       method = "lucene_llm",
       model = "gemma3:4b",
@@ -229,8 +229,11 @@ medication_allergy_status <- variable_spec(
 medication_allergy_status
 ```
 
-`model` and `model_params` belong to this activation because they configure how
-this particular LLM channel is processed. `gemma3:4b` is the model currently
+`concept = medication_allergy` identifies the reusable catalog owning
+`allergy_text`; the variable itself has no global concept and could activate
+another concept beside it. `model` and `model_params` also belong to this
+activation because they configure how this particular LLM channel is processed.
+`gemma3:4b` is the model currently
 accepted by the package's structured-output gate; it is an executable example,
 not a general model recommendation.
 

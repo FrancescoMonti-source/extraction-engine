@@ -52,26 +52,30 @@ nothing else. It does not infer which prepared-source columns a published value
 should use.
 
 The variable activates concept channels explicitly. The list name is the alias
-used by combine expressions, output, inspection, and provenance. The mandatory
-`channel =` points either to a concept-channel name or to an inline channel
-definition. It never points to another activation alias.
+used by combine expressions, output, inspection, and provenance. A named channel
+is paired with its owning `concept =`; an inline channel definition is already
+self-contained and omits `concept`. Neither form can point to another activation
+alias. Because the concept belongs to each activation rather than to the whole
+variable, one variable may compose channels from several reusable concepts.
 
 ```r
 mean_hb_for_patients_with_anemic_stays <- variable_spec(
   name = "mean_hb_for_patients_with_anemic_stays",
-  concept = anemia,
 
   channels = list(
     text_anemia = use_channel(
       channel = "text_anemia",
+      concept = anemia,
       search_within = "PATID",
       method = "lucene"
     ),
     hb = use_channel(
-      channel = "hb"
+      channel = "hb",
+      concept = anemia
     ),
     hb_low = use_channel(
       channel = "hb",
+      concept = anemia,
       filter_rows = NUMRES < ifelse(PATSEX == "F", 12, 13)
     )
   ),
@@ -272,11 +276,11 @@ tabagisme_levels <- c("actif", "sevre", "non_fumeur", "indetermine")
 
 tabagisme_enum <- variable_spec(
   name = "tabagisme_enum",
-  concept = tabagisme,
 
   channels = list(
     text_tabagisme = use_channel(
       channel = "text_tabagisme",
+      concept = tabagisme,
       search_within = "EVTID",
       method = "lucene_llm",
       model = "gemma3:4b",

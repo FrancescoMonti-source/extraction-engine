@@ -89,18 +89,25 @@ Before reading further, inspect the rows and try to answer two questions:
 
 ## 2. A concept only locates possible evidence
 
-The concept declares where potassium and sodium rows are found. `analyte()`
-matches `TYPEANA`; it does not choose `NUMRES`, `STRRES`, or `DATEXAM` as the
-result.
+Keep reusable concepts atomic. Potassium and sodium each declare where their own
+rows are found; a variable can activate both without creating a composite
+"ionic balance" concept. `analyte()` matches `TYPEANA`; it does not choose
+`NUMRES`, `STRRES`, or `DATEXAM` as the result.
 
 ```{r concept}
-ionic_balance <- concept_spec(
-  name = "ionic_balance",
+potassium <- concept_spec(
+  name = "potassium",
   channels = list(
-    potassium = lab_channel(
+    lab = lab_channel(
       selector = analyte("K.K")
-    ),
-    sodium = lab_channel(
+    )
+  )
+)
+
+sodium <- concept_spec(
+  name = "sodium",
+  channels = list(
+    lab = lab_channel(
       selector = analyte("NA.NA")
     )
   )
@@ -111,15 +118,17 @@ The names connect the authoring layers explicitly:
 
 - `lab_channel()` uses the logical source name `"biology"` by default;
   `sources = list(biology = biology)` supplies that source at runtime;
-- `potassium` and `sodium`, on the left of the concept's `channels` list, are
-  concept-channel names; and
+- both concepts may use the local channel name `lab`; and
 - inside a variable, the name on the left of `channels = list(...)` is an
-  activation alias, while `use_channel(channel = "potassium")` points back to
-  the concept channel it activates.
+  activation alias, while
+  `use_channel(channel = "lab", concept = potassium)` names both the reusable
+  concept and the channel it activates.
 
 Combine expressions, outputs, evidence, and audit tables refer to activation
 aliases. An alias may reuse its origin's name, as in the first example, or give
-the same origin a variable-specific role such as `potassium_high`.
+the origin a variable-specific role such as `potassium_high`. The concept object
+belongs to the activation rather than the whole `variable_spec()`, which is what
+allows one variable to compose independently reusable concepts.
 
 The authoring layers answer different questions:
 
@@ -137,11 +146,11 @@ Start with a simple question: *what is the mean potassium for each stay?*
 ```{r simple-variable}
 mean_potassium_by_stay <- variable_spec(
   name = "mean_potassium_by_stay",
-  concept = ionic_balance,
 
   channels = list(
     potassium = use_channel(
-      channel = "potassium"
+      channel = "lab",
+      concept = potassium
     )
   ),
 
@@ -193,15 +202,16 @@ usual form; `.data$NUMRES` makes the source-column lookup explicit and
 ```{r binary-variable}
 ionic_alert_by_stay <- variable_spec(
   name = "ionic_alert_by_stay",
-  concept = ionic_balance,
 
   channels = list(
     potassium_high = use_channel(
-      channel = "potassium",
+      channel = "lab",
+      concept = potassium,
       filter_rows = NUMRES > 5.2
     ),
     sodium_low = use_channel(
-      channel = "sodium",
+      channel = "lab",
+      concept = sodium,
       filter_rows = NUMRES < 135
     )
   ),
@@ -244,19 +254,21 @@ First, retain only potassium rows belonging to alert stays:
 ```{r qualified-stays-variable}
 mean_k_in_qualified_stays <- variable_spec(
   name = "mean_k_in_qualified_stays",
-  concept = ionic_balance,
 
   channels = list(
     potassium_high = use_channel(
-      channel = "potassium",
+      channel = "lab",
+      concept = potassium,
       filter_rows = NUMRES > 5.2
     ),
     sodium_low = use_channel(
-      channel = "sodium",
+      channel = "lab",
+      concept = sodium,
       filter_rows = NUMRES < 135
     ),
     potassium_rows = use_channel(
-      channel = "potassium"
+      channel = "lab",
+      concept = potassium
     )
   ),
 
@@ -280,19 +292,21 @@ remains visible. Only its canonical name and `filter_by_qualified` change:
 ```{r qualified-patients-variable}
 mean_k_in_qualified_patients <- variable_spec(
   name = "mean_k_in_qualified_patients",
-  concept = ionic_balance,
 
   channels = list(
     potassium_high = use_channel(
-      channel = "potassium",
+      channel = "lab",
+      concept = potassium,
       filter_rows = NUMRES > 5.2
     ),
     sodium_low = use_channel(
-      channel = "sodium",
+      channel = "lab",
+      concept = sodium,
       filter_rows = NUMRES < 135
     ),
     potassium_rows = use_channel(
-      channel = "potassium"
+      channel = "lab",
+      concept = potassium
     )
   ),
 
